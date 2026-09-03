@@ -1,0 +1,14 @@
+.DS_Store
+.dart_tool/
+.packages
+build/
+*.iml
+.idea/
+pubspec.lock
+third_party/*.tgz
+third_party/filament-*/
+
+# spike build artefacts
+spike/spike
+spike/lit.filamat
+spike/spike_output.png
