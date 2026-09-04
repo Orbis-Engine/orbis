@@ -19,31 +19,66 @@ NS_ASSUME_NONNULL_BEGIN
 /// Draws one frame at `time` seconds and presents it. Render thread only.
 - (void)renderAtTime:(double)time;
 
-/// Replaces everything in the scene.
+/// States what the scene contains.
 ///
-/// Whole-scene rather than incremental, because an editor's scene is small and
-/// a diff is a bug surface: a renderer that believes it knows what changed and
-/// is wrong shows the last correct frame forever, which is the hardest kind of
-/// wrong to notice.
+/// A complete description every time, because a message that says everything
+/// cannot go stale: there is no state on the wire to fall out of step, and no
+/// way to believe nothing changed when something did — which looks exactly
+/// like a frozen viewport.
+///
+/// Complete on the way in, incremental on the way through. `keys` identify the
+/// objects, so this works out what actually changed and pays for that alone: a
+/// moved object is a transform written, not an entity destroyed and rebuilt.
+/// It matters because a scene arrives on every frame of a drag, and rebuilding
+/// a scene sixty times a second is most of a frame's budget spent on work that
+/// was already done.
 ///
 /// `transforms` is `count` column-major 4x4 matrices; `colours` is `count`
 /// linear RGB triples; `meshes` is `count` indices into `paths`, where -1
-/// means the built-in cube.
+/// means the built-in cube; `flags` is `count` bitfields — 1 casts shadows,
+/// 2 receives them, 4 is drawn at all.
 ///
-/// Meshes named here are loaded once and kept. A scene arrives on every drag
-/// of a slider, and re-reading a glTF file at that rate would make the editor
-/// unusable — so the parsed asset outlives the scene that mentioned it.
-- (void)setObjects:(const float *)transforms
-           colours:(const float *)colours
-            meshes:(const int32_t *)meshes
-             paths:(NSArray<NSString *> *)paths
-             count:(uint32_t)count;
+/// Meshes named here are loaded once and kept, and the instances made from
+/// them are pooled rather than destroyed: a scene arrives on every drag of a
+/// slider, and re-reading a glTF file at that rate would make an editor
+/// unusable.
+- (void)applyObjects:(const int64_t *)keys
+          transforms:(const float *)transforms
+             colours:(const float *)colours
+              meshes:(const int32_t *)meshes
+               flags:(const int32_t *)flags
+               paths:(NSArray<NSString *> *)paths
+               count:(uint32_t)count;
 
-/// Files named by a scene that could not be loaded, and why.
+/// States what is lighting the scene.
 ///
-/// Reported back rather than logged, so an editor can say which asset is
-/// missing instead of drawing a placeholder and leaving somebody to wonder.
-@property(nonatomic, readonly) NSDictionary<NSString *, NSString *> *meshErrors;
+/// Keyed and reconciled the same way objects are, and for the same reason: a
+/// light being dragged is a position written rather than a light destroyed and
+/// remade, which would drop its shadow map and flicker.
+///
+/// `kinds` is one per light — 0 directional, 1 point, 2 spot. `params` is
+/// sixteen floats each: colour, intensity, position, direction, falloff
+/// radius, inner and outer cone in radians, the sun's angular radius in
+/// degrees, and the source radius in metres. `flags` bit 1 casts shadows.
+- (void)applyLights:(const int64_t *)keys
+              kinds:(const int32_t *)kinds
+              flags:(const int32_t *)flags
+             params:(const float *)params
+              count:(uint32_t)count;
+
+/// Sets the air the scene is seen through.
+///
+/// `params` is ten floats: colour, density, distance, cut-off distance,
+/// maximum opacity, height, height falloff, and one spare. Disabled skips the
+/// computation rather than running it with a density of zero.
+- (void)setFogEnabled:(BOOL)enabled params:(const float *)params;
+
+/// What a scene asked for that could not be given, and why.
+///
+/// Reported back rather than logged, so an editor can name the asset it could
+/// not find or say which light it had to drop, instead of drawing something
+/// quietly wrong and leaving somebody to wonder.
+@property(nonatomic, readonly) NSDictionary<NSString *, NSString *> *notes;
 
 /// Sets the sky's colour and how much light it casts, in lux.
 ///
@@ -51,11 +86,6 @@ NS_ASSUME_NONNULL_BEGIN
 /// backdrop that lights nothing reads as a photograph behind the scene rather
 /// than the sky the scene is standing under.
 - (void)setSkyColour:(const float *)colour ambient:(float)ambient;
-
-/// Sets the sun's direction, colour and illuminance in lux.
-- (void)setSunDirection:(const float *)direction
-                 colour:(const float *)colour
-             illuminance:(float)illuminance;
 
 /// Places the camera, looking at a point, with a vertical field of view in
 /// degrees.

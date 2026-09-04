@@ -1,9 +1,17 @@
 /// Filament rendering, composited by Flutter.
 ///
-/// The scene is fixed for now — this package exists to prove the surface
-/// handoff, and the scene arrives with the engine core.
+/// A host states what the scene contains and this draws it. The statement is
+/// complete every time and the objects in it are keyed, so saying it again
+/// sixty times a second costs only what actually changed.
 library;
 
 export 'src/orbis_view.dart' show OrbisView;
 export 'src/scene.dart'
-    show OrbisCamera, OrbisObject, OrbisScene, OrbisSky, OrbisSun;
+    show
+        OrbisCamera,
+        OrbisFog,
+        OrbisLight,
+        OrbisLightKind,
+        OrbisObject,
+        OrbisScene,
+        OrbisSky;

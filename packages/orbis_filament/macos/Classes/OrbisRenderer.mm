@@ -32,6 +32,7 @@
 
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <utils/Panic.h>
 
@@ -43,13 +44,66 @@
 using namespace filament;
 using namespace filament::math;
 
-/// One loaded glTF file, and the copies of it currently in the scene.
+/// One loaded glTF file, and the copies made from that one parse.
 ///
 /// Instances rather than one asset per object: a scene with fifty of the same
 /// crate parses the file once and shares its geometry and materials.
+///
+/// `spare` is the pool. An object that stops using a mesh hands its instance
+/// back rather than destroying it, so a crate deleted and undone — or a scene
+/// closed and reopened — costs a pointer, not another parse.
 struct Mesh {
   filament::gltfio::FilamentAsset *asset = nullptr;
-  std::vector<filament::gltfio::FilamentInstance *> instances;
+  std::vector<filament::gltfio::FilamentInstance *> all;
+  std::vector<filament::gltfio::FilamentInstance *> spare;
+};
+
+/// One object as the renderer holds it between frames.
+///
+/// What is kept here is exactly what has to be compared to decide whether a
+/// frame's worth of work can be skipped: the shape the object was built as,
+/// and the last values written into it.
+struct Drawn {
+  /// The cube path: an entity this renderer built and owns.
+  utils::Entity entity;
+  filament::MaterialInstance *material = nullptr;
+
+  /// The mesh path: an instance borrowed from a loaded glTF file.
+  filament::gltfio::FilamentInstance *instance = nullptr;
+
+  /// Which file it draws, empty for the built-in cube. A change here is a
+  /// change of what the object *is*, and the only thing that forces a rebuild.
+  std::string path;
+
+  filament::math::mat4f transform;
+
+  /// Whether that transform has ever been written. An instance out of the pool
+  /// still stands where its last owner left it, and identity — which is what
+  /// this starts as — is a transform a new object might genuinely have. So the
+  /// first write is unconditional rather than compared.
+  bool placed = false;
+
+  /// Impossible values, so the first publish always writes.
+  filament::math::float3 colour = {-1, -1, -1};
+  int32_t flags = -1;
+
+  /// The publish that last mentioned this object. Anything not stamped by the
+  /// current one has left the scene.
+  uint64_t seen = 0;
+};
+
+/// One light as the renderer holds it between frames.
+///
+/// The whole parameter block is kept rather than the fields that matter,
+/// because comparing sixty-four bytes is cheaper than a dozen setter calls
+/// that each dirty something downstream.
+struct Lit {
+  utils::Entity entity;
+  int32_t kind = -1;
+  int32_t flags = -1;
+  float params[16] = {};
+  bool applied = false;
+  uint64_t seen = 0;
 };
 
 /// The ambient the scene starts with: the skybox's own colour, so an
@@ -64,6 +118,26 @@ namespace {
 /// drawn. Each needs its own swap chain because a Filament swap chain is bound
 /// to one CVPixelBuffer for its lifetime.
 constexpr int kOrbisBufferCount = 2;
+
+/// What an object's flag bits mean. Matches OrbisObject on the Dart side.
+constexpr int32_t kCastsShadows = 1;
+constexpr int32_t kReceivesShadows = 2;
+constexpr int32_t kVisible = 4;
+
+/// Hiding is a layer the view does not draw rather than a removal from the
+/// scene: the object keeps its entity, its material and its instance, so
+/// showing it again is one byte written instead of a rebuild.
+constexpr uint8_t kVisibleLayer = 0x01;
+constexpr uint8_t kHiddenLayer = 0x02;
+
+/// How many punctual lights Filament shades in one view before it starts
+/// dropping the ones furthest from the camera. Worth saying out loud: a light
+/// that quietly stops working is a long afternoon.
+constexpr uint32_t kPunctualLightBudget = 256;
+
+/// The key the placeholder cube is filed under while no host owns the scene.
+/// Far out of the way of anything a host would count from.
+constexpr int64_t kPlaceholderKey = INT64_MIN;
 
 struct Vertex {
   float3 position;
@@ -124,8 +198,17 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   View *_view;
   Camera *_camera;
   utils::Entity _cameraEntity;
-  std::vector<utils::Entity> _objects;
-  std::vector<MaterialInstance *> _instances;
+
+  /// Everything in the scene, by the key its host gave it. This map is the
+  /// whole reason a drag is cheap: it is what lets a publish be read as "these
+  /// three moved" rather than "here is a new scene".
+  std::unordered_map<int64_t, Drawn> _drawn;
+  std::unordered_map<int64_t, Lit> _lit;
+
+  /// Stamps for the mark-and-sweep. One counter each, because objects and
+  /// lights arrive in separate calls.
+  uint64_t _objectGeneration;
+  uint64_t _lightGeneration;
 
   gltfio::AssetLoader *_assetLoader;
   gltfio::ResourceLoader *_resourceLoader;
@@ -137,12 +220,16 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   /// arrives on every drag, and the parse is the expensive part.
   std::map<std::string, Mesh> _meshes;
 
-  /// Instances currently in the scene, so they can be taken out again without
-  /// walking every mesh.
-  std::vector<gltfio::FilamentInstance *> _placed;
+  /// Assets that could not be loaded. Sticky, because a file is read once and
+  /// a failure that reported itself only on the frame of the attempt would
+  /// never be seen again.
+  NSMutableDictionary<NSString *, NSString *> *_assetNotes;
 
-  NSMutableDictionary<NSString *, NSString *> *_meshErrors;
-  utils::Entity _light;
+  /// What the current objects and lights add up to that the renderer cannot
+  /// honour. Replaced on every publish, so fixing the scene clears it.
+  NSMutableDictionary<NSString *, NSString *> *_objectNotes;
+  NSMutableDictionary<NSString *, NSString *> *_lightNotes;
+
   bool _sceneIsOwnedByHost;
   Skybox *_skybox;
   IndirectLight *_ambient;
@@ -207,23 +294,48 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _view->setCamera(_camera);
   _view->setScene(_scene);
 
+  // One layer is drawn and one is not, which is what hiding an object means
+  // here. Later work — render layers a host can name — widens this mask; the
+  // two-state version costs the same and is the half that is needed now.
+  _view->setVisibleLayers(0xFF, kVisibleLayer);
+
   _skybox = Skybox::Builder().color({0.10f, 0.12f, 0.16f, 1.0f}).build(*_engine);
   _scene->setSkybox(_skybox);
 
   [self setAmbientColour:kDefaultAmbient intensity:kDefaultAmbientIntensity];
 
-  _meshErrors = [NSMutableDictionary dictionary];
+  _assetNotes = [NSMutableDictionary dictionary];
+  _objectNotes = [NSMutableDictionary dictionary];
+  _lightNotes = [NSMutableDictionary dictionary];
   [self startAssetLoader];
   [self buildGeometry];
   [self allocateBuffers];
   [self applyViewportSize];
 
   // Something to look at until a host sends a scene, so an empty viewport is
-  // recognisably working rather than indistinguishable from a broken one.
+  // recognisably working rather than indistinguishable from a broken one. It
+  // goes in through the same door a host's scene does — a placeholder built by
+  // a second path would be a second path to keep working.
+  const int64_t key[1] = {kPlaceholderKey};
   const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
   const float colour[3] = {0.85f, 0.28f, 0.18f};
   const int32_t noMesh[1] = {-1};
-  [self setObjects:identity colours:colour meshes:noMesh paths:@[] count:1];
+  const int32_t flags[1] = {kCastsShadows | kReceivesShadows | kVisible};
+  [self applyObjects:key
+          transforms:identity
+             colours:colour
+              meshes:noMesh
+               flags:flags
+               paths:@[]
+               count:1];
+  _sceneIsOwnedByHost = false;
+
+  const int64_t sunKey[1] = {kPlaceholderKey};
+  const int32_t sunKind[1] = {0};
+  const int32_t sunFlags[1] = {1};
+  const float sun[16] = {1.0f, 0.96f, 0.9f, 110000.0f, 0, 0,    0, -0.6f,
+                         -1.0f, -0.8f, 0,   0,        0, 0.53f, 0.1f, 0};
+  [self applyLights:sunKey kinds:sunKind flags:sunFlags params:sun count:1];
 }
 
 - (void)buildGeometry {
@@ -278,15 +390,6 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _material = Material::Builder()
                   .package(klitMaterial, klitMaterial_len)
                   .build(*_engine);
-
-  _light = utils::EntityManager::get().create();
-  LightManager::Builder(LightManager::Type::SUN)
-      .color({1.0f, 0.96f, 0.9f})
-      .intensity(110000.0f)
-      .direction({-0.6f, -1.0f, -0.8f})
-      .castShadows(true)
-      .build(*_engine, _light);
-  _scene->addEntity(_light);
 }
 
 - (void)setAmbientColour:(float3)colour intensity:(float)intensity {
@@ -359,7 +462,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   NSString *native = [NSString stringWithUTF8String:path.c_str()];
   NSData *data = [NSData dataWithContentsOfFile:native];
   if (data == nil) {
-    _meshErrors[native] = @"The file could not be read.";
+    _assetNotes[native] = @"The file could not be read.";
     return nullptr;
   }
 
@@ -369,7 +472,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
       static_cast<uint32_t>(data.length), &first, 1);
 
   if (entry.asset == nullptr) {
-    _meshErrors[native] = @"This is not a glTF file that Filament can read.";
+    _assetNotes[native] = @"This is not a glTF file that Filament can read.";
     return nullptr;
   }
 
@@ -383,113 +486,365 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   });
 
   if (!_resourceLoader->loadResources(entry.asset)) {
-    _meshErrors[native] = @"Its geometry or textures could not be loaded.";
+    _assetNotes[native] = @"Its geometry or textures could not be loaded.";
   }
 
   // Deliberately not calling releaseSourceData: more instances can only be
   // made while it is still there, and a second object using this mesh is the
   // ordinary case rather than the exception.
-  entry.instances.push_back(first);
+  entry.all.push_back(first);
+  entry.spare.push_back(first);
   return &entry;
 }
 
-/// The nth copy of a mesh, making more as a scene asks for them.
-- (gltfio::FilamentInstance *)instanceOf:(Mesh *)mesh at:(size_t)index {
-  while (mesh->instances.size() <= index) {
-    auto *extra = _assetLoader->createInstance(mesh->asset);
-    // A refusal here means no more instances are possible; the objects beyond
-    // this point fall back to the placeholder rather than vanishing.
-    if (extra == nullptr) return nullptr;
-    mesh->instances.push_back(extra);
+/// A copy of a mesh to give an object, from the pool if one is spare.
+- (gltfio::FilamentInstance *)takeInstanceOf:(Mesh *)mesh {
+  if (!mesh->spare.empty()) {
+    auto *spare = mesh->spare.back();
+    mesh->spare.pop_back();
+    return spare;
   }
-  return mesh->instances[index];
+  auto *extra = _assetLoader->createInstance(mesh->asset);
+  // A refusal means no more instances are possible; the object falls back to
+  // the placeholder rather than vanishing.
+  if (extra == nullptr) return nullptr;
+  mesh->all.push_back(extra);
+  return extra;
 }
 
-- (void)clearObjects {
+/// Takes an object out of the scene, keeping whatever can be used again.
+- (void)recycle:(Drawn &)drawn {
+  if (drawn.instance != nullptr) {
+    _scene->removeEntities(drawn.instance->getEntities(),
+                           drawn.instance->getEntityCount());
+    auto found = _meshes.find(drawn.path);
+    if (found != _meshes.end()) found->second.spare.push_back(drawn.instance);
+    drawn.instance = nullptr;
+  }
+  if (drawn.entity) {
+    _scene->remove(drawn.entity);
+    _engine->destroy(drawn.entity);
+    utils::EntityManager::get().destroy(drawn.entity);
+    drawn.entity = utils::Entity();
+  }
+  if (drawn.material != nullptr) {
+    _engine->destroy(drawn.material);
+    drawn.material = nullptr;
+  }
+}
+
+/// Empties the scene of everything a host put in it.
+- (void)removeEverything {
+  for (auto &pair : _drawn) [self recycle:pair.second];
+  _drawn.clear();
+
   auto &entities = utils::EntityManager::get();
-  for (utils::Entity object : _objects) {
-    _scene->remove(object);
-    _engine->destroy(object);
-    entities.destroy(object);
+  for (auto &pair : _lit) {
+    if (!pair.second.entity) continue;
+    _scene->remove(pair.second.entity);
+    _engine->destroy(pair.second.entity);
+    entities.destroy(pair.second.entity);
   }
-  for (MaterialInstance *instance : _instances) {
-    _engine->destroy(instance);
-  }
-  _objects.clear();
-  _instances.clear();
-
-  for (auto *instance : _placed) {
-    _scene->removeEntities(instance->getEntities(), instance->getEntityCount());
-  }
-  _placed.clear();
+  _lit.clear();
 }
 
-- (void)setObjects:(const float *)transforms
-           colours:(const float *)colours
-            meshes:(const int32_t *)meshes
-             paths:(NSArray<NSString *> *)paths
-             count:(uint32_t)count {
+/// Applies the shadow and visibility flags to one renderable.
+- (void)applyFlags:(int32_t)flags toEntity:(utils::Entity)entity {
+  auto &renderables = _engine->getRenderableManager();
+  auto instance = renderables.getInstance(entity);
+  // Not every entity in a glTF file is renderable — a joint or an empty
+  // carries no geometry — so the ones without a component are skipped.
+  if (!instance) return;
+  renderables.setCastShadows(instance, (flags & kCastsShadows) != 0);
+  renderables.setReceiveShadows(instance, (flags & kReceivesShadows) != 0);
+  renderables.setLayerMask(instance, 0xFF,
+                           (flags & kVisible) ? kVisibleLayer : kHiddenLayer);
+}
+
+/// Applies them to a whole object, which for a mesh is every part of it.
+- (void)applyFlags:(int32_t)flags toDrawn:(const Drawn &)drawn {
+  if (drawn.instance != nullptr) {
+    const utils::Entity *entities = drawn.instance->getEntities();
+    const size_t count = drawn.instance->getEntityCount();
+    for (size_t i = 0; i < count; i++) {
+      [self applyFlags:flags toEntity:entities[i]];
+    }
+    return;
+  }
+  [self applyFlags:flags toEntity:drawn.entity];
+}
+
+/// Builds one object: a mesh instance if it names a file that loads, and the
+/// placeholder cube otherwise.
+- (void)build:(Drawn &)drawn withPath:(const std::string &)path {
+  drawn.path = path;
+
+  if (!path.empty()) {
+    Mesh *mesh = [self meshAtPath:path];
+    if (mesh != nullptr) drawn.instance = [self takeInstanceOf:mesh];
+    if (drawn.instance != nullptr) {
+      _scene->addEntities(drawn.instance->getEntities(),
+                          drawn.instance->getEntityCount());
+      return;
+    }
+    // Fell through: the file is missing or unreadable, so the object is drawn
+    // as the placeholder cube. Somewhere visible beats nowhere.
+  }
+
+  // One material instance per object, because the colour is a parameter on it
+  // and sharing would make every object the last one's colour.
+  drawn.material = _material->createInstance();
+  drawn.material->setParameter("roughness", 0.4f);
+  drawn.material->setParameter("metallic", 0.0f);
+
+  drawn.entity = utils::EntityManager::get().create();
+  RenderableManager::Builder(1)
+      .boundingBox({{-1, -1, -1}, {1, 1, 1}})
+      .material(0, drawn.material)
+      .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
+                _indexBuffer, 0, 36)
+      .receiveShadows(true)
+      .castShadows(true)
+      .build(*_engine, drawn.entity);
+  _scene->addEntity(drawn.entity);
+}
+
+- (void)applyObjects:(const int64_t *)keys
+          transforms:(const float *)transforms
+             colours:(const float *)colours
+              meshes:(const int32_t *)meshes
+               flags:(const int32_t *)flags
+               paths:(NSArray<NSString *> *)paths
+               count:(uint32_t)count {
   if (_disposed) return;
-  [self clearObjects];
 
+  const uint64_t generation = ++_objectGeneration;
   auto &transformManager = _engine->getTransformManager();
-
-  // How many objects have already asked for each mesh this frame, so the
-  // second crate gets the second instance rather than moving the first.
-  std::map<std::string, size_t> used;
+  NSMutableDictionary<NSString *, NSString *> *notes =
+      [NSMutableDictionary dictionary];
 
   for (uint32_t i = 0; i < count; i++) {
-    mat4f placement;
-    std::memcpy(&placement, transforms + i * 16, sizeof(float) * 16);
-
+    std::string path;
     const int32_t meshIndex = meshes[i];
     if (meshIndex >= 0 && meshIndex < static_cast<int32_t>(paths.count)) {
-      const std::string path = paths[meshIndex].UTF8String;
-      Mesh *mesh = [self meshAtPath:path];
-      if (mesh != nullptr) {
-        auto *instance = [self instanceOf:mesh at:used[path]];
-        if (instance != nullptr) {
-          used[path] += 1;
-          transformManager.setTransform(
-              transformManager.getInstance(instance->getRoot()), placement);
-          _scene->addEntities(instance->getEntities(),
-                              instance->getEntityCount());
-          _placed.push_back(instance);
-          continue;
-        }
-      }
-      // Fell through: the file is missing or unreadable, so the object is
-      // drawn as the placeholder cube. Somewhere visible beats nowhere.
+      path = paths[meshIndex].UTF8String;
     }
 
-    // One instance per object, because the colour is a material parameter and
-    // sharing an instance would make every object the last one's colour.
-    MaterialInstance *instance = _material->createInstance();
-    instance->setParameter(
-        "baseColor",
-        float3{colours[i * 3], colours[i * 3 + 1], colours[i * 3 + 2]});
-    instance->setParameter("roughness", 0.4f);
-    instance->setParameter("metallic", 0.0f);
-    _instances.push_back(instance);
+    // Default-constructed on first sight, which is how a new object announces
+    // itself: there is no separate "added" message, only a key nobody has
+    // seen before.
+    Drawn &drawn = _drawn[keys[i]];
 
-    utils::Entity object = utils::EntityManager::get().create();
-    RenderableManager::Builder(1)
-        .boundingBox({{-1, -1, -1}, {1, 1, 1}})
-        .material(0, instance)
-        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
-                  _indexBuffer, 0, 36)
-        .receiveShadows(true)
-        .castShadows(true)
-        .build(*_engine, object);
+    // Two objects claiming one identity: the second would take the first's
+    // place, and one of them would appear to have been deleted. Keys are the
+    // host's to keep unique, and this is where that goes wrong.
+    if (drawn.seen == generation) {
+      notes[@"keys"] = @"Two objects in this scene are sharing one key, so "
+                       @"only one of them is drawn.";
+      continue;
+    }
 
-    transformManager.setTransform(transformManager.getInstance(object),
-                                  placement);
+    // A different file is a different object, so it is built again. Nothing
+    // else is: the rest is written into what is already there.
+    const bool exists = drawn.entity || drawn.instance != nullptr;
+    if (exists && drawn.path != path) {
+      [self recycle:drawn];
+      drawn = Drawn{};
+    }
+    if (!drawn.entity && drawn.instance == nullptr) {
+      [self build:drawn withPath:path];
+    }
+    drawn.seen = generation;
 
-    _scene->addEntity(object);
-    _objects.push_back(object);
+    mat4f placement;
+    std::memcpy(&placement, transforms + i * 16, sizeof(float) * 16);
+    // Compared rather than written blindly. Setting a transform dirties the
+    // node and everything under it, and a scene republished on every frame of
+    // a drag is one object moving and the rest standing perfectly still.
+    if (!drawn.placed ||
+        std::memcmp(&placement, &drawn.transform, sizeof(mat4f)) != 0) {
+      drawn.transform = placement;
+      drawn.placed = true;
+      const utils::Entity root =
+          drawn.instance != nullptr ? drawn.instance->getRoot() : drawn.entity;
+      transformManager.setTransform(transformManager.getInstance(root),
+                                    placement);
+    }
+
+    // A mesh brings its own materials out of the file, so the object's colour
+    // reaches the placeholder cube and nothing else. Tinting somebody's model
+    // by a swatch they never chose is worse than ignoring the swatch.
+    if (drawn.material != nullptr) {
+      const float3 colour = {colours[i * 3], colours[i * 3 + 1],
+                             colours[i * 3 + 2]};
+      if (colour.x != drawn.colour.x || colour.y != drawn.colour.y ||
+          colour.z != drawn.colour.z) {
+        drawn.colour = colour;
+        drawn.material->setParameter("baseColor", colour);
+      }
+    }
+
+    if (flags[i] != drawn.flags) {
+      drawn.flags = flags[i];
+      [self applyFlags:flags[i] toDrawn:drawn];
+    }
   }
 
+  // Whatever this publish did not mention has left the scene. Sweeping by
+  // stamp rather than by a removal message means a host cannot leak an object
+  // by forgetting to say it went.
+  for (auto it = _drawn.begin(); it != _drawn.end();) {
+    if (it->second.seen == generation) {
+      ++it;
+      continue;
+    }
+    [self recycle:it->second];
+    it = _drawn.erase(it);
+  }
+
+  _objectNotes = notes;
   _sceneIsOwnedByHost = true;
+}
+
+/// Writes one light's parameters into Filament.
+///
+/// Each setter is guarded by the kind that gives it meaning: a falloff radius
+/// on a directional light or a cone angle on a point light are not harmless
+/// no-ops inside Filament, they are questions it was never asked.
+- (void)writeLight:(const Lit &)lit {
+  auto &lights = _engine->getLightManager();
+  auto instance = lights.getInstance(lit.entity);
+  if (!instance) return;
+
+  const float *p = lit.params;
+  lights.setColor(instance, LinearColor{p[0], p[1], p[2]});
+  lights.setIntensity(instance, p[3]);
+
+  const float3 direction = {p[7], p[8], p[9]};
+  // A zero direction would normalise to NaN and take the frame with it.
+  if (lit.kind != 1 && length(direction) > 1e-6f) {
+    lights.setDirection(instance, normalize(direction));
+  }
+
+  if (lit.kind == 0) {
+    lights.setSunAngularRadius(instance, p[13]);
+  } else {
+    lights.setPosition(instance, float3{p[4], p[5], p[6]});
+    lights.setFalloff(instance, p[10]);
+    if (lit.kind == 2) lights.setSpotLightCone(instance, p[11], p[12]);
+  }
+
+  // Read only by percentage-closer soft shadows, so for now this is a value
+  // carried faithfully rather than one that shows. It is what the penumbra
+  // will be made of when the shadow type becomes somebody's to choose.
+  LightManager::ShadowOptions options = lights.getShadowOptions(instance);
+  options.shadowBulbRadius = p[14];
+  lights.setShadowOptions(instance, options);
+}
+
+- (void)applyLights:(const int64_t *)keys
+              kinds:(const int32_t *)kinds
+              flags:(const int32_t *)flags
+             params:(const float *)params
+              count:(uint32_t)count {
+  if (_disposed) return;
+
+  const uint64_t generation = ++_lightGeneration;
+  auto &lights = _engine->getLightManager();
+  auto &entities = utils::EntityManager::get();
+
+  NSMutableDictionary<NSString *, NSString *> *notes =
+      [NSMutableDictionary dictionary];
+  uint32_t directional = 0;
+  uint32_t punctual = 0;
+
+  for (uint32_t i = 0; i < count; i++) {
+    const int32_t kind = kinds[i];
+    const float *p = params + i * 16;
+
+    // Filament shades one directional light per view. A second is dropped
+    // rather than blended, and being told is the difference between a scene
+    // that looks wrong and a scene that says why.
+    if (kind == 0 && ++directional > 1) {
+      notes[@"directional"] =
+          @"Only one directional light is drawn. The others are ignored.";
+      continue;
+    }
+    if (kind != 0) punctual++;
+
+    Lit &lit = _lit[keys[i]];
+
+    // The kind is fixed when a light is built, so changing it is a rebuild.
+    // Only changing it is: a light being dragged keeps its entity, and with it
+    // its shadow map, which is what stops the shadow flickering as it moves.
+    if (lit.kind != kind) {
+      if (lit.entity) {
+        _scene->remove(lit.entity);
+        _engine->destroy(lit.entity);
+        entities.destroy(lit.entity);
+      }
+      lit = Lit{};
+      lit.kind = kind;
+      lit.entity = entities.create();
+      LightManager::Builder(kind == 0   ? LightManager::Type::SUN
+                            : kind == 2 ? LightManager::Type::FOCUSED_SPOT
+                                        : LightManager::Type::POINT)
+          .build(*_engine, lit.entity);
+      _scene->addEntity(lit.entity);
+    }
+    lit.seen = generation;
+
+    if (!lit.applied ||
+        std::memcmp(p, lit.params, sizeof(lit.params)) != 0) {
+      std::memcpy(lit.params, p, sizeof(lit.params));
+      lit.applied = true;
+      [self writeLight:lit];
+    }
+
+    if (flags[i] != lit.flags) {
+      lit.flags = flags[i];
+      auto instance = lights.getInstance(lit.entity);
+      if (instance) lights.setShadowCaster(instance, (flags[i] & 1) != 0);
+    }
+  }
+
+  if (punctual > kPunctualLightBudget) {
+    notes[@"punctual"] = [NSString
+        stringWithFormat:@"%u point and spot lights is past the %u this view "
+                         @"shades. The ones furthest from the camera stop "
+                         @"lighting anything.",
+                         punctual, kPunctualLightBudget];
+  }
+
+  for (auto it = _lit.begin(); it != _lit.end();) {
+    if (it->second.seen == generation) {
+      ++it;
+      continue;
+    }
+    if (it->second.entity) {
+      _scene->remove(it->second.entity);
+      _engine->destroy(it->second.entity);
+      entities.destroy(it->second.entity);
+    }
+    it = _lit.erase(it);
+  }
+
+  _lightNotes = notes;
+}
+
+- (void)setFogEnabled:(BOOL)enabled params:(const float *)params {
+  if (_disposed) return;
+
+  FogOptions fog;
+  fog.enabled = enabled;
+  fog.color = LinearColor{params[0], params[1], params[2]};
+  fog.density = params[3];
+  fog.distance = params[4];
+  fog.cutOffDistance = params[5];
+  fog.maximumOpacity = params[6];
+  fog.height = params[7];
+  fog.heightFalloff = params[8];
+  _view->setFogOptions(fog);
 }
 
 - (void)setSkyColour:(const float *)colour ambient:(float)ambient {
@@ -508,21 +863,6 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   // Lit by the sky it stands under, which is what makes the two read as one
   // environment rather than a backdrop behind an unrelated scene.
   [self setAmbientColour:sky intensity:ambient];
-}
-
-- (void)setSunDirection:(const float *)direction
-                 colour:(const float *)colour
-            illuminance:(float)illuminance {
-  if (_disposed) return;
-
-  auto &lights = _engine->getLightManager();
-  auto instance = lights.getInstance(_light);
-  if (!instance) return;
-
-  lights.setDirection(instance,
-                      float3{direction[0], direction[1], direction[2]});
-  lights.setColor(instance, LinearColor{colour[0], colour[1], colour[2]});
-  lights.setIntensity(instance, illuminance);
 }
 
 - (void)setCameraPosition:(const float *)position
@@ -616,12 +956,15 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   // The placeholder turns so an unconfigured viewport is visibly alive. A
   // scene sent by a host is left exactly where the host put it — a renderer
   // that quietly animates somebody's content is worse than a still one.
-  if (!_sceneIsOwnedByHost && !_objects.empty()) {
-    auto &transforms = _engine->getTransformManager();
-    transforms.setTransform(
-        transforms.getInstance(_objects.front()),
-        mat4f::rotation(time * 0.7, float3{0, 1, 0}) *
-            mat4f::rotation(time * 0.35, float3{1, 0, 0}));
+  if (!_sceneIsOwnedByHost) {
+    auto found = _drawn.find(kPlaceholderKey);
+    if (found != _drawn.end() && found->second.entity) {
+      auto &transforms = _engine->getTransformManager();
+      transforms.setTransform(
+          transforms.getInstance(found->second.entity),
+          mat4f::rotation(time * 0.7, float3{0, 1, 0}) *
+              mat4f::rotation(time * 0.35, float3{1, 0, 0}));
+    }
   }
 
   if (!_renderer->beginFrame(target)) return;
@@ -690,7 +1033,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 
   // Filament asserts on anything still alive when the engine goes down, so the
   // teardown mirrors construction in reverse.
-  [self clearObjects];
+  [self removeEverything];
 
   for (auto &pair : _meshes) {
     if (pair.second.asset) _assetLoader->destroyAsset(pair.second.asset);
@@ -707,9 +1050,6 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   delete _ktxTextures;
 
   auto &entities = utils::EntityManager::get();
-  _scene->remove(_light);
-  _engine->destroy(_light);
-  entities.destroy(_light);
   _engine->destroyCameraComponent(_cameraEntity);
   entities.destroy(_cameraEntity);
   _engine->destroy(_skybox);
@@ -725,8 +1065,15 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _engine = nullptr;
 }
 
-- (NSDictionary<NSString *, NSString *> *)meshErrors {
-  return [_meshErrors copy];
+- (NSDictionary<NSString *, NSString *> *)notes {
+  // Two sources, one answer. An unreadable file stays reported until it is
+  // fixed, because it is read once; a light the scene has too many of stops
+  // being reported the moment the scene stops having too many.
+  NSMutableDictionary<NSString *, NSString *> *all =
+      [NSMutableDictionary dictionaryWithDictionary:_assetNotes];
+  [all addEntriesFromDictionary:_objectNotes];
+  [all addEntriesFromDictionary:_lightNotes];
+  return all;
 }
 
 - (void)dealloc {

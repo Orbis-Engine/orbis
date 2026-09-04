@@ -81,35 +81,62 @@ private final class Viewport {
   /// frame both run on the main thread, so a scene can never be swapped out
   /// from under a render in progress.
   func apply(scene: Scene) {
-    // An empty Swift array's base address is nil, and the renderer's pointer
-    // is not nullable. It never reads through the pointer when the count is
-    // zero, so an empty scene borrows a valid address it will not touch.
+    // An empty Swift array's base address is nil, and the renderer's pointers
+    // are not nullable. Nothing is read through them when the count is zero,
+    // so an empty scene borrows a valid address it will not touch.
+    let keys = scene.count == 0 ? [Int64(0)] : scene.keys
     let transforms = scene.count == 0 ? [Float(0)] : scene.transforms
     let colours = scene.count == 0 ? [Float(0)] : scene.colours
     let meshes = scene.count == 0 ? [Int32(-1)] : scene.meshes
+    let flags = scene.count == 0 ? [Int32(0)] : scene.flags
 
-    transforms.withUnsafeBufferPointer { transformPointer in
-      colours.withUnsafeBufferPointer { colourPointer in
-        meshes.withUnsafeBufferPointer { meshPointer in
-          renderer.setObjects(transformPointer.baseAddress!,
-                              colours: colourPointer.baseAddress!,
-                              meshes: meshPointer.baseAddress!,
-                              paths: scene.paths,
-                              count: UInt32(scene.count))
+    keys.withUnsafeBufferPointer { keyPointer in
+      transforms.withUnsafeBufferPointer { transformPointer in
+        colours.withUnsafeBufferPointer { colourPointer in
+          meshes.withUnsafeBufferPointer { meshPointer in
+            flags.withUnsafeBufferPointer { flagPointer in
+              renderer.applyObjects(keyPointer.baseAddress!,
+                                    transforms: transformPointer.baseAddress!,
+                                    colours: colourPointer.baseAddress!,
+                                    meshes: meshPointer.baseAddress!,
+                                    flags: flagPointer.baseAddress!,
+                                    paths: scene.paths,
+                                    count: UInt32(scene.count))
+            }
+          }
         }
       }
     }
+
+    let lightCount = scene.lightCount
+    let lightKeys = lightCount == 0 ? [Int64(0)] : scene.lightKeys
+    let lightKinds = lightCount == 0 ? [Int32(0)] : scene.lightKinds
+    let lightFlags = lightCount == 0 ? [Int32(0)] : scene.lightFlags
+    let lightParams = lightCount == 0 ? [Float(0)] : scene.lightParams
+
+    lightKeys.withUnsafeBufferPointer { keyPointer in
+      lightKinds.withUnsafeBufferPointer { kindPointer in
+        lightFlags.withUnsafeBufferPointer { flagPointer in
+          lightParams.withUnsafeBufferPointer { paramPointer in
+            renderer.applyLights(keyPointer.baseAddress!,
+                                 kinds: kindPointer.baseAddress!,
+                                 flags: flagPointer.baseAddress!,
+                                 params: paramPointer.baseAddress!,
+                                 count: UInt32(lightCount))
+          }
+        }
+      }
+    }
+
     renderer.setSkyColour(scene.skyColour, ambient: scene.ambient)
-    renderer.setSunDirection(scene.sunDirection,
-                             colour: scene.sunColour,
-                             illuminance: scene.sunIlluminance)
+    renderer.setFogEnabled(scene.fogEnabled, params: scene.fogParams)
     renderer.setCameraPosition(scene.cameraPosition,
                                target: scene.cameraTarget,
                                fieldOfView: scene.fieldOfView)
   }
 
-  /// Files a scene named that could not be loaded, and why.
-  var meshErrors: [String: String] { renderer.meshErrors }
+  /// What the scene asked for that could not be given, and why.
+  var notes: [String: String] { renderer.notes }
 
   func dispose() {
     if let displayLink {
@@ -126,30 +153,47 @@ private final class Viewport {
 /// to read rather than an out-of-bounds read inside the renderer.
 private struct Scene {
   let count: Int
+  let keys: [Int64]
   let transforms: [Float]
   let colours: [Float]
   let meshes: [Int32]
+  let flags: [Int32]
   let paths: [String]
-  let sunDirection: [Float]
-  let sunColour: [Float]
-  let sunIlluminance: Float
+  let lightCount: Int
+  let lightKeys: [Int64]
+  let lightKinds: [Int32]
+  let lightFlags: [Int32]
+  let lightParams: [Float]
   let cameraPosition: [Float]
   let cameraTarget: [Float]
   let fieldOfView: Float
   let skyColour: [Float]
   let ambient: Float
+  let fogEnabled: Bool
+  let fogParams: [Float]
+
+  /// How many floats one light occupies, and how many the fog does. Both
+  /// match the packing on the Dart side; a mismatch is caught here as a
+  /// refused message rather than there as a wrong-looking scene.
+  private static let lightStride = 16
+  private static let fogStride = 10
 
   init?(arguments: [String: Any]) {
-    guard let transforms = (arguments["transforms"] as? FlutterStandardTypedData)?.floats,
+    guard let keys = (arguments["objectKeys"] as? FlutterStandardTypedData)?.int64s,
+          let transforms = (arguments["transforms"] as? FlutterStandardTypedData)?.floats,
           let colours = (arguments["colours"] as? FlutterStandardTypedData)?.floats,
           let meshes = (arguments["meshes"] as? FlutterStandardTypedData)?.int32s,
+          let flags = (arguments["objectFlags"] as? FlutterStandardTypedData)?.int32s,
           let paths = arguments["meshPaths"] as? [String],
-          let sunDirection = (arguments["sunDirection"] as? FlutterStandardTypedData)?.floats,
-          let sunColour = (arguments["sunColour"] as? FlutterStandardTypedData)?.floats,
+          let lightKeys = (arguments["lightKeys"] as? FlutterStandardTypedData)?.int64s,
+          let lightKinds = (arguments["lightKinds"] as? FlutterStandardTypedData)?.int32s,
+          let lightFlags = (arguments["lightFlags"] as? FlutterStandardTypedData)?.int32s,
+          let lightParams = (arguments["lightParams"] as? FlutterStandardTypedData)?.floats,
           let cameraPosition = (arguments["cameraPosition"] as? FlutterStandardTypedData)?.floats,
           let cameraTarget = (arguments["cameraTarget"] as? FlutterStandardTypedData)?.floats,
           let skyColour = (arguments["skyColour"] as? FlutterStandardTypedData)?.floats,
-          let illuminance = arguments["sunIlluminance"] as? Double,
+          let fogParams = (arguments["fogParams"] as? FlutterStandardTypedData)?.floats,
+          let fogEnabled = arguments["fogEnabled"] as? Bool,
           let ambient = arguments["ambient"] as? Double,
           let fieldOfView = arguments["fieldOfView"] as? Double else { return nil }
 
@@ -157,27 +201,40 @@ private struct Scene {
     // array here is a read past the end there, so they are checked rather than
     // trusted.
     let count = transforms.count / 16
+    let lightCount = lightKeys.count
     guard transforms.count == count * 16, colours.count == count * 3,
-          meshes.count == count,
+          meshes.count == count, keys.count == count, flags.count == count,
           // Every index is used to subscript `paths` in C++. One out of range
           // is a read past the end there rather than a missing model here.
           meshes.allSatisfy({ $0 < Int32(paths.count) }),
-          sunDirection.count == 3, sunColour.count == 3, skyColour.count == 3,
+          lightKinds.count == lightCount, lightFlags.count == lightCount,
+          lightParams.count == lightCount * Scene.lightStride,
+          // A kind the renderer does not know would select a light type by
+          // falling through, which is a silent wrong answer.
+          lightKinds.allSatisfy({ $0 >= 0 && $0 <= 2 }),
+          fogParams.count == Scene.fogStride,
+          skyColour.count == 3,
           cameraPosition.count == 3, cameraTarget.count == 3 else { return nil }
 
     self.count = count
+    self.keys = keys
     self.transforms = transforms
     self.colours = colours
     self.meshes = meshes
+    self.flags = flags
     self.paths = paths
-    self.sunDirection = sunDirection
-    self.sunColour = sunColour
-    self.sunIlluminance = Float(illuminance)
+    self.lightCount = lightCount
+    self.lightKeys = lightKeys
+    self.lightKinds = lightKinds
+    self.lightFlags = lightFlags
+    self.lightParams = lightParams
     self.cameraPosition = cameraPosition
     self.cameraTarget = cameraTarget
     self.fieldOfView = Float(fieldOfView)
     self.skyColour = skyColour
     self.ambient = Float(ambient)
+    self.fogEnabled = fogEnabled
+    self.fogParams = fogParams
   }
 }
 
@@ -190,6 +247,11 @@ extension FlutterStandardTypedData {
   fileprivate var int32s: [Int32]? {
     guard type == .int32 else { return nil }
     return data.withUnsafeBytes { Array($0.bindMemory(to: Int32.self)) }
+  }
+
+  fileprivate var int64s: [Int64]? {
+    guard type == .int64 else { return nil }
+    return data.withUnsafeBytes { Array($0.bindMemory(to: Int64.self)) }
   }
 }
 
@@ -251,7 +313,7 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
       }
       guard let scene = Scene(arguments: args) else {
         result(FlutterError(code: "bad-scene",
-                            message: "setScene needs float32 transforms (16 each), colours (3 each), a sun and a camera.",
+                            message: "setScene needs keys, float32 transforms (16 each), colours (3 each), flags, lights (16 floats each), fog (10 floats) and a camera.",
                             details: nil))
         return
       }
@@ -261,8 +323,9 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
       }
       viewport.apply(scene: scene)
       // Returned rather than logged: an editor can name the asset it could not
-      // load instead of drawing a placeholder and leaving somebody guessing.
-      result(viewport.meshErrors)
+      // load, or the light it had to drop, instead of drawing something quietly
+      // wrong and leaving somebody guessing.
+      result(viewport.notes)
 
     case "dispose":
       guard let args = call.arguments as? [String: Any],
