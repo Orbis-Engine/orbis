@@ -44,6 +44,7 @@ Armature arm() => Armature([
 ]);
 
 void main() {
+  _propertyDrivenConstraints();
   group('a bone', () {
     test('measures itself between its ends', () {
       final bone = Bone(
@@ -571,6 +572,79 @@ void main() {
       expect(BoneNaming.areMirrors('hand.L', 'hand.R'), isTrue);
       expect(BoneNaming.areMirrors('hand.L', 'foot.R'), isFalse);
       expect(BoneNaming.areMirrors('spine', 'spine'), isFalse);
+    });
+  });
+}
+
+void _propertyDrivenConstraints() {
+  group('a constraint driven by a property', () {
+    Pose twoBones() {
+      final armature = Armature([
+        Bone(name: 'driver', head: Vector3(0, 0, 0), tail: Vector3(0, 1, 0)),
+        Bone(name: 'follower', head: Vector3(1, 0, 0), tail: Vector3(1, 1, 0)),
+      ]);
+      return Pose(armature);
+    }
+
+    test('copy rotation reads the property, not the fixed influence', () {
+      // Declaring influenceProperty and then ignoring it is the worst kind of
+      // failure: the slider moves, nothing happens, and nothing says why.
+      final pose = twoBones()
+        ..setProperty('blend', 0)
+        ..constrain(
+          'follower',
+          const CopyRotation('driver', influenceProperty: 'blend'),
+        );
+
+      pose['driver'].rotation = Quaternion.axisAngle(
+        Vector3(0, 0, 1),
+        math.pi / 2,
+      );
+      pose.evaluate();
+      final unblended = pose.tailOf('follower').clone();
+      expect(unblended.y, closeTo(1, 1e-6), reason: 'should be unmoved at 0');
+
+      pose.setProperty('blend', 1);
+      pose.evaluate();
+      expect(pose.tailOf('follower').x, closeTo(0, 1e-6));
+    });
+
+    test('damped track reads the property too', () {
+      final pose = twoBones()
+        ..setProperty('look', 0)
+        ..constrain(
+          'follower',
+          const DampedTrack(target: 'driver', influenceProperty: 'look'),
+        );
+
+      pose.evaluate();
+      expect(pose.tailOf('follower').y, closeTo(1, 1e-6));
+
+      pose.setProperty('look', 1);
+      pose.evaluate();
+      // Now aimed at the driver, which is a metre to its left.
+      expect(pose.tailOf('follower').x, closeTo(0, 1e-6));
+    });
+
+    test('an inverted influence is the other half of a switch', () {
+      final pose = twoBones()
+        ..setProperty('blend', 1)
+        ..constrain(
+          'follower',
+          const CopyRotation(
+            'driver',
+            influenceProperty: 'blend',
+            invertInfluence: true,
+          ),
+        );
+
+      pose['driver'].rotation = Quaternion.axisAngle(
+        Vector3(0, 0, 1),
+        math.pi / 2,
+      );
+      pose.evaluate();
+      // One minus one is nothing, so the follower stays put.
+      expect(pose.tailOf('follower').y, closeTo(1, 1e-6));
     });
   });
 }

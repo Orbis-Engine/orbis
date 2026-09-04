@@ -8,6 +8,7 @@ class IkSolution {
     required this.joint,
     required this.end,
     required this.reachable,
+    this.stretch = 1,
   });
 
   /// The elbow or knee.
@@ -21,6 +22,14 @@ class IkSolution {
   /// straightened or folded as far as it goes — refusing to solve would leave
   /// the limb wherever it was, which looks broken rather than strained.
   final bool reachable;
+
+  /// How much longer than its rest length the limb had to become, as a
+  /// multiplier. One when it did not stretch.
+  ///
+  /// Reported rather than baked into the positions, because stretching is
+  /// something the *bones* do: the caller has to scale them, or the mesh
+  /// stays the length it was and tears away from the joint.
+  final double stretch;
 }
 
 /// Places a two-bone chain so its end reaches a target.
@@ -34,12 +43,17 @@ class IkSolution {
 /// [pole] decides which way the joint bends. Two solutions satisfy any
 /// reachable target, mirrored about the line from root to target, and the
 /// pole picks one — it is the difference between a knee and a backwards knee.
+/// [stretch] lets the limb grow rather than stopping short: at zero it stops
+/// at full extension, at one it reaches anything. Partial values are the
+/// useful ones — a little stretch hides the pop as a limb straightens without
+/// making the character rubbery.
 IkSolution solveTwoBoneIk({
   required Vector3 root,
   required Vector3 pole,
   required Vector3 target,
   required double upperLength,
   required double lowerLength,
+  double stretch = 0,
 }) {
   final toTarget = target - root;
   final reach = toTarget.length;
@@ -55,6 +69,20 @@ IkSolution solveTwoBoneIk({
   final direction = toTarget / reach;
   final maximum = upperLength + lowerLength;
   final minimum = (upperLength - lowerLength).abs();
+
+  // Past full extension with stretch allowed, the limb is a straight line and
+  // there is no triangle left to solve — it is one division, not a special
+  // case of the law of cosines.
+  if (stretch > 0 && reach > maximum) {
+    final factor = 1 + (reach / maximum - 1) * stretch.clamp(0.0, 1.0);
+    return IkSolution(
+      joint: root + direction * (upperLength * factor),
+      end: root + direction * (maximum * factor),
+      // Only a limb allowed to stretch the whole way actually arrives.
+      reachable: stretch >= 1,
+      stretch: factor,
+    );
+  }
 
   // Kept just inside the limits: exactly straight or exactly folded makes the
   // bend plane undefined, and the joint flips between frames as rounding

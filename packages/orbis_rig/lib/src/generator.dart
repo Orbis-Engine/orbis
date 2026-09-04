@@ -1,5 +1,8 @@
 import 'armature.dart';
+import 'collections.dart';
+import 'naming.dart';
 import 'rig_type.dart';
+import 'widgets.dart';
 
 /// A skeleton, marked up with what each part should become.
 ///
@@ -50,6 +53,8 @@ class GeneratedRig {
     required this.pose,
     required this.controls,
     required this.properties,
+    required this.widgets,
+    required this.collections,
     required this.unassigned,
     required this.problems,
   });
@@ -62,6 +67,13 @@ class GeneratedRig {
 
   /// Named values with the number each starts at.
   final Map<String, double> properties;
+
+  /// The shape drawn for each control. A control with no entry is drawn as a
+  /// plain bone, which is a legible default rather than an omission.
+  final Map<String, BoneWidget> widgets;
+
+  /// Which bones show and hide together.
+  final BoneCollections collections;
 
   /// Bones in the meta-rig that no rig type claimed.
   ///
@@ -126,14 +138,43 @@ class RigGenerator {
         if (!claimed.contains(bone.name)) bone.name,
     };
 
+    // Appended after the generator's own, so a chain that could not be built
+    // at all is reported before the details of one that half-was.
+    problems.addAll(context.problems.map((p) => RigProblem(p.bone, p.message)));
+
+    _collectMachinery(context);
+
     return GeneratedRig(
       armature: output,
       pose: pose,
       controls: context.controls,
       properties: context.defaults,
+      widgets: context.widgets,
+      collections: context.collections,
       unassigned: unassigned,
       problems: problems,
     );
+  }
+
+  /// Files everything that is not a control by its role, hidden.
+  ///
+  /// Done centrally rather than by each rig type, because the rule holds for
+  /// every rig type there will ever be: an original, a deform bone and a
+  /// mechanism are not an animator's to touch, and a rig that opens showing
+  /// all three reads as broken.
+  void _collectMachinery(RigContext context) {
+    const hidden = {
+      BoneRole.original: 'ORG',
+      BoneRole.deform: 'DEF',
+      BoneRole.mechanism: 'MCH',
+    };
+
+    for (final bone in context.output.bones) {
+      final collection = hidden[BoneNaming.roleOf(bone.name)];
+      if (collection != null) {
+        context.collect(bone.name, collection, visible: false);
+      }
+    }
   }
 
   /// The run of bones one rig type owns.

@@ -79,7 +79,9 @@ abstract class BoneConstraint {
   /// limb one frame behind.
   Iterable<String> get dependencies;
 
-  Matrix4 apply(Matrix4 world, Pose pose);
+  /// [bone] is the bone being constrained, for the few constraints that need
+  /// to know where it rests rather than only where it currently is.
+  Matrix4 apply(Matrix4 world, Pose pose, String bone);
 }
 
 /// Takes another bone's orientation.
@@ -103,14 +105,14 @@ class CopyRotation extends BoneConstraint {
   Iterable<String> get dependencies => [source];
 
   @override
-  Matrix4 apply(Matrix4 world, Pose pose) {
+  Matrix4 apply(Matrix4 world, Pose pose, String bone) {
     final target = pose.worldOf(source);
 
     final current = _rotationOf(world);
     var wanted = _rotationOf(target);
     if (invert) wanted = wanted.conjugated();
 
-    final blended = _slerp(current, wanted, influence.clamp(0.0, 1.0));
+    final blended = _slerp(current, wanted, influenceIn(pose));
     return Matrix4.compose(world.getTranslation(), blended, _scaleOf(world));
   }
 }
@@ -139,7 +141,10 @@ class DampedTrack extends BoneConstraint {
   Iterable<String> get dependencies => [target];
 
   @override
-  Matrix4 apply(Matrix4 world, Pose pose) {
+  Matrix4 apply(Matrix4 world, Pose pose, String bone) {
+    final amount = influenceIn(pose);
+    if (amount <= 0) return world;
+
     final origin = world.getTranslation();
     final toTarget = pose.worldOf(target).getTranslation() - origin;
     if (toTarget.length2 < 1e-12) return world;
@@ -149,7 +154,7 @@ class DampedTrack extends BoneConstraint {
 
     final rotation = _rotationOf(world);
     final wanted = correction * rotation;
-    final blended = _slerp(rotation, wanted, influence.clamp(0.0, 1.0));
+    final blended = _slerp(rotation, wanted, amount);
 
     return Matrix4.compose(origin, blended, _scaleOf(world));
   }
@@ -178,18 +183,27 @@ class LimitRotation extends BoneConstraint {
   Iterable<String> get dependencies => const [];
 
   @override
-  Matrix4 apply(Matrix4 world, Pose pose) {
+  Matrix4 apply(Matrix4 world, Pose pose, String bone) {
+    final amount = influenceIn(pose);
+    if (amount <= 0) return world;
+
     final rotation = _rotationOf(world);
 
-    // The angle of the rotation itself: a quaternion's w is the cosine of half
-    // its angle, which is the cheapest way to ask "how far has this turned".
-    final half = math.acos(rotation.w.abs().clamp(0.0, 1.0));
-    final angle = half * 2;
+    // Measured from where the bone rests, not from the identity. A jaw points
+    // down and forward at rest, so its world rotation is already a long way
+    // from identity — limiting that would clamp the rest pose itself and the
+    // joint would appear stuck rather than limited.
+    final rest = _rotationOf(pose.baseOf(bone));
+    final local = (rest.conjugated() * rotation).normalized();
+
+    // A quaternion's w is the cosine of half its angle, which is the cheapest
+    // way to ask how far the joint has turned.
+    final angle = 2 * math.acos(local.w.abs().clamp(0.0, 1.0));
     if (angle <= maximumAngle) return world;
 
-    final scale = maximumAngle / angle;
-    final limited = _slerp(Quaternion.identity(), rotation, scale);
-    final blended = _slerp(rotation, limited, influence.clamp(0.0, 1.0));
+    final limited = _slerp(Quaternion.identity(), local, maximumAngle / angle);
+    final wanted = (rest * limited).normalized();
+    final blended = _slerp(rotation, wanted, amount);
 
     return Matrix4.compose(world.getTranslation(), blended, _scaleOf(world));
   }
@@ -214,7 +228,7 @@ class CopyTransform extends BoneConstraint {
   Iterable<String> get dependencies => [source];
 
   @override
-  Matrix4 apply(Matrix4 world, Pose pose) {
+  Matrix4 apply(Matrix4 world, Pose pose, String bone) {
     final amount = influenceIn(pose);
     if (amount <= 0) return world;
 
@@ -234,6 +248,78 @@ class CopyTransform extends BoneConstraint {
       from + (to - from) * amount,
       _slerp(fromRotation.normalized(), toRotation.normalized(), amount),
       fromScale + (toScale - fromScale) * amount,
+    );
+  }
+}
+
+/// Points a bone at something and stretches it to reach.
+///
+/// The other half of stretch, and the one that is not inverse kinematics: a
+/// single bone spanning a gap — a tongue, a rubber hose, the bone between two
+/// controls that has to stay attached to both.
+///
+/// Volume is preserved by narrowing the cross-section as the bone lengthens.
+/// Scaling all three axes together would be a zoom, and it reads as one.
+class StretchTo extends BoneConstraint {
+  const StretchTo({
+    required this.target,
+    required this.restLength,
+    this.volume = 1,
+    super.influence,
+    super.influenceProperty,
+    super.invertInfluence,
+  });
+
+  /// The bone whose head this one reaches for.
+  final String target;
+
+  /// The distance at which the bone is at its natural length.
+  ///
+  /// Required rather than taken from the bone, because "unstretched" is a
+  /// decision: it is usually the rest length, and it is deliberately something
+  /// else whenever a rig is built around a pose that is not the rest pose.
+  final double restLength;
+
+  /// How much of the volume to keep, from zero — scale only along the length —
+  /// to one.
+  final double volume;
+
+  @override
+  Iterable<String> get dependencies => [target];
+
+  @override
+  Matrix4 apply(Matrix4 world, Pose pose, String bone) {
+    final amount = influenceIn(pose);
+    if (amount <= 0 || restLength <= 0) return world;
+
+    final origin = world.getTranslation();
+    final toTarget = pose.worldOf(target).getTranslation() - origin;
+    final distance = toTarget.length;
+    if (distance < 1e-9) return world;
+
+    final rotation = _rotationOf(world);
+    final aimed =
+        rotationBetween(TrackAxis.y.of(world), toTarget / distance) * rotation;
+
+    final scale = _scaleOf(world);
+    final factor = distance / restLength;
+    final cross = 1 / math.sqrt(factor);
+    // Volume at zero leaves the cross-section alone; at one it narrows fully.
+    final narrowed = 1 + (cross - 1) * volume.clamp(0.0, 1.0);
+
+    final stretched = Vector3(
+      scale.x * narrowed,
+      scale.y * factor,
+      scale.z * narrowed,
+    );
+
+    if (amount >= 1) {
+      return Matrix4.compose(origin, aimed.normalized(), stretched);
+    }
+    return Matrix4.compose(
+      origin,
+      _slerp(rotation, aimed.normalized(), amount),
+      scale + (stretched - scale) * amount,
     );
   }
 }

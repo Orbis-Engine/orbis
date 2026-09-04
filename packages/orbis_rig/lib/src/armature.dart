@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:vector_math/vector_math_64.dart';
 
 import 'bone.dart';
@@ -181,6 +183,8 @@ class IkChain {
     this.pole,
     this.influence = 1,
     this.influenceProperty,
+    this.stretch = 0,
+    this.stretchProperty,
   });
 
   /// The upper bone — a thigh or an upper arm.
@@ -201,6 +205,19 @@ class IkChain {
   /// A pose property to take the influence from, which is how a limb is handed
   /// between inverse and forward kinematics.
   final String? influenceProperty;
+
+  /// How far the limb may stretch past full extension, from zero to one.
+  final double stretch;
+
+  /// A pose property to take the stretch from, so an animator can turn it off
+  /// for a shot where the silhouette matters more than the reach.
+  final String? stretchProperty;
+
+  double stretchIn(Pose pose) {
+    final name = stretchProperty;
+    final value = name == null ? stretch : pose.property(name) ?? stretch;
+    return value.clamp(0.0, 1.0);
+  }
 
   double influenceIn(Pose pose) {
     final name = influenceProperty;
@@ -368,7 +385,7 @@ class Pose {
       // carries everything below it. That ordering is what makes a rig a
       // mechanism rather than a list of independent parts.
       for (final constraint in _constraints[name] ?? const <BoneConstraint>[]) {
-        world = constraint.apply(world, this);
+        world = constraint.apply(world, this, name);
       }
 
       _world[name] = world;
@@ -377,6 +394,12 @@ class Pose {
 
   /// Where a bone would be with no pose applied: its parent, times its rest
   /// offset. What a local pose rotation is measured against.
+  ///
+  /// Public because a constraint that limits a joint has to know where the
+  /// joint rests. Measuring against the identity instead would treat every
+  /// bone that is not axis-aligned as already bent, and clamp the rest pose.
+  Matrix4 baseOf(String name) => _baseOf(name);
+
   Matrix4 _baseOf(String name) {
     final bone = armature[name]!;
     final local = armature.restLocalOf(name);
@@ -409,16 +432,42 @@ class Pose {
         target: goal,
         upperLength: rootBone.length,
         lowerLength: midBone.length,
+        stretch: chain.stretchIn(this),
       );
 
+      // Only the root is scaled. Scale is inherited, so stretching the upper
+      // bone carries the lower one out to the right place and lengthens it by
+      // the same factor — scaling both would stretch the lower one twice.
+      //
+      // Non-uniform inherited scale shears a child that is rotated relative to
+      // its parent, which would be a problem if the limb were bent. It cannot
+      // be: a limb only stretches once it is past full extension, and a limb
+      // past full extension is straight.
+      //
+      // Written every solve, including back to one, because a scale left over
+      // from a frame where the limb was stretched would keep it long after the
+      // target came back into reach.
+      _stretchAlongY(chain.root, solution.stretch, amount);
       _aim(chain.root, solution.joint - rootHead, amount);
       _world[chain.root] = _baseOf(
         chain.root,
       ).multiplied(this[chain.root].matrix);
 
+      _stretchAlongY(chain.mid, 1, amount);
       _aim(chain.mid, solution.end - headOf(chain.mid), amount);
       _world[chain.mid] = _baseOf(chain.mid).multiplied(this[chain.mid].matrix);
     }
+  }
+
+  /// Stretches a bone along its own length, keeping its volume.
+  ///
+  /// The cross-section narrows as the inverse square root of the stretch,
+  /// which is what keeps a stretched forearm from also getting fatter — the
+  /// giveaway that a limb is being scaled rather than stretched.
+  void _stretchAlongY(String name, double factor, double amount) {
+    final blended = 1 + (factor - 1) * amount;
+    final cross = blended <= 0 ? 1.0 : 1 / math.sqrt(blended);
+    this[name].scale.setValues(cross, blended, cross);
   }
 
   /// Turns a bone so it points a given way, by writing its local rotation.

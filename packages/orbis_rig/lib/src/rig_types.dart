@@ -1,9 +1,11 @@
 import 'package:vector_math/vector_math_64.dart';
 
 import 'armature.dart';
+import 'collections.dart';
 import 'constraints.dart';
 import 'naming.dart';
 import 'rig_type.dart';
+import 'widgets.dart';
 
 /// The deform bone for a source bone, wired to shadow its original.
 ///
@@ -47,6 +49,19 @@ class CopyRig implements RigType {
     final organic = context.copy(sourceName, role: BoneRole.original);
     final control = context.copy(sourceName);
 
+    final side = BoneNaming.sideOf(sourceName);
+    context
+      ..widget(control, const BoneWidget(shape: WidgetShape.circle, size: 1.1))
+      ..collect(
+        control,
+        BoneCollections.limbCollection(
+          BoneNaming.baseOf(sourceName),
+          side,
+          null,
+        ),
+        colour: BoneCollections.colourFor(side),
+      );
+
     context.constrain(organic, CopyTransform(control));
     _deform(context, sourceName, organic);
   }
@@ -59,7 +74,13 @@ class CopyRig implements RigType {
 /// to move between them mid-shot — which is a dozen bones and twice as many
 /// constraints that nobody should assemble twice, let alone mirror by hand.
 class LimbRig implements RigType {
-  const LimbRig();
+  /// [stretch] is how far past full extension the limb may reach, from zero to
+  /// one. Off by default: stretch is a choice about a character, and a rig
+  /// that stretches when nobody asked reads as a bug the first time an arm
+  /// reaches for something.
+  const LimbRig({this.stretch = 0});
+
+  final double stretch;
 
   @override
   String get id => 'limbs.limb';
@@ -81,6 +102,13 @@ class LimbRig implements RigType {
     // what an animator blocks a shot in; inverse is for when something has to
     // stay put.
     context.property(switchName, 1);
+
+    final stretchName = BoneNaming.compose('${base}_stretch', side: side);
+    if (stretch > 0) context.property(stretchName, stretch);
+
+    final colour = BoneCollections.colourFor(side);
+    final forwardGroup = BoneCollections.limbCollection(base, side, 'FK');
+    final inverseGroup = BoneCollections.limbCollection(base, side, 'IK');
 
     // The originals, in their own chain.
     final organicUpper = context.copy(upper, role: BoneRole.original);
@@ -140,8 +168,34 @@ class LimbRig implements RigType {
     );
 
     context.ik(
-      IkChain(root: solvedUpper, mid: solvedLower, target: goal, pole: pole),
+      IkChain(
+        root: solvedUpper,
+        mid: solvedLower,
+        target: goal,
+        pole: pole,
+        // Read from a property even when it starts at zero, so an animator can
+        // turn stretch on for one shot without the rig being regenerated.
+        stretch: stretch,
+        stretchProperty: stretch > 0 ? stretchName : null,
+      ),
     );
+
+    // Rings turn, the box is dragged, the square marks the plane the joint
+    // bends in — three shapes an animator can tell apart without reading a
+    // name.
+    context
+      ..widget(forwardUpper, const BoneWidget(shape: WidgetShape.circle))
+      ..widget(forwardLower, const BoneWidget(shape: WidgetShape.circle))
+      ..widget(forwardEnd, const BoneWidget(shape: WidgetShape.circle))
+      ..widget(goal, const BoneWidget(shape: WidgetShape.cube, size: 0.8))
+      ..widget(pole, const BoneWidget(shape: WidgetShape.square, size: 0.5));
+
+    for (final bone in [forwardUpper, forwardLower, forwardEnd]) {
+      context.collect(bone, forwardGroup, colour: colour);
+    }
+    for (final bone in [goal, pole]) {
+      context.collect(bone, inverseGroup, colour: colour);
+    }
 
     // The handover. Two stacks reading one number, one of them inverted: at
     // one the originals follow the forward controls, at zero they follow the
@@ -252,6 +306,14 @@ class FingerRig implements RigType {
     final master = context.copy(chain.first, rename: '${base}_curl');
     context.property(BoneNaming.compose('${base}_curl_amount', side: side), 1);
 
+    context
+      ..widget(master, const BoneWidget(shape: WidgetShape.circle, size: 1.4))
+      ..collect(
+        master,
+        BoneCollections.limbCollection('Fingers', side, null),
+        colour: BoneCollections.colourFor(side),
+      );
+
     String? organicParent;
     String? deformParent;
 
@@ -303,6 +365,17 @@ class SpineRig implements RigType {
     final chest = context.copy(chain.last, rename: 'chest', parent: torso);
 
     context.property(BoneNaming.compose('${base}_bend', side: side), 1);
+
+    // The torso is what a whole character is carried by, so it is the widest
+    // thing on screen and shaped like nothing else in the rig.
+    context
+      ..widget(torso, const BoneWidget(shape: WidgetShape.arrow, size: 3))
+      ..widget(hips, const BoneWidget(shape: WidgetShape.circle, size: 2))
+      ..widget(chest, const BoneWidget(shape: WidgetShape.circle, size: 2.2));
+
+    for (final bone in [torso, hips, chest]) {
+      context.collect(bone, 'Torso', colour: BoneCollections.centreColour);
+    }
 
     String? organicParent;
     String? deformParent;

@@ -2,8 +2,10 @@ import 'package:vector_math/vector_math_64.dart';
 
 import 'armature.dart';
 import 'bone.dart';
+import 'collections.dart';
 import 'constraints.dart';
 import 'naming.dart';
+import 'widgets.dart';
 
 /// What a rig type writes into while it is generating.
 ///
@@ -25,6 +27,23 @@ class RigContext {
 
   final Set<String> controls = {};
   final Map<String, double> defaults = {};
+
+  /// The shape drawn for each control.
+  final Map<String, BoneWidget> widgets = {};
+
+  /// Which bones an animator can show and hide together.
+  final BoneCollections collections = BoneCollections();
+
+  /// Things a rig type could not do, to be reported rather than thrown.
+  ///
+  /// A rig type that hits a problem carries on and says so. Throwing would
+  /// stop generation at the first mistake, and an artist fixing a meta-rig
+  /// wants the whole list — one problem per attempt is how a five minute fix
+  /// becomes an afternoon.
+  final List<({String bone, String message})> problems = [];
+
+  void problem(String bone, String message) =>
+      problems.add((bone: bone, message: message));
 
   /// Copies a bone out of the meta-rig.
   ///
@@ -69,6 +88,23 @@ class RigContext {
     return name;
   }
 
+  /// Makes a bone once, however many times it is asked for.
+  ///
+  /// Rig types are generated one chain at a time and cannot see each other,
+  /// but a few things are shared between them — the single target both eyes
+  /// look at is one bone, not one per eye. The first caller builds it and the
+  /// rest find it already there.
+  String createShared(
+    String name, {
+    required Vector3 head,
+    required Vector3 tail,
+    BoneRole role = BoneRole.control,
+    String? parent,
+  }) {
+    if (output.contains(name)) return name;
+    return create(name, head: head, tail: tail, role: role, parent: parent);
+  }
+
   /// Makes a bone that has no counterpart in the meta-rig.
   ///
   /// Inverse-kinematics targets, pole vectors and the hidden chain a solver
@@ -98,6 +134,42 @@ class RigContext {
 
   void constrain(String bone, BoneConstraint constraint) =>
       pose.constrain(bone, constraint);
+
+  /// Stretches a bone to reach another, at its current length.
+  ///
+  /// Wraps [StretchTo] so the rest length comes from the bone rather than
+  /// from a number somebody has to look up and keep in step with the skeleton.
+  void stretchTo(
+    String bone,
+    String target, {
+    double volume = 1,
+    String? influenceProperty,
+  }) {
+    final source = output[bone];
+    if (source == null) {
+      throw ArmatureError('Cannot stretch "$bone", which is not in this rig.');
+    }
+    constrain(
+      bone,
+      StretchTo(
+        target: target,
+        restLength: source.length,
+        volume: volume,
+        influenceProperty: influenceProperty,
+      ),
+    );
+  }
+
+  /// Gives a control the shape an animator grabs it by.
+  void widget(String bone, BoneWidget widget) => widgets[bone] = widget;
+
+  /// Puts a bone in a collection, declaring the collection if it is new.
+  void collect(
+    String bone,
+    String collection, {
+    bool visible = true,
+    int? colour,
+  }) => collections.add(bone, collection, visible: visible, colour: colour);
 
   void ik(IkChain chain) => pose.addIkChain(chain);
 
