@@ -158,6 +158,30 @@ void main() {
       }
     });
 
+    test('a chunk reports components the query did not ask for', () {
+      final entity = world.createEntity();
+      world.add(entity, position, Float32List.fromList([1, 2, 3]));
+      world.add(entity, velocity, Float32List.fromList([4, 5, 6]));
+
+      // Queried on position alone, but the run still knows it carries velocity
+      // — which is how replication decides what to send.
+      final query = world.query([position]);
+      addTearDown(query.dispose);
+
+      final chunk = query.chunks.first;
+      expect(chunk.componentIds, containsAll([position.id, velocity.id]));
+      expect(chunk.float32OfComponent(velocity), [4, 5, 6]);
+    });
+
+    test('a component the run does not carry reads as null', () {
+      final entity = world.createEntity();
+      world.add(entity, position);
+      final query = world.query([position]);
+      addTearDown(query.dispose);
+
+      expect(query.chunks.first.float32OfComponent(velocity), isNull);
+    });
+
     test('asking for the wrong element type is refused', () {
       final entity = world.createEntity();
       world.add(entity, position);

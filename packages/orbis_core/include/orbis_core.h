@@ -118,6 +118,21 @@ void *orbis_query_chunk_column(OrbisQuery *query, uint32_t chunk, uint32_t slot)
 /// The entity handles for `chunk`, in the same order as every column.
 const OrbisEntity *orbis_query_chunk_entities(OrbisQuery *query, uint32_t chunk);
 
+/// Every component carried by the entities in `chunk`, including ones the
+/// query did not ask for, written in ascending id order into `out`.
+///
+/// Returns how many there are, which may exceed `capacity` — call with a null
+/// `out` to size a buffer first. A caller that has to react to what an entity
+/// happens to carry, rather than to a fixed set, needs this: replication asks
+/// it once per run rather than once per entity.
+uint32_t orbis_query_chunk_components(OrbisQuery *query, uint32_t chunk,
+                                      OrbisComponent *out, uint32_t capacity);
+
+/// A column in `chunk` addressed by component rather than by query slot, so a
+/// caller can read something the query did not name. NULL if absent.
+void *orbis_query_chunk_component_column(OrbisQuery *query, uint32_t chunk,
+                                         OrbisComponent component);
+
 // --------------------------------------------------------------- systems ----
 
 /// Registers a native system. Systems run in registration order.

@@ -116,6 +116,39 @@ class Chunk {
       .cast<Uint8>()
       .asTypedList(length * _types[slot].byteSize);
 
+  /// Every component the entities in this run carry, including ones the query
+  /// did not ask for.
+  ///
+  /// The whole run shares one component set, so this is answered once per run
+  /// rather than once per entity — which is what lets replication decide what
+  /// to send without walking the world.
+  List<int> get componentIds {
+    final count = native.queryChunkComponents(_query, _index, nullptr, 0);
+    if (count == 0) return const [];
+    return using((arena) {
+      final buffer = arena<Uint32>(count);
+      native.queryChunkComponents(_query, _index, buffer, count);
+      return List<int>.unmodifiable(buffer.asTypedList(count));
+    });
+  }
+
+  /// The raw bytes of a component this run carries, whether or not the query
+  /// named it. Null when the component is absent.
+  Uint8List? bytesOfComponent(ComponentType type) {
+    final pointer =
+        native.queryChunkComponentColumn(_query, _index, type.id);
+    if (pointer == nullptr) return null;
+    return pointer.cast<Uint8>().asTypedList(length * type.byteSize);
+  }
+
+  /// A float32 column addressed by component rather than by slot.
+  Float32List? float32OfComponent(ComponentType type) {
+    final pointer =
+        native.queryChunkComponentColumn(_query, _index, type.id);
+    if (pointer == nullptr) return null;
+    return pointer.cast<Float>().asTypedList(length * type.arity);
+  }
+
   void _expect(int slot, ComponentKind kind) {
     if (_types[slot].kind != kind) {
       throw ArgumentError('Slot $slot is ${_types[slot].kind.name}, '

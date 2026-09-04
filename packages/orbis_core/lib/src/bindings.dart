@@ -103,6 +103,18 @@ external Pointer<Void> queryChunkColumn(
 external Pointer<Uint64> queryChunkEntities(
     Pointer<OrbisQueryStruct> query, int chunk);
 
+@Native<
+    Uint32 Function(
+        Pointer<OrbisQueryStruct>, Uint32, Pointer<Uint32>, Uint32)>(
+    symbol: 'orbis_query_chunk_components', assetId: kOrbisCoreAsset)
+external int queryChunkComponents(Pointer<OrbisQueryStruct> query, int chunk,
+    Pointer<Uint32> out, int capacity);
+
+@Native<Pointer<Void> Function(Pointer<OrbisQueryStruct>, Uint32, Uint32)>(
+    symbol: 'orbis_query_chunk_component_column', assetId: kOrbisCoreAsset)
+external Pointer<Void> queryChunkComponentColumn(
+    Pointer<OrbisQueryStruct> query, int chunk, int component);
+
 @Native<Void Function(Pointer<OrbisWorldStruct>, Double)>(
     symbol: 'orbis_world_tick', assetId: kOrbisCoreAsset)
 external void worldTick(Pointer<OrbisWorldStruct> world, double delta);

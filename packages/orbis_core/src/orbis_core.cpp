@@ -167,6 +167,29 @@ const OrbisEntity *orbis_query_chunk_entities(OrbisQuery *query,
   return query->world->archetype(query->archetypes[chunk]).entities().data();
 }
 
+uint32_t orbis_query_chunk_components(OrbisQuery *query, uint32_t chunk,
+                                      OrbisComponent *out, uint32_t capacity) {
+  if (chunk >= query->archetypes.size()) return 0;
+  const auto &components =
+      query->world->archetype(query->archetypes[chunk]).components();
+  if (out != nullptr) {
+    const uint32_t writable =
+        capacity < components.size() ? capacity
+                                     : static_cast<uint32_t>(components.size());
+    for (uint32_t i = 0; i < writable; i++) out[i] = components[i];
+  }
+  return static_cast<uint32_t>(components.size());
+}
+
+void *orbis_query_chunk_component_column(OrbisQuery *query, uint32_t chunk,
+                                         OrbisComponent component) {
+  if (chunk >= query->archetypes.size()) return nullptr;
+  Archetype &archetype = query->world->archetype(query->archetypes[chunk]);
+  const int column = archetype.columnOf(component);
+  if (column < 0) return nullptr;
+  return archetype.columnData(column);
+}
+
 // --------------------------------------------------------------- systems ----
 
 uint32_t orbis_system_register(OrbisWorld *world, const char *name,
