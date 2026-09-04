@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:orbis_core/orbis_core.dart';
 import 'package:orbis_net/orbis_net.dart';
 
+import 'orbis_components.g.dart';
+
 /// A small world that exercises the parts of the engine that have to agree:
 /// storage, the transform hierarchy, a system written in Dart over views, and
 /// replication of the result.
@@ -67,13 +69,15 @@ class Simulation {
   void step(double delta) {
     for (final chunk in _movers.chunks) {
       final locals = chunk.float32(0);
-      final velocities = chunk.float32(1);
+      // The generated extension type names the offsets, so a system reads as
+      // fields rather than as arithmetic — and costs the same, since it is the
+      // same list.
+      final velocities = VelocityColumn(chunk.float32(1));
       for (var row = 0; row < chunk.length; row++) {
         final l = row * 10;
-        final v = row * 3;
-        locals[l] += velocities[v] * delta;
-        locals[l + 1] += velocities[v + 1] * delta;
-        locals[l + 2] += velocities[v + 2] * delta;
+        locals[l] += velocities.x(row) * delta;
+        locals[l + 1] += velocities.y(row) * delta;
+        locals[l + 2] += velocities.z(row) * delta;
       }
     }
 

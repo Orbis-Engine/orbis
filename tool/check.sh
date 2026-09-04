@@ -8,6 +8,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 PACKAGES=(
+  packages/orbis_codegen
   packages/orbis_core
   packages/orbis_net
   packages/orbis_net_dashwire
@@ -34,7 +35,11 @@ for package in "${PACKAGES[@]}"; do
   fi
 
   if (cd "$package" && dart test > /tmp/orbis_test.log 2>&1); then
-    echo "  ok    $(tail -1 /tmp/orbis_test.log | sed 's/^[0-9:]* //')"
+    # The reporter redraws one line with carriage returns and colour, so the
+    # summary is the last of those, stripped.
+    summary=$(tr '\r' '\n' < /tmp/orbis_test.log | tail -1 \
+      | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/^[0-9:]* //')
+    echo "  ok    $summary"
   else
     echo "  FAIL  tests"; tail -25 /tmp/orbis_test.log; failures=$((failures+1))
   fi
