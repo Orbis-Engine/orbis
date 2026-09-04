@@ -118,6 +118,59 @@ void *orbis_query_chunk_column(OrbisQuery *query, uint32_t chunk, uint32_t slot)
 /// The entity handles for `chunk`, in the same order as every column.
 const OrbisEntity *orbis_query_chunk_entities(OrbisQuery *query, uint32_t chunk);
 
+/// Every component carried by the entities in `chunk`, including ones the
+/// query did not ask for, written in ascending id order into `out`.
+///
+/// Returns how many there are, which may exceed `capacity` — call with a null
+/// `out` to size a buffer first. A caller that has to react to what an entity
+/// happens to carry, rather than to a fixed set, needs this: replication asks
+/// it once per run rather than once per entity.
+uint32_t orbis_query_chunk_components(OrbisQuery *query, uint32_t chunk,
+                                      OrbisComponent *out, uint32_t capacity);
+
+/// A column in `chunk` addressed by component rather than by query slot, so a
+/// caller can read something the query did not name. NULL if absent.
+void *orbis_query_chunk_component_column(OrbisQuery *query, uint32_t chunk,
+                                         OrbisComponent component);
+
+// ------------------------------------------------------------ transforms ----
+
+/// The built-in transform components.
+///
+/// A scene graph is a tree and an archetype store is flat, so the hierarchy
+/// lives in a component rather than in the storage: an entity names its parent
+/// and the engine derives world space from that. Nothing else in the core
+/// knows about parenting, which is what keeps the storage general.
+typedef struct {
+  /// Ten floats: translation xyz, rotation as a quaternion xyzw, scale xyz.
+  OrbisComponent local;
+
+  /// Sixteen floats, column-major, the convention glTF and Filament both use.
+  /// Derived — writing it directly is overwritten by the next propagation.
+  OrbisComponent world;
+
+  /// One OrbisEntity. Absent means the entity is a root.
+  OrbisComponent parent;
+} OrbisTransforms;
+
+/// Registers the transform components, or returns the existing ids.
+OrbisTransforms orbis_transform_register(OrbisWorld *world);
+
+/// Derives every world transform from local transforms and parent links.
+///
+/// Each entity is resolved once however many children depend on it. A parent
+/// chain that loops is treated as a root at the point it closes, so a cycle
+/// costs a wrong transform rather than a hang.
+///
+/// Returns how many entities were written.
+uint32_t orbis_transform_propagate(OrbisWorld *world);
+
+/// Composes a local transform into a column-major matrix, without touching the
+/// world. Exposed because a caller building a matrix for something that is not
+/// an entity should not have to reimplement the convention.
+void orbis_transform_compose(const float *translationRotationScale,
+                             float *outMatrix16);
+
 // --------------------------------------------------------------- systems ----
 
 /// Registers a native system. Systems run in registration order.

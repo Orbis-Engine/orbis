@@ -14,6 +14,7 @@ void main(List<String> args) async {
       sources: [
         root.resolve('src/world.cpp').toFilePath(),
         root.resolve('src/orbis_core.cpp').toFilePath(),
+        root.resolve('src/transform.cpp').toFilePath(),
       ],
       includes: [
         root.resolve('include/').toFilePath(),

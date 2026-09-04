@@ -1,0 +1,17 @@
+name: orbis_codegen
+description: >-
+  Turns annotated Dart classes into component registration and a manifest other
+  front ends can read without compiling the package that declared them.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  analyzer: ^7.0.0
+  path: ^1.9.0
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0

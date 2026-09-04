@@ -1,0 +1,31 @@
+{
+  "formatVersion": 1,
+  "package": "orbis_simulation_example",
+  "components": [
+    {
+      "name": "NetworkId",
+      "class": "NetworkId",
+      "kind": "int64",
+      "arity": 1,
+      "fields": [
+        "value"
+      ],
+      "replicated": false,
+      "source": "lib/components.dart"
+    },
+    {
+      "name": "Velocity",
+      "class": "Velocity",
+      "kind": "float32",
+      "arity": 3,
+      "fields": [
+        "x",
+        "y",
+        "z"
+      ],
+      "replicated": true,
+      "ownerWritable": true,
+      "source": "lib/components.dart"
+    }
+  ]
+}

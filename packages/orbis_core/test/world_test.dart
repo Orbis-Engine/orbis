@@ -10,10 +10,16 @@ void main() {
 
   setUp(() {
     world = World();
-    position =
-        world.registerComponent('Position', kind: ComponentKind.float32, arity: 3);
-    velocity =
-        world.registerComponent('Velocity', kind: ComponentKind.float32, arity: 3);
+    position = world.registerComponent(
+      'Position',
+      kind: ComponentKind.float32,
+      arity: 3,
+    );
+    velocity = world.registerComponent(
+      'Velocity',
+      kind: ComponentKind.float32,
+      arity: 3,
+    );
   });
 
   tearDown(() => world.dispose());
@@ -26,8 +32,11 @@ void main() {
     });
 
     test('re-registering an identical layout returns the same type', () {
-      final again =
-          world.registerComponent('Position', kind: ComponentKind.float32, arity: 3);
+      final again = world.registerComponent(
+        'Position',
+        kind: ComponentKind.float32,
+        arity: 3,
+      );
       expect(again.id, position.id);
     });
 
@@ -56,14 +65,20 @@ void main() {
       expect(world.isAlive(second), isTrue);
       // The generation is what makes this detectable rather than an alias.
       expect(second, isNot(first));
-      expect(world.isAlive(first), isFalse,
-          reason: 'the old handle must not address the new entity');
+      expect(
+        world.isAlive(first),
+        isFalse,
+        reason: 'the old handle must not address the new entity',
+      );
     });
 
     test('using a dead handle is refused rather than silently ignored', () {
       final entity = world.createEntity();
       world.destroyEntity(entity);
-      expect(() => world.add(entity, position), throwsA(isA<DeadEntityError>()));
+      expect(
+        () => world.add(entity, position),
+        throwsA(isA<DeadEntityError>()),
+      );
     });
   });
 
@@ -98,8 +113,11 @@ void main() {
       world.add(entity, velocity, Float32List.fromList([1, 1, 1]));
 
       world.remove(entity, velocity);
-      expect(world.float32Of(entity, position), [7, 8, 9],
-          reason: 'moving archetypes must carry the shared components across');
+      expect(world.float32Of(entity, position), [
+        7,
+        8,
+        9,
+      ], reason: 'moving archetypes must carry the shared components across');
     });
   });
 
@@ -126,17 +144,21 @@ void main() {
       expect(query.entityCount, 1);
 
       world.remove(entity, velocity);
-      expect(query.entityCount, 0,
-          reason: 'the query must notice the entity left its archetype');
+      expect(
+        query.entityCount,
+        0,
+        reason: 'the query must notice the entity left its archetype',
+      );
     });
 
     test('a write through a column lands on the right entity', () {
-      final entities = [
-        for (var i = 0; i < 4; i++) world.createEntity(),
-      ];
+      final entities = [for (var i = 0; i < 4; i++) world.createEntity()];
       for (var i = 0; i < entities.length; i++) {
-        world.add(entities[i], position,
-            Float32List.fromList([i.toDouble(), 0, 0]));
+        world.add(
+          entities[i],
+          position,
+          Float32List.fromList([i.toDouble(), 0, 0]),
+        );
       }
 
       final query = world.query([position]);
@@ -156,6 +178,30 @@ void main() {
       for (var i = 0; i < entities.length; i++) {
         expect(world.float32Of(entities[i], position)![0], i + 100);
       }
+    });
+
+    test('a chunk reports components the query did not ask for', () {
+      final entity = world.createEntity();
+      world.add(entity, position, Float32List.fromList([1, 2, 3]));
+      world.add(entity, velocity, Float32List.fromList([4, 5, 6]));
+
+      // Queried on position alone, but the run still knows it carries velocity
+      // — which is how replication decides what to send.
+      final query = world.query([position]);
+      addTearDown(query.dispose);
+
+      final chunk = query.chunks.first;
+      expect(chunk.componentIds, containsAll([position.id, velocity.id]));
+      expect(chunk.float32OfComponent(velocity), [4, 5, 6]);
+    });
+
+    test('a component the run does not carry reads as null', () {
+      final entity = world.createEntity();
+      world.add(entity, position);
+      final query = world.query([position]);
+      addTearDown(query.dispose);
+
+      expect(query.chunks.first.float32OfComponent(velocity), isNull);
     });
 
     test('asking for the wrong element type is refused', () {
@@ -187,8 +233,11 @@ void main() {
       // Every entity shares one archetype, so the whole world is one run: the
       // system touches the boundary to fetch the columns and then works
       // entirely in Dart over the engine's own memory.
-      expect(query.chunks.length, 1,
-          reason: 'entities with identical component sets share an archetype');
+      expect(
+        query.chunks.length,
+        1,
+        reason: 'entities with identical component sets share an archetype',
+      );
 
       const delta = 0.5;
       final stopwatch = Stopwatch()..start();
@@ -203,15 +252,20 @@ void main() {
 
       // Correctness first: x started at i and should have advanced by 1.
       for (var i = 0; i < count; i += 997) {
-        expect(world.float32Of(entities[i], position)![0], closeTo(i + 1, 1e-3));
+        expect(
+          world.float32Of(entities[i], position)![0],
+          closeTo(i + 1, 1e-3),
+        );
       }
 
       // Reported rather than asserted — a timing bound would be flaky on
       // shared hardware, but a regression into per-entity calls would show
       // here as orders of magnitude.
       // ignore: avoid_print
-      print('  10k entities advanced in ${stopwatch.elapsedMicroseconds}us '
-          '(one boundary crossing)');
+      print(
+        '  10k entities advanced in ${stopwatch.elapsedMicroseconds}us '
+        '(one boundary crossing)',
+      );
     });
   });
 

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  # Everything that does not need a window. The renderer needs Flutter, a macOS
+  # host and a Filament download, so it is checked separately rather than made
+  # a gate on every change to the parts that do not touch it.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.13.0
+      - name: Analyze and test
+        run: ./tool/check.sh
+
+  # Formatting is its own job so a formatting failure never hides a real one.
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          # Pinned: the formatter changes between releases, and tracking
+          # stable turns an unrelated SDK bump into a red build on every file.
+          sdk: 3.13.0
+      - run: ./tool/format.sh --check

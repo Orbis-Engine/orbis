@@ -46,8 +46,10 @@ class ComponentType {
 /// Thrown when a handle is used after the entity it named was destroyed.
 class DeadEntityError extends StateError {
   DeadEntityError(int entity)
-      : super('Entity $entity is not alive. Its slot may have been reused; '
-            'generational handles make that detectable rather than silent.');
+    : super(
+        'Entity $entity is not alive. Its slot may have been reused; '
+        'generational handles make that detectable rather than silent.',
+      );
 }
 
 /// One run of entities that all carry the queried components.
@@ -112,14 +114,46 @@ class Chunk {
   }
 
   /// The raw bytes of a column, for a component with no natural element type.
-  Uint8List bytes(int slot) => _column(slot)
-      .cast<Uint8>()
-      .asTypedList(length * _types[slot].byteSize);
+  Uint8List bytes(int slot) =>
+      _column(slot).cast<Uint8>().asTypedList(length * _types[slot].byteSize);
+
+  /// Every component the entities in this run carry, including ones the query
+  /// did not ask for.
+  ///
+  /// The whole run shares one component set, so this is answered once per run
+  /// rather than once per entity — which is what lets replication decide what
+  /// to send without walking the world.
+  List<int> get componentIds {
+    final count = native.queryChunkComponents(_query, _index, nullptr, 0);
+    if (count == 0) return const [];
+    return using((arena) {
+      final buffer = arena<Uint32>(count);
+      native.queryChunkComponents(_query, _index, buffer, count);
+      return List<int>.unmodifiable(buffer.asTypedList(count));
+    });
+  }
+
+  /// The raw bytes of a component this run carries, whether or not the query
+  /// named it. Null when the component is absent.
+  Uint8List? bytesOfComponent(ComponentType type) {
+    final pointer = native.queryChunkComponentColumn(_query, _index, type.id);
+    if (pointer == nullptr) return null;
+    return pointer.cast<Uint8>().asTypedList(length * type.byteSize);
+  }
+
+  /// A float32 column addressed by component rather than by slot.
+  Float32List? float32OfComponent(ComponentType type) {
+    final pointer = native.queryChunkComponentColumn(_query, _index, type.id);
+    if (pointer == nullptr) return null;
+    return pointer.cast<Float>().asTypedList(length * type.arity);
+  }
 
   void _expect(int slot, ComponentKind kind) {
     if (_types[slot].kind != kind) {
-      throw ArgumentError('Slot $slot is ${_types[slot].kind.name}, '
-          'not ${kind.name}.');
+      throw ArgumentError(
+        'Slot $slot is ${_types[slot].kind.name}, '
+        'not ${kind.name}.',
+      );
     }
   }
 }
@@ -171,6 +205,56 @@ class Query {
   }
 }
 
+/// The transform components the core provides.
+///
+/// A scene graph is a tree and an archetype store is flat, so the hierarchy is
+/// a component rather than a structure: an entity names its parent and the
+/// engine derives world space. Reparenting is therefore a write, not a move
+/// through a graph, and the storage stays free of any notion of a tree.
+class TransformComponents {
+  const TransformComponents({
+    required this.local,
+    required this.world,
+    required this.parent,
+  });
+
+  /// Ten floats: translation, rotation as a quaternion, scale.
+  final ComponentType local;
+
+  /// Sixteen floats, column-major, as glTF and Filament both expect.
+  /// Derived — writing it is overwritten by the next propagation.
+  final ComponentType world;
+
+  /// The parent's handle. Absent means the entity is a root.
+  final ComponentType parent;
+}
+
+/// Builds a local transform without pulling in a maths package for three
+/// translations and an identity rotation.
+Float32List transform({
+  double x = 0,
+  double y = 0,
+  double z = 0,
+  double rotationX = 0,
+  double rotationY = 0,
+  double rotationZ = 0,
+  double rotationW = 1,
+  double scaleX = 1,
+  double scaleY = 1,
+  double scaleZ = 1,
+}) => Float32List.fromList([
+  x,
+  y,
+  z,
+  rotationX,
+  rotationY,
+  rotationZ,
+  rotationW,
+  scaleX,
+  scaleY,
+  scaleZ,
+]);
+
 /// An entity-component world.
 ///
 /// Dart owns the lifetime and drives the frame; the storage and the systems
@@ -206,15 +290,18 @@ class World {
     int arity = 1,
   }) {
     final size = kind.bytesPerElement * arity;
-    final id = using((arena) => native.componentRegister(
-          _alive,
-          name.toNativeUtf8(allocator: arena).cast<Char>(),
-          size,
-          kind.bytesPerElement,
-        ));
+    final id = using(
+      (arena) => native.componentRegister(
+        _alive,
+        name.toNativeUtf8(allocator: arena).cast<Char>(),
+        size,
+        kind.bytesPerElement,
+      ),
+    );
     if (id == 0) {
       throw ArgumentError(
-          'Component "$name" is already registered with a different layout.');
+        'Component "$name" is already registered with a different layout.',
+      );
     }
     return ComponentType(id: id, name: name, kind: kind, arity: arity);
   }
@@ -233,12 +320,18 @@ class World {
         ? native.entityAdd(_alive, entity, type.id, nullptr)
         : using((arena) {
             final buffer = arena<Uint8>(type.byteSize);
-            buffer.asTypedList(type.byteSize).setAll(
+            buffer
+                .asTypedList(type.byteSize)
+                .setAll(
                   0,
                   value.buffer.asUint8List(value.offsetInBytes, type.byteSize),
                 );
             return native.entityAdd(
-                _alive, entity, type.id, buffer.cast<Void>());
+              _alive,
+              entity,
+              type.id,
+              buffer.cast<Void>(),
+            );
           });
 
     if (!added) {
@@ -282,6 +375,38 @@ class World {
     });
     return Query._(pointer, List.unmodifiable(types));
   }
+
+  /// Registers the built-in transform components, or returns the existing ids.
+  TransformComponents registerTransforms() {
+    final ids = native.transformRegister(_alive);
+    return TransformComponents(
+      local: ComponentType(
+        id: ids.local,
+        name: 'orbis.LocalTransform',
+        kind: ComponentKind.float32,
+        arity: 10,
+      ),
+      world: ComponentType(
+        id: ids.world,
+        name: 'orbis.WorldTransform',
+        kind: ComponentKind.float32,
+        arity: 16,
+      ),
+      parent: ComponentType(
+        id: ids.parent,
+        name: 'orbis.Parent',
+        kind: ComponentKind.int64,
+        arity: 1,
+      ),
+    );
+  }
+
+  /// Derives every world transform from local transforms and parent links,
+  /// returning how many were written.
+  ///
+  /// Each entity is resolved once however many children hang off it, so a deep
+  /// chain costs its depth rather than its depth times its breadth.
+  int propagateTransforms() => native.transformPropagate(_alive);
 
   /// Runs the native systems once. Dart systems run around this, over views.
   void tick(double delta) => native.worldTick(_alive, delta);
