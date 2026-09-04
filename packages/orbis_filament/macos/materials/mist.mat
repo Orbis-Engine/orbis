@@ -1,0 +1,112 @@
+// One sheet of mist.
+//
+// A bank of fog is drawn as a stack of these, and what makes a stack read as
+// a volume rather than as a pile of sheets is that each one is transparent,
+// soft at every edge, and cut differently by the noise. Seen from the side —
+// which is how anybody looks at ground mist — the stack reads as depth.
+//
+// The noise is computed rather than sampled. A texture would be another thing
+// to generate, upload, keep and get wrong, and four octaves of value noise is
+// a handful of instructions on a surface that is mostly transparent anyway.
+material {
+    name : orbisMist,
+    shadingModel : unlit,
+    // Premultiplied, which is what Filament's transparent mode expects: the
+    // colour arrives already scaled by how much of it there is.
+    blending : transparent,
+    // Sheets do not occlude each other. Writing depth would let whichever was
+    // drawn first cut a hole in the ones behind it.
+    depthWrite : false,
+    culling : none,
+    requires : [ uv0 ],
+    parameters : [
+        { type : float3, name : colour },
+        { type : float,  name : density },
+        { type : float,  name : scale },
+        { type : float,  name : time },
+        { type : float2, name : drift },
+        // How much of this sheet survives: one in the middle of the bank,
+        // less at its top and bottom, so a bank thins out instead of ending.
+        { type : float,  name : fade },
+        // How sharply the noise turns into cloud. Low is an even haze; high
+        // is torn wisps with clear air between them.
+        { type : float,  name : contrast },
+        // Where the camera is, so a sheet the viewer is standing inside does
+        // not become a wall across the lens.
+        { type : float3, name : eye }
+    ],
+}
+
+fragment {
+    // Value noise on a lattice. The hash is the usual sin-fract trick, which
+    // is not a good random number generator and is a perfectly good one for
+    // this: it only has to be stable, cheap, and free of an obvious grain.
+    float hash(vec2 cell) {
+        return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    float valueNoise(vec2 p) {
+        vec2 cell = floor(p);
+        vec2 f = fract(p);
+        // Smoothstep between lattice points, so the field has no creases
+        // along the grid.
+        vec2 w = f * f * (3.0 - 2.0 * f);
+
+        float a = hash(cell);
+        float b = hash(cell + vec2(1.0, 0.0));
+        float c = hash(cell + vec2(0.0, 1.0));
+        float d = hash(cell + vec2(1.0, 1.0));
+
+        return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+    }
+
+    // Four octaves: enough for a torn edge, few enough to run on every pixel
+    // of something that covers the screen.
+    float clouds(vec2 p, vec2 flow) {
+        float total = 0.0;
+        float amplitude = 0.5;
+        vec2 q = p + flow;
+
+        for (int octave = 0; octave < 4; octave++) {
+            total += amplitude * valueNoise(q);
+            // Not exactly two, so the octaves never line up and repeat.
+            q = q * 2.03 + flow * 0.31;
+            amplitude *= 0.5;
+        }
+        return total;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Sampled in world space rather than across the sheet, so two sheets
+        // above one another are cut by the same weather rather than by two
+        // copies of the same pattern.
+        vec3 world = getWorldPosition();
+        vec2 flow = materialParams.drift * materialParams.time;
+
+        float n = clouds(world.xz * materialParams.scale, flow);
+
+        // Turned from a smooth field into cloud and clear air. Half of the
+        // noise is the sky, and what is above that thickens quickly.
+        float cloud = clamp((n - 0.5) * materialParams.contrast + 0.5, 0.0, 1.0);
+
+        // Every sheet is soft at its border, or the bank ends in a straight
+        // line across the world.
+        vec2 uv = getUV0();
+        vec2 edge = smoothstep(vec2(0.0), vec2(0.22), uv) *
+                    smoothstep(vec2(0.0), vec2(0.22), vec2(1.0) - uv);
+
+        // Faded out close to the viewer. A sheet passes through the camera at
+        // some point in any bank worth walking into, and without this that is
+        // a flat grey pane arriving from nowhere.
+        float near = smoothstep(0.6, 5.0, distance(world, materialParams.eye));
+
+        float alpha = cloud * materialParams.density * materialParams.fade *
+                      edge.x * edge.y * near;
+        alpha = clamp(alpha, 0.0, 1.0);
+
+        // Premultiplied: the colour carries how much of it there is.
+        material.baseColor = vec4(materialParams.colour * alpha, alpha);
+    }
+}

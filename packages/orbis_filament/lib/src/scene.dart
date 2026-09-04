@@ -272,6 +272,10 @@ class OrbisFog {
     this.maximumOpacity = 1,
     this.height = 0,
     this.heightFalloff = 1,
+    this.structure = 0,
+    this.drift = 0.4,
+    this.featureSize = 0.02,
+    this.thickness = 6,
   }) : colour = colour ?? Vector3(0.5, 0.55, 0.6);
 
   /// Nothing in the air, and cheap: the pass is switched off rather than run
@@ -302,6 +306,25 @@ class OrbisFog {
   /// ground; zero is uniform at every height.
   final double heightFalloff;
 
+  /// How much shape the air has, from none to a great deal.
+  ///
+  /// Even fog is right for distance and cannot look like anything in
+  /// particular: every cubic metre of it is the same as every other. Above
+  /// zero, the same air is also drawn as a stack of noise sheets, which is
+  /// what gives it the shape of cloud lying along a valley. Zero costs
+  /// nothing — the sheets are not drawn at all.
+  final double structure;
+
+  /// How fast the shape moves, in metres a second.
+  final double drift;
+
+  /// How large its features are: how much of a metre one turn of the noise
+  /// covers. Smaller is bigger cloud.
+  final double featureSize;
+
+  /// How deep the bank is, in metres, above and below its height.
+  final double thickness;
+
   bool get isVisible => density > 0 && maximumOpacity > 0;
 
   Float32List get _packed => Float32List.fromList([
@@ -319,11 +342,17 @@ class OrbisFog {
     maximumOpacity,
     height,
     heightFalloff,
+    structure,
+    drift,
+    featureSize,
+    thickness,
+    0,
+    0,
     0,
   ]);
 
   /// How many floats the fog occupies.
-  static const int stride = 10;
+  static const int stride = 16;
 }
 
 /// Everything the renderer needs for a frame.

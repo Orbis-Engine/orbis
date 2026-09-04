@@ -36,9 +36,12 @@
 #include <vector>
 #include <utils/Panic.h>
 
+#include <algorithm>
+#include <cmath>
 #include <exception>
 
 #include "generated/lit_material.h"
+#include "generated/mist_material.h"
 
 
 using namespace filament;
@@ -144,6 +147,36 @@ struct Vertex {
   quatf tangents;
 };
 
+/// A corner of one sheet of mist: where it is, and where it sits across the
+/// sheet so the edges can be faded out.
+struct MistVertex {
+  float3 position;
+  float2 uv;
+};
+
+/// The sheet, lying flat and two metres across, which the transform then makes
+/// as wide as the weather needs to be.
+constexpr MistVertex kMistCorners[4] = {
+    {{-1, 0, -1}, {0, 0}},
+    {{1, 0, -1}, {1, 0}},
+    {{1, 0, 1}, {1, 1}},
+    {{-1, 0, 1}, {0, 1}},
+};
+
+constexpr uint16_t kMistIndices[6] = {0, 1, 2, 2, 3, 0};
+
+/// How many sheets a bank is drawn with.
+///
+/// Ten is enough that a bank reads as depth from a shallow angle and few
+/// enough that the screen is only covered ten times over. Every one of them is
+/// a full-screen pass of four-octave noise, which is the whole cost of this.
+constexpr int kMistSheets = 10;
+
+/// How far a bank reaches, in metres. Centred on the camera, so it is always
+/// around whoever is looking rather than somewhere in the world they might
+/// walk out of.
+constexpr float kMistReach = 260.0f;
+
 // A unit cube with four vertices per face, so every face keeps a flat normal
 // and the lighting reads as six distinct planes rather than a smooth blob.
 constexpr float3 kPositions[24] = {
@@ -244,6 +277,21 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   Material *_material;
   VertexBuffer *_vertexBuffer;
   IndexBuffer *_indexBuffer;
+
+  /// The sheets a bank of mist is drawn with, and what they are made of.
+  /// Built the first time a scene asks for weather and kept after that.
+  Material *_mistMaterial;
+  VertexBuffer *_mistVertices;
+  IndexBuffer *_mistIndices;
+  std::vector<utils::Entity> _mistEntities;
+  std::vector<MaterialInstance *> _mistInstances;
+
+  /// What the current weather is, so the sheets are only rewritten when it
+  /// changes rather than on every frame.
+  bool _mistShowing;
+  float _mistHeight;
+  float _mistThickness;
+  float3 _mistCentre;
 
   CVPixelBufferRef _buffers[kOrbisBufferCount];
   SwapChain *_swapChains[kOrbisBufferCount];
@@ -400,6 +448,108 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _material = Material::Builder()
                   .package(klitMaterial, klitMaterial_len)
                   .build(*_engine);
+}
+
+/// Builds the sheets, once, the first time a scene asks for weather.
+///
+/// Lazily because most scenes have none, and a scene with none should not pay
+/// for a material, two buffers and ten renderables it never draws.
+- (void)buildMist {
+  if (_mistMaterial != nullptr) return;
+
+  _mistMaterial = Material::Builder()
+                      .package(kmistMaterial, kmistMaterial_len)
+                      .build(*_engine);
+
+  // Heap and freed by the callback, for the same reason the cube's vertices
+  // are: Filament holds the pointer until its own thread performs the upload,
+  // which is after this method has returned.
+  auto *corners = new MistVertex[4];
+  for (int i = 0; i < 4; i++) corners[i] = kMistCorners[i];
+
+  _mistVertices =
+      VertexBuffer::Builder()
+          .vertexCount(4)
+          .bufferCount(1)
+          .attribute(VertexAttribute::POSITION, 0,
+                     VertexBuffer::AttributeType::FLOAT3,
+                     offsetof(MistVertex, position), sizeof(MistVertex))
+          .attribute(VertexAttribute::UV0, 0,
+                     VertexBuffer::AttributeType::FLOAT2,
+                     offsetof(MistVertex, uv), sizeof(MistVertex))
+          .build(*_engine);
+  _mistVertices->setBufferAt(
+      *_engine, 0,
+      VertexBuffer::BufferDescriptor(
+          corners, sizeof(MistVertex) * 4,
+          [](void *buffer, size_t, void *) {
+            delete[] static_cast<MistVertex *>(buffer);
+          }));
+
+  _mistIndices = IndexBuffer::Builder()
+                     .indexCount(6)
+                     .bufferType(IndexBuffer::IndexType::USHORT)
+                     .build(*_engine);
+  _mistIndices->setBuffer(
+      *_engine,
+      IndexBuffer::BufferDescriptor(kMistIndices, sizeof(kMistIndices),
+                                    nullptr));
+
+  auto &entities = utils::EntityManager::get();
+  for (int sheet = 0; sheet < kMistSheets; sheet++) {
+    MaterialInstance *instance = _mistMaterial->createInstance();
+
+    // One at the middle of the bank, tailing off at the top and the bottom,
+    // so a bank thins into the air rather than ending at a surface.
+    const float across =
+        kMistSheets == 1 ? 0.0f
+                         : (float(sheet) / float(kMistSheets - 1)) * 2 - 1;
+    instance->setParameter("fade", 1.0f - std::abs(across) * std::abs(across));
+
+    utils::Entity entity = entities.create();
+    RenderableManager::Builder(1)
+        .boundingBox({{-1, -0.02f, -1}, {1, 0.02f, 1}})
+        .material(0, instance)
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES,
+                  _mistVertices, _mistIndices, 0, 6)
+        // Mist does not take part in shadows either way: a sheet that cast
+        // one would drop a hard rectangle across the ground.
+        .receiveShadows(false)
+        .castShadows(false)
+        .build(*_engine, entity);
+
+    _mistInstances.push_back(instance);
+    _mistEntities.push_back(entity);
+  }
+}
+
+/// Puts the bank around the camera and moves its noise along.
+///
+/// The sheets follow whoever is looking so the weather is always around them,
+/// while the noise is sampled in world space so it does not swim as they walk
+/// through it — the bank moves, the clouds in it stay where they are.
+- (void)updateMistAtTime:(double)time {
+  if (!_mistShowing || _mistEntities.empty()) return;
+
+  auto &transforms = _engine->getTransformManager();
+  const float3 eye = _camera->getPosition();
+
+  for (size_t sheet = 0; sheet < _mistEntities.size(); sheet++) {
+    const float across =
+        _mistEntities.size() == 1
+            ? 0.0f
+            : (float(sheet) / float(_mistEntities.size() - 1)) * 2 - 1;
+
+    const mat4f placement =
+        mat4f::translation(float3{eye.x, _mistHeight + across * _mistThickness,
+                                  eye.z}) *
+        mat4f::scaling(float3{kMistReach, 1.0f, kMistReach});
+
+    transforms.setTransform(transforms.getInstance(_mistEntities[sheet]),
+                            placement);
+    _mistInstances[sheet]->setParameter("time", float(time));
+    _mistInstances[sheet]->setParameter("eye", eye);
+  }
 }
 
 - (void)setAmbientColour:(float3)colour intensity:(float)intensity {
@@ -860,6 +1010,51 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   fog.height = params[7];
   fog.heightFalloff = params[8];
   _view->setFogOptions(fog);
+
+  // Two things that are one thing. Filament's fog is the air between here and
+  // the horizon — even, and right for distance. What it cannot do is have
+  // shape: no amount of it looks like a bank of cloud lying in a valley,
+  // because every cubic metre of it is the same as every other. The sheets
+  // are that shape, and they sit inside the same haze rather than instead of
+  // it.
+  const float structure = params[9];
+  const bool showing = enabled && structure > 0 && params[3] > 0;
+
+  if (showing) {
+    [self buildMist];
+
+    // Ten sheets, each mostly transparent. What is seen is what they add up
+    // to — one minus the light that gets through all of them — so each one has
+    // to be far thinner than the bank as a whole. Sheets thick enough to read
+    // on their own are sheets you can count.
+    const float alpha = std::min(params[3] * 1.6f, 0.35f) * structure;
+    const float2 drift = normalize(float2{1.0f, 0.35f}) * params[10];
+
+    for (MaterialInstance *instance : _mistInstances) {
+      instance->setParameter("colour",
+                             float3{params[0], params[1], params[2]});
+      instance->setParameter("density", alpha);
+      instance->setParameter("scale", params[11]);
+      instance->setParameter("drift", drift);
+      // Smooth haze at one end and torn wisps at the other, which is the
+      // difference between weather and a filter over the lens.
+      instance->setParameter("contrast", 1.5f + structure * 5.0f);
+    }
+
+    _mistHeight = params[7];
+    _mistThickness = params[12];
+
+    if (!_mistShowing) {
+      for (utils::Entity entity : _mistEntities) _scene->addEntity(entity);
+    }
+  } else if (_mistShowing) {
+    // Taken out of the scene rather than destroyed: turning the weather off
+    // and on again is a slider, and rebuilding ten renderables under a
+    // dragging finger would stutter.
+    for (utils::Entity entity : _mistEntities) _scene->remove(entity);
+  }
+
+  _mistShowing = showing;
 }
 
 - (void)setSkyColour:(const float *)colour
@@ -1018,6 +1213,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     }
   }
 
+  [self updateMistAtTime:time];
+
   if (!_renderer->beginFrame(target)) return;
   _renderer->render(_view);
   _renderer->endFrame();
@@ -1105,6 +1302,21 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   entities.destroy(_cameraEntity);
   _engine->destroy(_skybox);
   if (_ambient) _engine->destroy(_ambient);
+  for (size_t sheet = 0; sheet < _mistEntities.size(); sheet++) {
+    _scene->remove(_mistEntities[sheet]);
+    _engine->destroy(_mistEntities[sheet]);
+    entities.destroy(_mistEntities[sheet]);
+    _engine->destroy(_mistInstances[sheet]);
+  }
+  _mistEntities.clear();
+  _mistInstances.clear();
+  if (_mistMaterial) {
+    _engine->destroy(_mistVertices);
+    _engine->destroy(_mistIndices);
+    _engine->destroy(_mistMaterial);
+    _mistMaterial = nullptr;
+  }
+
   _engine->destroy(_material);
   _engine->destroy(_vertexBuffer);
   _engine->destroy(_indexBuffer);

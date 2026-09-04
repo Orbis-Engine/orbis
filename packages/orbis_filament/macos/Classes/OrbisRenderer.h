@@ -70,9 +70,15 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Sets the air the scene is seen through.
 ///
-/// `params` is ten floats: colour, density, distance, cut-off distance,
-/// maximum opacity, height, height falloff, and one spare. Disabled skips the
-/// computation rather than running it with a density of zero.
+/// `params` is sixteen floats: colour, density, distance, cut-off distance,
+/// maximum opacity, height, height falloff, how much structure the air has,
+/// how fast it drifts in metres a second, how large its features are, how
+/// thick the bank is in metres, and three spare.
+///
+/// Structure is what turns fog into weather. Even fog is right for distance
+/// and cannot look like anything in particular; above zero, a stack of noise
+/// sheets is drawn through the same air, and that is what gives it the shape
+/// of cloud lying in a valley. Disabled skips both.
 - (void)setFogEnabled:(BOOL)enabled params:(const float *)params;
 
 /// What a scene asked for that could not be given, and why.
