@@ -14,8 +14,11 @@ class Simulation {
   Simulation() {
     world = World();
     transforms = world.registerTransforms();
-    velocity =
-        world.registerComponent('Velocity', kind: ComponentKind.float32, arity: 3);
+    velocity = world.registerComponent(
+      'Velocity',
+      kind: ComponentKind.float32,
+      arity: 3,
+    );
     networkId = world.registerComponent('NetworkId', kind: ComponentKind.int64);
 
     // The world transform is what replicates: a client needs where things
@@ -32,11 +35,7 @@ class Simulation {
   late final Query _movers;
 
   /// A body that moves under its own velocity.
-  int spawnBody({
-    required double x,
-    required double y,
-    required double speed,
-  }) {
+  int spawnBody({required double x, required double y, required double speed}) {
     final entity = world.createEntity();
     world.add(entity, transforms.local, transform(x: x, y: y));
     world.add(entity, transforms.world);

@@ -15,8 +15,10 @@ void main() {
     if (tick > 0) sim.step(0.2);
     final b = worldPositionOf(sim.world, sim.transforms, body);
     final c = worldPositionOf(sim.world, sim.transforms, carried);
-    print('${tick.toString().padRight(6)}'
-        '${_fmt(b).padRight(24)}${_fmt(c)}');
+    print(
+      '${tick.toString().padRight(6)}'
+      '${_fmt(b).padRight(24)}${_fmt(c)}',
+    );
   }
   sim.dispose();
 }

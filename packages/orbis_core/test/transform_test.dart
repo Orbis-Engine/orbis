@@ -7,13 +7,16 @@ import 'package:test/test.dart';
 /// A quaternion for a rotation about Y, so a test can express a turn without a
 /// maths dependency.
 Float32List turnY(double radians) => transform(
-      rotationY: math.sin(radians / 2),
-      rotationW: math.cos(radians / 2),
-    );
+  rotationY: math.sin(radians / 2),
+  rotationW: math.cos(radians / 2),
+);
 
 /// The translation column of a column-major 4x4.
-List<double> translationOf(Float32List matrix) =>
-    [matrix[12], matrix[13], matrix[14]];
+List<double> translationOf(Float32List matrix) => [
+  matrix[12],
+  matrix[13],
+  matrix[14],
+];
 
 void main() {
   late World world;
@@ -104,7 +107,8 @@ void main() {
     expect(translationOf(world.float32Of(child, t.world)!)[0], 101);
 
     Int64List.sublistView(
-        Int64List.view(world.bytesOf(child, t.parent)!.buffer, 0, 1))[0] = right;
+      Int64List.view(world.bytesOf(child, t.parent)!.buffer, 0, 1),
+    )[0] = right;
     world.propagateTransforms();
     expect(translationOf(world.float32Of(child, t.world)!)[0], 201);
   });
@@ -122,9 +126,13 @@ void main() {
     world.destroyEntity(parent);
 
     world.propagateTransforms();
-    expect(translationOf(world.float32Of(child, t.world)!)[0], 1,
-        reason: 'a dangling parent handle should leave the child at its local '
-            'transform, not crash or inherit a reused slot');
+    expect(
+      translationOf(world.float32Of(child, t.world)!)[0],
+      1,
+      reason:
+          'a dangling parent handle should leave the child at its local '
+          'transform, not crash or inherit a reused slot',
+    );
   });
 
   test('a cycle terminates instead of hanging', () {
@@ -152,8 +160,10 @@ void main() {
     stopwatch.stop();
 
     // ignore: avoid_print
-    print('  400 transforms over a 200-deep chain in '
-        '${stopwatch.elapsedMicroseconds}us');
+    print(
+      '  400 transforms over a 200-deep chain in '
+      '${stopwatch.elapsedMicroseconds}us',
+    );
     expect(translationOf(world.float32Of(trunk, t.world)!)[0], 200);
   });
 

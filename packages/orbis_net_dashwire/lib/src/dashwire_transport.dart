@@ -11,10 +11,7 @@ import 'package:orbis_net/orbis_net.dart';
 /// turning a world into bytes. Neither needs to know much about the other, and
 /// the seam being small is what keeps a second transport cheap to add.
 class DashwireTransport implements Transport {
-  DashwireTransport(
-    this._connection, {
-    this.channel = Channel.unreliable,
-  });
+  DashwireTransport(this._connection, {this.channel = Channel.unreliable});
 
   final WireConnection _connection;
 

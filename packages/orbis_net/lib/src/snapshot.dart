@@ -50,11 +50,11 @@ class SnapshotRow {
 /// Everything replicated, as of one tick.
 class WorldSnapshot {
   WorldSnapshot(this.tick, this.groups)
-      : _byNetworkId = {
-          for (final group in groups)
-            for (var i = 0; i < group.length; i++)
-              group.networkIds[i]: SnapshotRow(group.mask, group, i),
-        };
+    : _byNetworkId = {
+        for (final group in groups)
+          for (var i = 0; i < group.length; i++)
+            group.networkIds[i]: SnapshotRow(group.mask, group, i),
+      };
 
   final int tick;
   final List<SnapshotGroup> groups;
@@ -78,12 +78,13 @@ class SnapshotCapture {
     required World world,
     required this.set,
     required this.networkId,
-  })  : _world = world,
-        _query = world.query([networkId]) {
+  }) : _world = world,
+       _query = world.query([networkId]) {
     if (set.bitOf(networkId) != null) {
       throw ArgumentError(
-          'The network id must not be part of the replication set: it keys '
-          'the rows rather than travelling inside them.');
+        'The network id must not be part of the replication set: it keys '
+        'the rows rather than travelling inside them.',
+      );
     }
   }
 
@@ -122,12 +123,14 @@ class SnapshotCapture {
         offset += size;
       }
 
-      groups.add(SnapshotGroup(
-        mask: mask,
-        stride: stride,
-        networkIds: _readNetworkIds(chunk, length),
-        rows: rows,
-      ));
+      groups.add(
+        SnapshotGroup(
+          mask: mask,
+          stride: stride,
+          networkIds: _readNetworkIds(chunk, length),
+          rows: rows,
+        ),
+      );
     }
 
     return WorldSnapshot(tick, groups);

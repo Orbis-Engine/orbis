@@ -48,10 +48,10 @@ class NetClient {
     this.onSpawn,
     this.onDespawn,
     double Function()? clock,
-  })  : _world = world,
-        _networkId = networkId,
-        _transport = transport,
-        _now = clock ?? _stopwatchClock() {
+  }) : _world = world,
+       _networkId = networkId,
+       _transport = transport,
+       _now = clock ?? _stopwatchClock() {
     _subscription = transport.inbound.listen(_receive);
   }
 
@@ -129,8 +129,11 @@ class NetClient {
       for (final bit in set.bitsOf(mask)) {
         final type = set.atBit(bit).type;
         final value = components[type]!;
-        row.setRange(offset, offset + type.byteSize,
-            value.buffer.asUint8List(value.offsetInBytes, type.byteSize));
+        row.setRange(
+          offset,
+          offset + type.byteSize,
+          value.buffer.asUint8List(value.offsetInBytes, type.byteSize),
+        );
         offset += type.byteSize;
       }
 
@@ -138,7 +141,8 @@ class NetClient {
     }
 
     _transport.send(
-        encodeInput(InputMessage(tick: _lastAppliedTick, entries: entries)));
+      encodeInput(InputMessage(tick: _lastAppliedTick, entries: entries)),
+    );
   }
 
   void _receive(Uint8List message) {
@@ -175,8 +179,10 @@ class NetClient {
 
     for (final group in snapshot.groups) {
       for (var i = 0; i < group.length; i++) {
-        entities[group.networkIds[i]] =
-            _EntityState(group.mask, group.rowAt(i));
+        entities[group.networkIds[i]] = _EntityState(
+          group.mask,
+          group.rowAt(i),
+        );
       }
     }
     for (final networkId in snapshot.despawned) {
@@ -217,11 +223,17 @@ class NetClient {
     final from = _history[index];
     final to = _history[index + 1];
     final span = to.receivedAt - from.receivedAt;
-    final t = span <= 0 ? 1.0 : ((target - from.receivedAt) / span).clamp(0.0, 1.0);
+    final t = span <= 0
+        ? 1.0
+        : ((target - from.receivedAt) / span).clamp(0.0, 1.0);
     _applyState(from, blendTowards: to, t: t);
   }
 
-  void _applyState(_WorldState state, {_WorldState? blendTowards, double t = 0}) {
+  void _applyState(
+    _WorldState state, {
+    _WorldState? blendTowards,
+    double t = 0,
+  }) {
     for (final entry in state.entities.entries) {
       final other = blendTowards?.entities[entry.key];
       _applyEntity(
@@ -241,7 +253,11 @@ class NetClient {
   }
 
   void _applyEntity(
-      int networkId, _EntityState state, _EntityState? towards, double t) {
+    int networkId,
+    _EntityState state,
+    _EntityState? towards,
+    double t,
+  ) {
     var entity = _entities[networkId];
     final isNew = entity == null;
     if (entity == null) {

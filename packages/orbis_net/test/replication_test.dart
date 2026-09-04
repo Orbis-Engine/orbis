@@ -19,24 +19,44 @@ class Peer {
     // depend on local component ids.
     if (reverseRegistrationOrder) {
       health = world.registerComponent('Health', kind: ComponentKind.int32);
-      velocity = world.registerComponent('Velocity',
-          kind: ComponentKind.float32, arity: 3);
-      position = world.registerComponent('Position',
-          kind: ComponentKind.float32, arity: 3);
-      networkId = world.registerComponent('NetworkId', kind: ComponentKind.int64);
+      velocity = world.registerComponent(
+        'Velocity',
+        kind: ComponentKind.float32,
+        arity: 3,
+      );
+      position = world.registerComponent(
+        'Position',
+        kind: ComponentKind.float32,
+        arity: 3,
+      );
+      networkId = world.registerComponent(
+        'NetworkId',
+        kind: ComponentKind.int64,
+      );
     } else {
-      networkId = world.registerComponent('NetworkId', kind: ComponentKind.int64);
-      position = world.registerComponent('Position',
-          kind: ComponentKind.float32, arity: 3);
-      velocity = world.registerComponent('Velocity',
-          kind: ComponentKind.float32, arity: 3);
+      networkId = world.registerComponent(
+        'NetworkId',
+        kind: ComponentKind.int64,
+      );
+      position = world.registerComponent(
+        'Position',
+        kind: ComponentKind.float32,
+        arity: 3,
+      );
+      velocity = world.registerComponent(
+        'Velocity',
+        kind: ComponentKind.float32,
+        arity: 3,
+      );
       health = world.registerComponent('Health', kind: ComponentKind.int32);
     }
     owner = world.registerComponent('Owner', kind: ComponentKind.uint32);
-    set = ReplicationSet(
-      [position, velocity, health, if (includeOwner) owner],
-      ownerWritable: ownerWritable,
-    );
+    set = ReplicationSet([
+      position,
+      velocity,
+      health,
+      if (includeOwner) owner,
+    ], ownerWritable: ownerWritable);
   }
 
   late final World world;
@@ -58,12 +78,21 @@ void main() {
       addTearDown(a.dispose);
       addTearDown(b.dispose);
 
-      expect(a.set.components.map((c) => c.type.name),
-          ['Health', 'Position', 'Velocity']);
-      expect(b.set.components.map((c) => c.type.name),
-          ['Health', 'Position', 'Velocity']);
-      expect(a.set.bitOf(a.position), b.set.bitOf(b.position),
-          reason: 'the same component must occupy the same bit on both peers');
+      expect(a.set.components.map((c) => c.type.name), [
+        'Health',
+        'Position',
+        'Velocity',
+      ]);
+      expect(b.set.components.map((c) => c.type.name), [
+        'Health',
+        'Position',
+        'Velocity',
+      ]);
+      expect(
+        a.set.bitOf(a.position),
+        b.set.bitOf(b.position),
+        reason: 'the same component must occupy the same bit on both peers',
+      );
       // ...even though the local ids differ.
       expect(a.position.id, isNot(b.position.id));
     });
@@ -71,8 +100,10 @@ void main() {
     test('refuses a duplicate component', () {
       final peer = Peer(reverseRegistrationOrder: false);
       addTearDown(peer.dispose);
-      expect(() => ReplicationSet([peer.position, peer.position]),
-          throwsArgumentError);
+      expect(
+        () => ReplicationSet([peer.position, peer.position]),
+        throwsArgumentError,
+      );
     });
 
     test('computes a stride from a mask', () {
@@ -90,7 +121,10 @@ void main() {
     setUp(() {
       host = Peer(reverseRegistrationOrder: false);
       capture = SnapshotCapture(
-          world: host.world, set: host.set, networkId: host.networkId);
+        world: host.world,
+        set: host.set,
+        networkId: host.networkId,
+      );
     });
 
     tearDown(() {
@@ -102,7 +136,10 @@ void main() {
       final set = ReplicationSet([host.position, host.networkId]);
       expect(
         () => SnapshotCapture(
-            world: host.world, set: set, networkId: host.networkId),
+          world: host.world,
+          set: set,
+          networkId: host.networkId,
+        ),
         throwsArgumentError,
       );
     });
@@ -110,7 +147,11 @@ void main() {
     test('captures only replicated entities', () {
       final replicated = host.world.createEntity();
       host.world.add(replicated, host.networkId, Uint64List.fromList([7]));
-      host.world.add(replicated, host.position, Float32List.fromList([1, 2, 3]));
+      host.world.add(
+        replicated,
+        host.position,
+        Float32List.fromList([1, 2, 3]),
+      );
 
       final ignored = host.world.createEntity();
       host.world.add(ignored, host.position, Float32List.fromList([9, 9, 9]));
@@ -145,8 +186,11 @@ void main() {
       for (var i = 0; i < 5; i++) {
         final entity = host.world.createEntity();
         host.world.add(entity, host.networkId, Uint64List.fromList([i + 1]));
-        host.world
-            .add(entity, host.position, Float32List.fromList([i * 1.0, 0, 0]));
+        host.world.add(
+          entity,
+          host.position,
+          Float32List.fromList([i * 1.0, 0, 0]),
+        );
         entities.add(entity);
       }
 
@@ -154,12 +198,15 @@ void main() {
       host.world.float32Of(entities[2], host.position)![1] = 99;
 
       const codec = SnapshotCodec();
-      final decoded = codec.decode(codec.encodeDelta(capture.capture(2), baseline));
+      final decoded = codec.decode(
+        codec.encodeDelta(capture.capture(2), baseline),
+      );
 
       expect(decoded.isDelta, isTrue);
       expect(decoded.baselineTick, 1);
-      expect(decoded.groups.first.networkIds, [3],
-          reason: 'only the entity that moved should be on the wire');
+      expect(decoded.groups.first.networkIds, [
+        3,
+      ], reason: 'only the entity that moved should be on the wire');
     });
 
     test('a delta reports entities that disappeared', () {
@@ -171,14 +218,17 @@ void main() {
       host.world.destroyEntity(entity);
 
       const codec = SnapshotCodec();
-      final decoded =
-          codec.decode(codec.encodeDelta(capture.capture(2), baseline));
+      final decoded = codec.decode(
+        codec.encodeDelta(capture.capture(2), baseline),
+      );
       expect(decoded.despawned, [11]);
     });
 
     test('a foreign message is refused', () {
-      expect(() => const SnapshotCodec().decode(Uint8List(64)),
-          throwsA(isA<SnapshotFormatError>()));
+      expect(
+        () => const SnapshotCodec().decode(Uint8List(64)),
+        throwsA(isA<SnapshotFormatError>()),
+      );
     });
   });
 
@@ -194,7 +244,10 @@ void main() {
       client = Peer(reverseRegistrationOrder: true);
       link = LoopbackLink();
       netHost = NetHost(
-          world: host.world, set: host.set, networkId: host.networkId);
+        world: host.world,
+        set: host.set,
+        networkId: host.networkId,
+      );
       netClient = NetClient(
         world: client.world,
         set: client.set,
@@ -222,8 +275,11 @@ void main() {
 
       final replica = netClient.entityFor(networkId);
       expect(replica, isNotNull);
-      expect(client.world.float32Of(replica!, client.position), [4, 5, 6],
-          reason: 'component bytes cross unchanged, despite different local ids');
+      expect(
+        client.world.float32Of(replica!, client.position),
+        [4, 5, 6],
+        reason: 'component bytes cross unchanged, despite different local ids',
+      );
     });
 
     test('later ticks update in place rather than respawning', () async {
@@ -239,8 +295,11 @@ void main() {
       netHost.publish();
       await settle();
 
-      expect(netClient.entityFor(networkId), replica,
-          reason: 'the replica should be updated, not replaced');
+      expect(
+        netClient.entityFor(networkId),
+        replica,
+        reason: 'the replica should be updated, not replaced',
+      );
       expect(client.world.float32Of(replica!, client.position)![0], 12);
     });
 
@@ -299,8 +358,11 @@ void main() {
       final decoded = const SnapshotCodec().decode(sent.single);
       expect(decoded.isDelta, isTrue);
       expect(decoded.baselineTick, 1);
-      expect(decoded.groups, isEmpty,
-          reason: 'an unchanged world should cost almost nothing to send');
+      expect(
+        decoded.groups,
+        isEmpty,
+        reason: 'an unchanged world should cost almost nothing to send',
+      );
     });
 
     test('many entities replicate in one publish', () async {
@@ -308,8 +370,11 @@ void main() {
       for (var i = 0; i < count; i++) {
         final entity = host.world.createEntity();
         netHost.spawn(entity);
-        host.world
-            .add(entity, host.position, Float32List.fromList([i * 1.0, 0, 0]));
+        host.world.add(
+          entity,
+          host.position,
+          Float32List.fromList([i * 1.0, 0, 0]),
+        );
       }
 
       netHost.publish();
@@ -317,8 +382,10 @@ void main() {
 
       expect(netClient.entityCount, count);
       final replica = netClient.entityFor(count)!;
-      expect(client.world.float32Of(replica, client.position)![0],
-          (count - 1) * 1.0);
+      expect(
+        client.world.float32Of(replica, client.position)![0],
+        (count - 1) * 1.0,
+      );
     });
   });
 
@@ -335,13 +402,15 @@ void main() {
       // Velocity is the client's to drive; position is the authority's answer
       // about where that got them.
       host = Peer(
-          reverseRegistrationOrder: false,
-          includeOwner: true,
-          ownerWritable: {'Velocity'});
+        reverseRegistrationOrder: false,
+        includeOwner: true,
+        ownerWritable: {'Velocity'},
+      );
       client = Peer(
-          reverseRegistrationOrder: true,
-          includeOwner: true,
-          ownerWritable: {'Velocity'});
+        reverseRegistrationOrder: true,
+        includeOwner: true,
+        ownerWritable: {'Velocity'},
+      );
       link = LoopbackLink();
       netHost = NetHost(
         world: host.world,
@@ -380,7 +449,9 @@ void main() {
       final networkId = await spawnOwned();
 
       netClient.sendInput({
-        networkId: {client.velocity: Float32List.fromList([3, 0, 0])},
+        networkId: {
+          client.velocity: Float32List.fromList([3, 0, 0]),
+        },
       });
       await settle();
 
@@ -396,22 +467,28 @@ void main() {
       final networkId = await spawnOwned();
 
       netClient.sendInput({
-        networkId: {client.position: Float32List.fromList([999, 0, 0])},
+        networkId: {
+          client.position: Float32List.fromList([999, 0, 0]),
+        },
       });
       await settle();
 
       expect(netHost.acceptedInputs, 0);
       expect(netHost.rejections[InputRejection.notWritable], 1);
-      expect(host.world.float32Of(netHost.entityFor(networkId)!, host.position),
-          [0, 0, 0],
-          reason: 'the reserved component must be untouched');
+      expect(
+        host.world.float32Of(netHost.entityFor(networkId)!, host.position),
+        [0, 0, 0],
+        reason: 'the reserved component must be untouched',
+      );
     });
 
     test('a client may not write an entity it does not own', () async {
       final networkId = await spawnOwned(owner: null);
 
       netClient.sendInput({
-        networkId: {client.velocity: Float32List.fromList([3, 0, 0])},
+        networkId: {
+          client.velocity: Float32List.fromList([3, 0, 0]),
+        },
       });
       await settle();
 
@@ -422,7 +499,9 @@ void main() {
     test('an unknown entity is refused rather than crashing', () async {
       await spawnOwned();
       netClient.sendInput({
-        9999: {client.velocity: Float32List.fromList([1, 0, 0])},
+        9999: {
+          client.velocity: Float32List.fromList([1, 0, 0]),
+        },
       });
       await settle();
       expect(netHost.rejections[InputRejection.unknownEntity], 1);
@@ -432,9 +511,20 @@ void main() {
       final networkId = await spawnOwned();
       // A row claiming velocity but carrying too few bytes.
       final bit = host.set.bitOf(host.velocity)!;
-      link.client.send(encodeInput(InputMessage(tick: 0, entries: [
-        InputEntry(networkId: networkId, mask: 1 << bit, row: Uint8List(4)),
-      ])));
+      link.client.send(
+        encodeInput(
+          InputMessage(
+            tick: 0,
+            entries: [
+              InputEntry(
+                networkId: networkId,
+                mask: 1 << bit,
+                row: Uint8List(4),
+              ),
+            ],
+          ),
+        ),
+      );
       await settle();
 
       expect(netHost.rejections[InputRejection.malformed], 1);
@@ -445,8 +535,11 @@ void main() {
       final networkId = await spawnOwned();
       final replica = netClient.entityFor(networkId)!;
       final ownerBytes = client.world.bytesOf(replica, client.owner)!;
-      expect(ByteData.sublistView(ownerBytes).getUint32(0, Endian.little), 1,
-          reason: 'the first client is index 1; 0 means the authority');
+      expect(
+        ByteData.sublistView(ownerBytes).getUint32(0, Endian.little),
+        1,
+        reason: 'the first client is index 1; 0 means the authority',
+      );
     });
 
     test('a departing client loses what it owned', () async {
@@ -454,17 +547,24 @@ void main() {
       expect(netHost.ownerOf(networkId), 'player-1');
 
       await netHost.removeClient('player-1');
-      expect(netHost.ownerOf(networkId), isNull,
-          reason: 'ownership must not survive under a reconnectable name');
+      expect(
+        netHost.ownerOf(networkId),
+        isNull,
+        reason: 'ownership must not survive under a reconnectable name',
+      );
     });
 
     test('writing an unreplicated component is a programming error', () async {
       final networkId = await spawnOwned();
-      final stray =
-          client.world.registerComponent('Stray', kind: ComponentKind.int32);
+      final stray = client.world.registerComponent(
+        'Stray',
+        kind: ComponentKind.int32,
+      );
       expect(
         () => netClient.sendInput({
-          networkId: {stray: Int32List.fromList([1])},
+          networkId: {
+            stray: Int32List.fromList([1]),
+          },
         }),
         throwsArgumentError,
       );
@@ -486,8 +586,11 @@ void _interpolationTests() {
       host = Peer(reverseRegistrationOrder: false);
       client = Peer(reverseRegistrationOrder: true);
       link = LoopbackLink();
-      netHost =
-          NetHost(world: host.world, set: host.set, networkId: host.networkId);
+      netHost = NetHost(
+        world: host.world,
+        set: host.set,
+        networkId: host.networkId,
+      );
       netClient = NetClient(
         world: client.world,
         set: client.set,
@@ -515,9 +618,13 @@ void _interpolationTests() {
       await settle();
 
       expect(netClient.isInterpolating, isTrue);
-      expect(netClient.entityFor(networkId), isNull,
-          reason: 'an interpolating client shows the past, not the newest '
-              'message the moment it lands');
+      expect(
+        netClient.entityFor(networkId),
+        isNull,
+        reason:
+            'an interpolating client shows the past, not the newest '
+            'message the moment it lands',
+      );
 
       netClient.advance();
       expect(netClient.entityFor(networkId), isNotNull);
@@ -545,32 +652,42 @@ void _interpolationTests() {
       // Halfway between the two arrivals: halfway between the two positions.
       now = 0.15;
       netClient.advance();
-      expect(client.world.float32Of(replica, client.position)![0], closeTo(5, 1e-4));
+      expect(
+        client.world.float32Of(replica, client.position)![0],
+        closeTo(5, 1e-4),
+      );
     });
 
-    test('a non-float component takes the earlier value, never a blend', () async {
-      final entity = host.world.createEntity();
-      final networkId = netHost.spawn(entity);
-      host.world.add(entity, host.position, Float32List.fromList([0, 0, 0]));
-      host.world.add(entity, host.health, Int32List.fromList([100]));
-      netHost.publish();
-      await settle();
+    test(
+      'a non-float component takes the earlier value, never a blend',
+      () async {
+        final entity = host.world.createEntity();
+        final networkId = netHost.spawn(entity);
+        host.world.add(entity, host.position, Float32List.fromList([0, 0, 0]));
+        host.world.add(entity, host.health, Int32List.fromList([100]));
+        netHost.publish();
+        await settle();
 
-      now = 0.1;
-      ByteData.sublistView(host.world.bytesOf(entity, host.health)!)
-          .setInt32(0, 50, Endian.little);
-      netHost.publish();
-      await settle();
+        now = 0.1;
+        ByteData.sublistView(
+          host.world.bytesOf(entity, host.health)!,
+        ).setInt32(0, 50, Endian.little);
+        netHost.publish();
+        await settle();
 
-      now = 0.15;
-      netClient.advance();
-      final replica = netClient.entityFor(networkId)!;
-      final health = ByteData.sublistView(
-              client.world.bytesOf(replica, client.health)!)
-          .getInt32(0, Endian.little);
-      expect(health, 100,
-          reason: 'half of a hundred and fifty is not a health value');
-    });
+        now = 0.15;
+        netClient.advance();
+        final replica = netClient.entityFor(networkId)!;
+        final health = ByteData.sublistView(
+          client.world.bytesOf(replica, client.health)!,
+        ).getInt32(0, Endian.little);
+        expect(
+          health,
+          100,
+          reason: 'half of a hundred and fifty is not a health value',
+        );
+      },
+    );
 
     test('past the newest state it holds rather than extrapolating', () async {
       final entity = host.world.createEntity();
@@ -582,9 +699,13 @@ void _interpolationTests() {
       now = 10;
       netClient.advance();
       final replica = netClient.entityFor(networkId)!;
-      expect(client.world.float32Of(replica, client.position)![0], 7,
-          reason: 'the authority has gone quiet; inventing motion would be a '
-              'guess presented as fact');
+      expect(
+        client.world.float32Of(replica, client.position)![0],
+        7,
+        reason:
+            'the authority has gone quiet; inventing motion would be a '
+            'guess presented as fact',
+      );
     });
   });
 }

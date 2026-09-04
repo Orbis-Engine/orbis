@@ -65,7 +65,9 @@ class _ViewportPageState extends State<ViewportPage> {
                             const Positioned(
                               left: 14,
                               bottom: 14,
-                              child: _Badge('Filament → CVPixelBuffer → Texture'),
+                              child: _Badge(
+                                'Filament → CVPixelBuffer → Texture',
+                              ),
                             ),
                         ],
                       ),
@@ -101,10 +103,8 @@ class _TitleBar extends StatelessWidget {
         children: [
           Text(
             'Orbis',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.3,
-                ),
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w700, letterSpacing: -0.3),
           ),
           const SizedBox(width: 10),
           const _Badge('M1 · macOS viewport'),
@@ -151,19 +151,21 @@ class _Panel extends StatelessWidget {
                 'Ordinary Flutter widgets, laid out beside a Filament surface '
                 'in the same tree. Dragging the split resizes the render '
                 'target, not just its box.',
-                style: TextStyle(fontSize: 12.5, height: 1.5, color: Color(0xFF8A94A3)),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.5,
+                  color: Color(0xFF8A94A3),
+                ),
               ),
               const SizedBox(height: 22),
               const Text('Viewport width', style: TextStyle(fontSize: 12)),
-              Slider(
-                value: split,
-                min: 0.25,
-                max: 0.85,
-                onChanged: onSplit,
-              ),
+              Slider(value: split, min: 0.25, max: 0.85, onChanged: onSplit),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Overlay label', style: TextStyle(fontSize: 12)),
+                title: const Text(
+                  'Overlay label',
+                  style: TextStyle(fontSize: 12),
+                ),
                 value: showOverlay,
                 onChanged: onOverlay,
               ),
@@ -172,7 +174,11 @@ class _Panel extends StatelessWidget {
                 'The cube spins on a display link in native code. Flutter pulls '
                 'the finished IOSurface each frame rather than being pushed '
                 'pixels through the CPU.',
-                style: TextStyle(fontSize: 11.5, height: 1.5, color: Color(0xFF6E7A8C)),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  height: 1.5,
+                  color: Color(0xFF6E7A8C),
+                ),
               ),
             ],
           ),

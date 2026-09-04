@@ -12,8 +12,7 @@ export 'src/client.dart' show NetClient;
 export 'src/codec.dart'
     show DecodedSnapshot, SnapshotCodec, SnapshotFormatError;
 export 'src/host.dart' show InputRejection, NetHost;
-export 'src/input.dart'
-    show InputEntry, InputMessage, decodeInput, encodeInput;
+export 'src/input.dart' show InputEntry, InputMessage, decodeInput, encodeInput;
 export 'src/replication.dart' show ReplicatedComponent, ReplicationSet;
 export 'src/snapshot.dart'
     show SnapshotCapture, SnapshotGroup, SnapshotRow, WorldSnapshot;

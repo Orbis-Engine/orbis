@@ -53,14 +53,14 @@ class NetHost {
     required ComponentType networkId,
     ComponentType? ownerComponent,
     this.historyDepth = 64,
-  })  : _world = world,
-        _networkId = networkId,
-        _ownerComponent = ownerComponent,
-        _capture = SnapshotCapture(
-          world: world,
-          set: set,
-          networkId: networkId,
-        ) {
+  }) : _world = world,
+       _networkId = networkId,
+       _ownerComponent = ownerComponent,
+       _capture = SnapshotCapture(
+         world: world,
+         set: set,
+         networkId: networkId,
+       ) {
     var writable = 0;
     for (final component in set.components) {
       if (component.ownerWritable) writable |= 1 << component.bit;
@@ -150,8 +150,9 @@ class NetHost {
       throw StateError('A client is already connected as "$id".');
     }
     late final _Client client;
-    final subscription =
-        transport.inbound.listen((message) => _receive(client, message));
+    final subscription = transport.inbound.listen(
+      (message) => _receive(client, message),
+    );
     client = _Client(id, _nextClientIndex++, transport, subscription);
     _clients[id] = client;
   }
@@ -162,10 +163,11 @@ class NetHost {
     await client.subscription.cancel();
     // Entities the departed client owned revert to the authority rather than
     // staying writable by a name that could be reconnected under.
-    for (final networkId in _ownerByNetworkId.entries
-        .where((entry) => entry.value == id)
-        .map((entry) => entry.key)
-        .toList()) {
+    for (final networkId
+        in _ownerByNetworkId.entries
+            .where((entry) => entry.value == id)
+            .map((entry) => entry.key)
+            .toList()) {
       setOwner(networkId, null);
     }
   }

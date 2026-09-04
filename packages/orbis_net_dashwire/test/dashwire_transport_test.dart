@@ -14,17 +14,35 @@ class Peer {
   Peer({required bool reversed}) {
     world = World();
     if (reversed) {
-      velocity = world.registerComponent('Velocity',
-          kind: ComponentKind.float32, arity: 3);
-      position = world.registerComponent('Position',
-          kind: ComponentKind.float32, arity: 3);
-      networkId = world.registerComponent('NetworkId', kind: ComponentKind.int64);
+      velocity = world.registerComponent(
+        'Velocity',
+        kind: ComponentKind.float32,
+        arity: 3,
+      );
+      position = world.registerComponent(
+        'Position',
+        kind: ComponentKind.float32,
+        arity: 3,
+      );
+      networkId = world.registerComponent(
+        'NetworkId',
+        kind: ComponentKind.int64,
+      );
     } else {
-      networkId = world.registerComponent('NetworkId', kind: ComponentKind.int64);
-      position = world.registerComponent('Position',
-          kind: ComponentKind.float32, arity: 3);
-      velocity = world.registerComponent('Velocity',
-          kind: ComponentKind.float32, arity: 3);
+      networkId = world.registerComponent(
+        'NetworkId',
+        kind: ComponentKind.int64,
+      );
+      position = world.registerComponent(
+        'Position',
+        kind: ComponentKind.float32,
+        arity: 3,
+      );
+      velocity = world.registerComponent(
+        'Velocity',
+        kind: ComponentKind.float32,
+        arity: 3,
+      );
     }
     set = ReplicationSet([position, velocity]);
   }
@@ -50,7 +68,10 @@ void main() {
     final clientTransport = DashwireTransport(clientWire);
 
     final netHost = NetHost(
-        world: host.world, set: host.set, networkId: host.networkId);
+      world: host.world,
+      set: host.set,
+      networkId: host.networkId,
+    );
     final netClient = NetClient(
       world: client.world,
       set: client.set,
@@ -84,11 +105,17 @@ void main() {
 
   test('defaults to the unreliable channel', () {
     final (a, _) = LoopbackConnection.pair();
-    expect(DashwireTransport(a).channel, Channel.unreliable,
-        reason: 'acknowledged baselines make loss survivable, so snapshots do '
-            'not need the reliable channel');
-    expect(DashwireTransport(a, channel: Channel.reliable).channel,
-        Channel.reliable);
+    expect(
+      DashwireTransport(a).channel,
+      Channel.unreliable,
+      reason:
+          'acknowledged baselines make loss survivable, so snapshots do '
+          'not need the reliable channel',
+    );
+    expect(
+      DashwireTransport(a, channel: Channel.reliable).channel,
+      Channel.reliable,
+    );
   });
 
   test('a closed connection swallows sends rather than throwing', () async {

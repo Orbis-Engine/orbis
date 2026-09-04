@@ -46,12 +46,12 @@ class SnapshotCodec {
   const SnapshotCodec();
 
   Uint8List encodeFull(WorldSnapshot snapshot) => _encode(
-        tick: snapshot.tick,
-        baselineTick: 0,
-        isDelta: false,
-        groups: snapshot.groups.where((group) => group.length > 0).toList(),
-        despawned: Uint64List(0),
-      );
+    tick: snapshot.tick,
+    baselineTick: 0,
+    isDelta: false,
+    groups: snapshot.groups.where((group) => group.length > 0).toList(),
+    despawned: Uint64List(0),
+  );
 
   /// Encodes only what moved since [baseline].
   ///
@@ -67,13 +67,16 @@ class SnapshotCodec {
         final row = group.rowAt(i);
         final previous = baseline.rowFor(networkId);
 
-        final changed = previous == null ||
+        final changed =
+            previous == null ||
             previous.mask != group.mask ||
             !_sameBytes(previous.bytes, row);
         if (!changed) continue;
 
-        (builders[group.mask] ??= _GroupBuilder(group.mask, group.stride))
-            .add(networkId, row);
+        (builders[group.mask] ??= _GroupBuilder(
+          group.mask,
+          group.stride,
+        )).add(networkId, row);
       }
     }
 
@@ -102,7 +105,8 @@ class SnapshotCodec {
     final version = data.getUint16(4, Endian.little);
     if (version != _formatVersion) {
       throw SnapshotFormatError(
-          'Snapshot format $version, but this build speaks $_formatVersion.');
+        'Snapshot format $version, but this build speaks $_formatVersion.',
+      );
     }
 
     final kind = data.getUint8(6);
@@ -130,15 +134,18 @@ class SnapshotCodec {
         throw SnapshotFormatError('Snapshot ends inside group $g.');
       }
       final rows = Uint8List.fromList(
-          Uint8List.sublistView(message, offset, offset + byteCount));
+        Uint8List.sublistView(message, offset, offset + byteCount),
+      );
       offset += byteCount;
 
-      groups.add(SnapshotGroup(
-        mask: mask,
-        stride: stride,
-        networkIds: networkIds,
-        rows: rows,
-      ));
+      groups.add(
+        SnapshotGroup(
+          mask: mask,
+          stride: stride,
+          networkIds: networkIds,
+          rows: rows,
+        ),
+      );
     }
 
     final despawnCount = data.getUint32(offset, Endian.little);
@@ -229,9 +236,9 @@ class _GroupBuilder {
   }
 
   SnapshotGroup build() => SnapshotGroup(
-        mask: mask,
-        stride: stride,
-        networkIds: Uint64List.fromList(_networkIds),
-        rows: _rows.toBytes(),
-      );
+    mask: mask,
+    stride: stride,
+    networkIds: Uint64List.fromList(_networkIds),
+    rows: _rows.toBytes(),
+  );
 }

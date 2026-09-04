@@ -73,11 +73,15 @@ InputMessage? decodeInput(Uint8List bytes) {
     final length = data.getUint32(offset + 16, Endian.little);
     offset += 20;
     if (offset + length > bytes.length) return null;
-    entries.add(InputEntry(
-      networkId: networkId,
-      mask: mask,
-      row: Uint8List.fromList(Uint8List.sublistView(bytes, offset, offset + length)),
-    ));
+    entries.add(
+      InputEntry(
+        networkId: networkId,
+        mask: mask,
+        row: Uint8List.fromList(
+          Uint8List.sublistView(bytes, offset, offset + length),
+        ),
+      ),
+    );
     offset += length;
   }
 

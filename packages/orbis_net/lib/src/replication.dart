@@ -22,7 +22,8 @@ class ReplicatedComponent {
   final bool ownerWritable;
 
   @override
-  String toString() => 'ReplicatedComponent(${type.name}, bit $bit'
+  String toString() =>
+      'ReplicatedComponent(${type.name}, bit $bit'
       '${ownerWritable ? ', owner-writable' : ''})';
 }
 
@@ -58,11 +59,13 @@ class ReplicationSet {
       if (!names.add(type.name)) {
         throw ArgumentError('Component "${type.name}" is listed twice.');
       }
-      components.add(ReplicatedComponent(
-        type: type,
-        bit: bit,
-        ownerWritable: ownerWritable.contains(type.name),
-      ));
+      components.add(
+        ReplicatedComponent(
+          type: type,
+          bit: bit,
+          ownerWritable: ownerWritable.contains(type.name),
+        ),
+      );
       bits[type.id] = bit;
     }
 

@@ -46,8 +46,10 @@ class ComponentType {
 /// Thrown when a handle is used after the entity it named was destroyed.
 class DeadEntityError extends StateError {
   DeadEntityError(int entity)
-      : super('Entity $entity is not alive. Its slot may have been reused; '
-            'generational handles make that detectable rather than silent.');
+    : super(
+        'Entity $entity is not alive. Its slot may have been reused; '
+        'generational handles make that detectable rather than silent.',
+      );
 }
 
 /// One run of entities that all carry the queried components.
@@ -112,9 +114,8 @@ class Chunk {
   }
 
   /// The raw bytes of a column, for a component with no natural element type.
-  Uint8List bytes(int slot) => _column(slot)
-      .cast<Uint8>()
-      .asTypedList(length * _types[slot].byteSize);
+  Uint8List bytes(int slot) =>
+      _column(slot).cast<Uint8>().asTypedList(length * _types[slot].byteSize);
 
   /// Every component the entities in this run carry, including ones the query
   /// did not ask for.
@@ -135,24 +136,24 @@ class Chunk {
   /// The raw bytes of a component this run carries, whether or not the query
   /// named it. Null when the component is absent.
   Uint8List? bytesOfComponent(ComponentType type) {
-    final pointer =
-        native.queryChunkComponentColumn(_query, _index, type.id);
+    final pointer = native.queryChunkComponentColumn(_query, _index, type.id);
     if (pointer == nullptr) return null;
     return pointer.cast<Uint8>().asTypedList(length * type.byteSize);
   }
 
   /// A float32 column addressed by component rather than by slot.
   Float32List? float32OfComponent(ComponentType type) {
-    final pointer =
-        native.queryChunkComponentColumn(_query, _index, type.id);
+    final pointer = native.queryChunkComponentColumn(_query, _index, type.id);
     if (pointer == nullptr) return null;
     return pointer.cast<Float>().asTypedList(length * type.arity);
   }
 
   void _expect(int slot, ComponentKind kind) {
     if (_types[slot].kind != kind) {
-      throw ArgumentError('Slot $slot is ${_types[slot].kind.name}, '
-          'not ${kind.name}.');
+      throw ArgumentError(
+        'Slot $slot is ${_types[slot].kind.name}, '
+        'not ${kind.name}.',
+      );
     }
   }
 }
@@ -241,12 +242,18 @@ Float32List transform({
   double scaleX = 1,
   double scaleY = 1,
   double scaleZ = 1,
-}) =>
-    Float32List.fromList([
-      x, y, z,
-      rotationX, rotationY, rotationZ, rotationW,
-      scaleX, scaleY, scaleZ,
-    ]);
+}) => Float32List.fromList([
+  x,
+  y,
+  z,
+  rotationX,
+  rotationY,
+  rotationZ,
+  rotationW,
+  scaleX,
+  scaleY,
+  scaleZ,
+]);
 
 /// An entity-component world.
 ///
@@ -283,15 +290,18 @@ class World {
     int arity = 1,
   }) {
     final size = kind.bytesPerElement * arity;
-    final id = using((arena) => native.componentRegister(
-          _alive,
-          name.toNativeUtf8(allocator: arena).cast<Char>(),
-          size,
-          kind.bytesPerElement,
-        ));
+    final id = using(
+      (arena) => native.componentRegister(
+        _alive,
+        name.toNativeUtf8(allocator: arena).cast<Char>(),
+        size,
+        kind.bytesPerElement,
+      ),
+    );
     if (id == 0) {
       throw ArgumentError(
-          'Component "$name" is already registered with a different layout.');
+        'Component "$name" is already registered with a different layout.',
+      );
     }
     return ComponentType(id: id, name: name, kind: kind, arity: arity);
   }
@@ -310,12 +320,18 @@ class World {
         ? native.entityAdd(_alive, entity, type.id, nullptr)
         : using((arena) {
             final buffer = arena<Uint8>(type.byteSize);
-            buffer.asTypedList(type.byteSize).setAll(
+            buffer
+                .asTypedList(type.byteSize)
+                .setAll(
                   0,
                   value.buffer.asUint8List(value.offsetInBytes, type.byteSize),
                 );
             return native.entityAdd(
-                _alive, entity, type.id, buffer.cast<Void>());
+              _alive,
+              entity,
+              type.id,
+              buffer.cast<Void>(),
+            );
           });
 
     if (!added) {
@@ -365,20 +381,23 @@ class World {
     final ids = native.transformRegister(_alive);
     return TransformComponents(
       local: ComponentType(
-          id: ids.local,
-          name: 'orbis.LocalTransform',
-          kind: ComponentKind.float32,
-          arity: 10),
+        id: ids.local,
+        name: 'orbis.LocalTransform',
+        kind: ComponentKind.float32,
+        arity: 10,
+      ),
       world: ComponentType(
-          id: ids.world,
-          name: 'orbis.WorldTransform',
-          kind: ComponentKind.float32,
-          arity: 16),
+        id: ids.world,
+        name: 'orbis.WorldTransform',
+        kind: ComponentKind.float32,
+        arity: 16,
+      ),
       parent: ComponentType(
-          id: ids.parent,
-          name: 'orbis.Parent',
-          kind: ComponentKind.int64,
-          arity: 1),
+        id: ids.parent,
+        name: 'orbis.Parent',
+        kind: ComponentKind.int64,
+        arity: 1,
+      ),
     );
   }
 
