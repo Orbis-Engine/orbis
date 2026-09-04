@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'scene.dart';
+
 /// A Filament-rendered surface, laid out and composited like any other widget.
 ///
 /// The 3D content is a real Flutter texture, so it clips, scrolls, sits under
@@ -9,7 +11,11 @@ import 'package:flutter/services.dart';
 /// the whole point of routing Filament through the texture registry rather
 /// than a platform view.
 class OrbisView extends StatefulWidget {
-  const OrbisView({super.key});
+  const OrbisView({super.key, this.scene});
+
+  /// What to draw. While this is null the renderer shows its own placeholder,
+  /// so an unconfigured view is visibly working rather than merely blank.
+  final OrbisScene? scene;
 
   @override
   State<OrbisView> createState() => _OrbisViewState();
@@ -22,6 +28,26 @@ class _OrbisViewState extends State<OrbisView> {
   Size? _surfaceSize;
   bool _creating = false;
   Object? _error;
+  OrbisScene? _sentScene;
+
+  @override
+  void didUpdateWidget(OrbisView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(widget.scene, _sentScene)) _sendScene();
+  }
+
+  /// Pushes the current scene to the native surface, if there is one of each.
+  Future<void> _sendScene() async {
+    final id = _textureId;
+    final scene = widget.scene;
+    if (id == null || scene == null || _error != null) return;
+    _sentScene = scene;
+    try {
+      await _channel.invokeMethod<void>('setScene', scene.toMessage(id));
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
+  }
 
   @override
   void dispose() {
@@ -56,6 +82,10 @@ class _OrbisViewState extends State<OrbisView> {
           _textureId = id;
           _surfaceSize = pixels;
         });
+        // The surface did not exist when the scene was first set, so it is
+        // sent now rather than waiting for the next change — otherwise a
+        // static scene would never appear at all.
+        await _sendScene();
       } catch (error) {
         if (mounted) setState(() => _error = error);
       } finally {

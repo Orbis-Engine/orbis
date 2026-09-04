@@ -21,6 +21,8 @@
 #include <geometry/SurfaceOrientation.h>
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
+
+#include <vector>
 #include <utils/Panic.h>
 
 #include <exception>
@@ -97,11 +99,12 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   View *_view;
   Camera *_camera;
   utils::Entity _cameraEntity;
-  utils::Entity _cube;
+  std::vector<utils::Entity> _objects;
+  std::vector<MaterialInstance *> _instances;
   utils::Entity _light;
+  bool _sceneIsOwnedByHost;
   Skybox *_skybox;
   Material *_material;
-  MaterialInstance *_materialInstance;
   VertexBuffer *_vertexBuffer;
   IndexBuffer *_indexBuffer;
 
@@ -114,6 +117,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   uint32_t _height;
   uint32_t _pendingWidth;
   uint32_t _pendingHeight;
+  float _fieldOfView;
 
   NSLock *_presentLock;
   BOOL _disposed;
@@ -164,12 +168,18 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _skybox = Skybox::Builder().color({0.10f, 0.12f, 0.16f, 1.0f}).build(*_engine);
   _scene->setSkybox(_skybox);
 
-  [self buildCube];
+  [self buildGeometry];
   [self allocateBuffers];
   [self applyViewportSize];
+
+  // Something to look at until a host sends a scene, so an empty viewport is
+  // recognisably working rather than indistinguishable from a broken one.
+  const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  const float colour[3] = {0.85f, 0.28f, 0.18f};
+  [self setObjects:identity colours:colour count:1];
 }
 
-- (void)buildCube {
+- (void)buildGeometry {
   // Filament wants tangent frames as quaternions, so the flat face normals are
   // converted rather than handed over directly.
   quatf quats[24];
@@ -221,21 +231,6 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _material = Material::Builder()
                   .package(klitMaterial, klitMaterial_len)
                   .build(*_engine);
-  _materialInstance = _material->createInstance();
-  _materialInstance->setParameter("baseColor", float3{0.85f, 0.28f, 0.18f});
-  _materialInstance->setParameter("roughness", 0.35f);
-  _materialInstance->setParameter("metallic", 0.0f);
-
-  _cube = utils::EntityManager::get().create();
-  RenderableManager::Builder(1)
-      .boundingBox({{-1, -1, -1}, {1, 1, 1}})
-      .material(0, _materialInstance)
-      .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
-                _indexBuffer, 0, 36)
-      .receiveShadows(true)
-      .castShadows(true)
-      .build(*_engine, _cube);
-  _scene->addEntity(_cube);
 
   _light = utils::EntityManager::get().create();
   LightManager::Builder(LightManager::Type::SUN)
@@ -245,6 +240,87 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
       .castShadows(true)
       .build(*_engine, _light);
   _scene->addEntity(_light);
+}
+
+- (void)clearObjects {
+  auto &entities = utils::EntityManager::get();
+  for (utils::Entity object : _objects) {
+    _scene->remove(object);
+    _engine->destroy(object);
+    entities.destroy(object);
+  }
+  for (MaterialInstance *instance : _instances) {
+    _engine->destroy(instance);
+  }
+  _objects.clear();
+  _instances.clear();
+}
+
+- (void)setObjects:(const float *)transforms
+           colours:(const float *)colours
+             count:(uint32_t)count {
+  if (_disposed) return;
+  [self clearObjects];
+
+  auto &transformManager = _engine->getTransformManager();
+
+  for (uint32_t i = 0; i < count; i++) {
+    // One instance per object, because the colour is a material parameter and
+    // sharing an instance would make every object the last one's colour.
+    MaterialInstance *instance = _material->createInstance();
+    instance->setParameter(
+        "baseColor",
+        float3{colours[i * 3], colours[i * 3 + 1], colours[i * 3 + 2]});
+    instance->setParameter("roughness", 0.4f);
+    instance->setParameter("metallic", 0.0f);
+    _instances.push_back(instance);
+
+    utils::Entity object = utils::EntityManager::get().create();
+    RenderableManager::Builder(1)
+        .boundingBox({{-1, -1, -1}, {1, 1, 1}})
+        .material(0, instance)
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
+                  _indexBuffer, 0, 36)
+        .receiveShadows(true)
+        .castShadows(true)
+        .build(*_engine, object);
+
+    mat4f matrix;
+    std::memcpy(&matrix, transforms + i * 16, sizeof(float) * 16);
+    transformManager.setTransform(transformManager.getInstance(object), matrix);
+
+    _scene->addEntity(object);
+    _objects.push_back(object);
+  }
+
+  _sceneIsOwnedByHost = true;
+}
+
+- (void)setSunDirection:(const float *)direction
+                 colour:(const float *)colour
+            illuminance:(float)illuminance {
+  if (_disposed) return;
+
+  auto &lights = _engine->getLightManager();
+  auto instance = lights.getInstance(_light);
+  if (!instance) return;
+
+  lights.setDirection(instance,
+                      float3{direction[0], direction[1], direction[2]});
+  lights.setColor(instance, LinearColor{colour[0], colour[1], colour[2]});
+  lights.setIntensity(instance, illuminance);
+}
+
+- (void)setCameraPosition:(const float *)position
+                   target:(const float *)target
+              fieldOfView:(float)fieldOfView {
+  if (_disposed) return;
+
+  _camera->lookAt({position[0], position[1], position[2]},
+                  {target[0], target[1], target[2]}, {0, 1, 0});
+  _camera->setProjection(fieldOfView, double(_width) / double(_height), 0.1,
+                         1000.0);
+  _fieldOfView = fieldOfView;
 }
 
 - (void)allocateBuffers {
@@ -275,7 +351,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 
 - (void)applyViewportSize {
   _view->setViewport({0, 0, _width, _height});
-  _camera->setProjection(50.0, double(_width) / double(_height), 0.1, 100.0);
+  _camera->setProjection(_fieldOfView > 0 ? _fieldOfView : 50.0,
+                         double(_width) / double(_height), 0.1, 1000.0);
 }
 
 - (void)resizeToWidth:(uint32_t)width height:(uint32_t)height {
@@ -322,11 +399,16 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   SwapChain *target = _swapChains[_backIndex];
   if (!target) return;
 
-  auto &transforms = _engine->getTransformManager();
-  transforms.setTransform(
-      transforms.getInstance(_cube),
-      mat4f::rotation(time * 0.7, float3{0, 1, 0}) *
-          mat4f::rotation(time * 0.35, float3{1, 0, 0}));
+  // The placeholder turns so an unconfigured viewport is visibly alive. A
+  // scene sent by a host is left exactly where the host put it — a renderer
+  // that quietly animates somebody's content is worse than a still one.
+  if (!_sceneIsOwnedByHost && !_objects.empty()) {
+    auto &transforms = _engine->getTransformManager();
+    transforms.setTransform(
+        transforms.getInstance(_objects.front()),
+        mat4f::rotation(time * 0.7, float3{0, 1, 0}) *
+            mat4f::rotation(time * 0.35, float3{1, 0, 0}));
+  }
 
   if (!_renderer->beginFrame(target)) return;
   _renderer->render(_view);
@@ -394,17 +476,15 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 
   // Filament asserts on anything still alive when the engine goes down, so the
   // teardown mirrors construction in reverse.
+  [self clearObjects];
+
   auto &entities = utils::EntityManager::get();
-  _scene->remove(_cube);
   _scene->remove(_light);
-  _engine->destroy(_cube);
-  entities.destroy(_cube);
   _engine->destroy(_light);
   entities.destroy(_light);
   _engine->destroyCameraComponent(_cameraEntity);
   entities.destroy(_cameraEntity);
   _engine->destroy(_skybox);
-  _engine->destroy(_materialInstance);
   _engine->destroy(_material);
   _engine->destroy(_vertexBuffer);
   _engine->destroy(_indexBuffer);

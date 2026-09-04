@@ -19,6 +19,30 @@ NS_ASSUME_NONNULL_BEGIN
 /// Draws one frame at `time` seconds and presents it. Render thread only.
 - (void)renderAtTime:(double)time;
 
+/// Replaces everything in the scene.
+///
+/// Whole-scene rather than incremental, because an editor's scene is small and
+/// a diff is a bug surface: a renderer that believes it knows what changed and
+/// is wrong shows the last correct frame forever, which is the hardest kind of
+/// wrong to notice.
+///
+/// `transforms` is `count` column-major 4x4 matrices; `colours` is `count`
+/// linear RGB triples.
+- (void)setObjects:(const float *)transforms
+           colours:(const float *)colours
+             count:(uint32_t)count;
+
+/// Sets the sun's direction, colour and illuminance in lux.
+- (void)setSunDirection:(const float *)direction
+                 colour:(const float *)colour
+             illuminance:(float)illuminance;
+
+/// Places the camera, looking at a point, with a vertical field of view in
+/// degrees.
+- (void)setCameraPosition:(const float *)position
+                   target:(const float *)target
+              fieldOfView:(float)fieldOfView;
+
 /// Requests new dimensions. Safe from any thread — the work happens at the
 /// top of the next frame, on the thread that owns the engine.
 - (void)resizeToWidth:(uint32_t)width height:(uint32_t)height;
