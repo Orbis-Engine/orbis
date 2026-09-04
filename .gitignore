@@ -12,3 +12,15 @@ third_party/filament-*/
 spike/spike
 spike/lit.filamat
 spike/spike_output.png
+
+# Fetched by packages/orbis_filament/macos/setup.sh
+packages/orbis_filament/macos/third_party/
+packages/orbis_filament/macos/Classes/generated/
+
+# Flutter
+.flutter-plugins-dependencies
+**/macos/Pods/
+**/macos/Podfile.lock
+**/macos/Flutter/ephemeral/
+**/macos/Flutter/GeneratedPluginRegistrant.swift
+*.iml
