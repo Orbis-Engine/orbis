@@ -1,0 +1,62 @@
+{
+  "name": "orbis_filament",
+  "version": "0.1.0",
+  "summary": "Filament rendering, composited by Flutter.",
+  "description": "Renders with Google's Filament into IOSurface-backed CVPixelBuffers and hands\nthem to Flutter's texture registry, so a 3D scene composites with widgets\nwithout a trip through the CPU.",
+  "homepage": "https://github.com/Orbis-Engine/orbis",
+  "license": {
+    "type": "MIT"
+  },
+  "authors": {
+    "Orbis Engine": "orbis@example.com"
+  },
+  "source": {
+    "path": "."
+  },
+  "source_files": "Classes/**/*.{h,m,mm,swift}",
+  "public_header_files": [
+    "Classes/OrbisRenderer.h",
+    "Classes/OrbisTexture.h"
+  ],
+  "dependencies": {
+    "FlutterMacOS": []
+  },
+  "platforms": {
+    "osx": "10.15"
+  },
+  "swift_versions": "5.0",
+  "static_framework": true,
+  "prepare_command": "bash setup.sh",
+  "vendored_libraries": [
+    "third_party/filament-mac/filament/lib/arm64/libfilament.a",
+    "third_party/filament-mac/filament/lib/arm64/libbackend.a",
+    "third_party/filament-mac/filament/lib/arm64/libbluegl.a",
+    "third_party/filament-mac/filament/lib/arm64/libbluevk.a",
+    "third_party/filament-mac/filament/lib/arm64/libfilabridge.a",
+    "third_party/filament-mac/filament/lib/arm64/libfilaflat.a",
+    "third_party/filament-mac/filament/lib/arm64/libutils.a",
+    "third_party/filament-mac/filament/lib/arm64/libgeometry.a",
+    "third_party/filament-mac/filament/lib/arm64/libsmol-v.a",
+    "third_party/filament-mac/filament/lib/arm64/libibl.a",
+    "third_party/filament-mac/filament/lib/arm64/libabseil.a",
+    "third_party/filament-mac/filament/lib/arm64/libzstd.a"
+  ],
+  "pod_target_xcconfig": {
+    "DEFINES_MODULE": "YES",
+    "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+    "HEADER_SEARCH_PATHS": "\"$(PODS_TARGET_SRCROOT)/third_party/filament-mac/filament/include\"",
+    "EXCLUDED_ARCHS": "x86_64"
+  },
+  "user_target_xcconfig": {
+    "EXCLUDED_ARCHS": "x86_64"
+  },
+  "frameworks": [
+    "Metal",
+    "MetalKit",
+    "CoreVideo",
+    "QuartzCore",
+    "IOSurface",
+    "OpenGL"
+  ],
+  "swift_version": "5.0"
+}
