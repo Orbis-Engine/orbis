@@ -12,6 +12,7 @@ PACKAGES=(
   packages/orbis_codegen
   packages/orbis_core
   packages/orbis_light
+  packages/orbis_rig
 )
 
 failures=0
