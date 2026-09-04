@@ -10,5 +10,9 @@ export 'src/armature.dart' show Armature, ArmatureError, Pose, PoseTransform;
 export 'src/bone.dart' show Bone;
 export 'src/constraints.dart'
     show BoneConstraint, CopyRotation, DampedTrack, LimitRotation, TrackAxis;
+export 'src/generator.dart'
+    show GeneratedRig, MetaRig, RigGenerator, RigProblem;
 export 'src/ik.dart' show IkSolution, rotationBetween, solveTwoBoneIk;
 export 'src/naming.dart' show BoneNaming, BoneRole, Side;
+export 'src/rig_type.dart' show RigContext, RigType;
+export 'src/rig_types.dart' show CopyRig, FingerRig, LimbRig, SpineRig;

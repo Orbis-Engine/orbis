@@ -2,6 +2,7 @@ import 'package:vector_math/vector_math_64.dart';
 
 import 'bone.dart';
 import 'constraints.dart';
+import 'ik.dart';
 
 /// Thrown when a skeleton describes something that is not a tree.
 class ArmatureError extends StateError {
@@ -167,6 +168,47 @@ class PoseTransform {
   );
 }
 
+/// A two-bone chain that reaches for something.
+///
+/// Named rather than constrained per bone, because inverse kinematics is one
+/// answer about two bones at once: solving it as two independent constraints
+/// means each is guessing at what the other will do.
+class IkChain {
+  const IkChain({
+    required this.root,
+    required this.mid,
+    required this.target,
+    this.pole,
+    this.influence = 1,
+    this.influenceProperty,
+  });
+
+  /// The upper bone — a thigh or an upper arm.
+  final String root;
+
+  /// The lower bone. Must be a child of [root].
+  final String mid;
+
+  /// The bone whose head the chain reaches for.
+  final String target;
+
+  /// The bone whose head decides which way the joint bends. Without one the
+  /// chain still solves, but a knee may end up bending backwards.
+  final String? pole;
+
+  final double influence;
+
+  /// A pose property to take the influence from, which is how a limb is handed
+  /// between inverse and forward kinematics.
+  final String? influenceProperty;
+
+  double influenceIn(Pose pose) {
+    final name = influenceProperty;
+    final value = name == null ? influence : pose.property(name) ?? influence;
+    return value.clamp(0.0, 1.0);
+  }
+}
+
 /// An armature, posed.
 ///
 /// Holds a transform per bone and works out where every bone ends up. Kept
@@ -183,7 +225,20 @@ class Pose {
   final Map<String, PoseTransform> _transforms = {};
   final Map<String, Matrix4> _world = {};
   final Map<String, List<BoneConstraint>> _constraints = {};
+  final Map<String, double> _properties = {};
+  final List<IkChain> _ikChains = [];
   List<String>? _order;
+
+  /// A named value constraints can read, such as an inverse-kinematics blend.
+  ///
+  /// Lives on the pose rather than on a bone because it is animated like
+  /// anything else and read by several bones at once — a limb's switch is one
+  /// number that a dozen constraints consult.
+  double? property(String name) => _properties[name];
+
+  void setProperty(String name, double value) => _properties[name] = value;
+
+  Map<String, double> get properties => Map.unmodifiable(_properties);
 
   /// Adds a constraint to a bone. They apply in the order they were added,
   /// each seeing what the last one produced — the same as stacking them in any
@@ -195,6 +250,14 @@ class Pose {
 
   List<BoneConstraint> constraintsOn(String bone) =>
       List.unmodifiable(_constraints[bone] ?? const []);
+
+  /// Adds a chain that reaches for a target.
+  void addIkChain(IkChain chain) {
+    _ikChains.add(chain);
+    _order = null;
+  }
+
+  List<IkChain> get ikChains => List.unmodifiable(_ikChains);
 
   void clearConstraints([String? bone]) {
     if (bone == null) {
@@ -255,10 +318,22 @@ class Pose {
     return order;
   }
 
-  /// The transform for a bone, created on demand so a rig built after the pose
-  /// still works.
-  PoseTransform operator [](String name) =>
-      _transforms[name] ??= PoseTransform();
+  /// The transform for a bone.
+  ///
+  /// Refuses a name the armature does not have. Returning a fresh transform
+  /// instead would make a typo do nothing at all, quietly — which is exactly
+  /// how a control that was renamed goes on looking connected while driving
+  /// nothing.
+  PoseTransform operator [](String name) {
+    final existing = _transforms[name];
+    if (existing != null) return existing;
+    if (!armature.contains(name)) {
+      throw ArmatureError(
+        'No bone called "$name" in this armature, so there is nothing to pose.',
+      );
+    }
+    return _transforms[name] = PoseTransform();
+  }
 
   /// Puts every bone back at rest.
   void reset() {
@@ -269,6 +344,17 @@ class Pose {
 
   /// Works out where every bone is, parents first.
   void evaluate() {
+    _evaluateOnce();
+    if (_ikChains.isEmpty) return;
+
+    // Inverse kinematics writes rotations back into the pose rather than
+    // overwriting world matrices, so everything below a solved limb — a hand's
+    // fingers, a foot's toes — comes along on the ordinary pass that follows.
+    _solveIkChains();
+    _evaluateOnce();
+  }
+
+  void _evaluateOnce() {
     for (final name in evaluationOrder) {
       final bone = armature[name]!;
       final local = armature.restLocalOf(name).multiplied(this[name].matrix);
@@ -287,6 +373,97 @@ class Pose {
 
       _world[name] = world;
     }
+  }
+
+  /// Where a bone would be with no pose applied: its parent, times its rest
+  /// offset. What a local pose rotation is measured against.
+  Matrix4 _baseOf(String name) {
+    final bone = armature[name]!;
+    final local = armature.restLocalOf(name);
+    final parentName = bone.parent;
+    final parent = parentName == null ? null : _world[parentName];
+    return parent == null ? local : parent.multiplied(local);
+  }
+
+  void _solveIkChains() {
+    for (final chain in _ikChains) {
+      final amount = chain.influenceIn(this);
+      if (amount <= 0) continue;
+
+      final rootBone = armature[chain.root];
+      final midBone = armature[chain.mid];
+      if (rootBone == null || midBone == null) continue;
+
+      final rootHead = headOf(chain.root);
+      final goal = headOf(chain.target);
+      final poleName = chain.pole;
+      // Without a pole the bend plane is whatever the solver falls back to,
+      // which is stable but arbitrary — fine for a tentacle, wrong for a knee.
+      final pole = poleName == null
+          ? rootHead + tailOf(chain.root) - rootHead + Vector3(0, 0, 1)
+          : headOf(poleName);
+
+      final solution = solveTwoBoneIk(
+        root: rootHead,
+        pole: pole,
+        target: goal,
+        upperLength: rootBone.length,
+        lowerLength: midBone.length,
+      );
+
+      _aim(chain.root, solution.joint - rootHead, amount);
+      _world[chain.root] = _baseOf(
+        chain.root,
+      ).multiplied(this[chain.root].matrix);
+
+      _aim(chain.mid, solution.end - headOf(chain.mid), amount);
+      _world[chain.mid] = _baseOf(chain.mid).multiplied(this[chain.mid].matrix);
+    }
+  }
+
+  /// Turns a bone so it points a given way, by writing its local rotation.
+  void _aim(String name, Vector3 direction, double amount) {
+    if (direction.length2 < 1e-12) return;
+
+    final world = _world[name]!;
+    final column = world.getColumn(1);
+    final currentAxis = Vector3(column.x, column.y, column.z)..normalize();
+
+    final currentRotation = Quaternion.identity();
+    final scale = Vector3.zero();
+    final translation = Vector3.zero();
+    world.decompose(translation, currentRotation, scale);
+    currentRotation.normalize();
+
+    final correction = rotationBetween(currentAxis, direction.normalized());
+    final wanted = correction * currentRotation;
+
+    final baseRotation = Quaternion.identity();
+    _baseOf(name).decompose(Vector3.zero(), baseRotation, Vector3.zero());
+    baseRotation.normalize();
+
+    // Converted back to the bone's own space, because that is where a pose
+    // lives — writing a world rotation would be undone the moment the parent
+    // moved.
+    final local = baseRotation.conjugated() * wanted;
+    this[name].rotation = amount >= 1
+        ? local.normalized()
+        : _blend(this[name].rotation, local.normalized(), amount);
+  }
+
+  static Quaternion _blend(Quaternion a, Quaternion b, double t) {
+    var dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    var target = b;
+    if (dot < 0) {
+      target = Quaternion(-b.x, -b.y, -b.z, -b.w);
+      dot = -dot;
+    }
+    return Quaternion(
+      a.x + (target.x - a.x) * t,
+      a.y + (target.y - a.y) * t,
+      a.z + (target.z - a.z) * t,
+      a.w + (target.w - a.w) * t,
+    )..normalize();
   }
 
   /// Where a bone ended up, in armature space. Call [evaluate] first.
