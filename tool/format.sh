@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 # find | xargs rather than an array, so this runs on the bash macOS ships as
 # well as the one Linux does.
 sources() {
-  find packages examples -name '*.dart' \
+  find packages -name '*.dart' \
     -not -name '*.g.dart' \
     -not -path '*/.dart_tool/*' \
     -not -path '*/build/*' \
