@@ -8,6 +8,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 PACKAGES=(
+  packages/orbis_camera
   packages/orbis_codegen
   packages/orbis_core
 )
