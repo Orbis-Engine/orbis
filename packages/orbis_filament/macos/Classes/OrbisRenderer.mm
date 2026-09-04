@@ -101,7 +101,7 @@ struct Lit {
   utils::Entity entity;
   int32_t kind = -1;
   int32_t flags = -1;
-  float params[16] = {};
+  float params[18] = {};
   bool applied = false;
   uint64_t seen = 0;
 };
@@ -233,6 +233,14 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   bool _sceneIsOwnedByHost;
   Skybox *_skybox;
   IndirectLight *_ambient;
+
+  /// The sky as it currently stands. A day cycle changes it on every frame,
+  /// and a skybox rebuilt sixty times a second is sixty allocations to say
+  /// what one setter says.
+  float3 _skyColour;
+  float _skyAmbient;
+  bool _skyShowsBody;
+  bool _skyBuilt;
   Material *_material;
   VertexBuffer *_vertexBuffer;
   IndexBuffer *_indexBuffer;
@@ -299,10 +307,11 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   // two-state version costs the same and is the half that is needed now.
   _view->setVisibleLayers(0xFF, kVisibleLayer);
 
-  _skybox = Skybox::Builder().color({0.10f, 0.12f, 0.16f, 1.0f}).build(*_engine);
-  _scene->setSkybox(_skybox);
-
-  [self setAmbientColour:kDefaultAmbient intensity:kDefaultAmbientIntensity];
+  const float defaultSky[3] = {kDefaultAmbient.x, kDefaultAmbient.y,
+                               kDefaultAmbient.z};
+  [self setSkyColour:defaultSky
+             ambient:kDefaultAmbientIntensity
+            showBody:YES];
 
   _assetNotes = [NSMutableDictionary dictionary];
   _objectNotes = [NSMutableDictionary dictionary];
@@ -333,8 +342,9 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   const int64_t sunKey[1] = {kPlaceholderKey};
   const int32_t sunKind[1] = {0};
   const int32_t sunFlags[1] = {1};
-  const float sun[16] = {1.0f, 0.96f, 0.9f, 110000.0f, 0, 0,    0, -0.6f,
-                         -1.0f, -0.8f, 0,   0,        0, 0.53f, 0.1f, 0};
+  const float sun[18] = {1.0f, 0.96f, 0.9f, 110000.0f, 0,     0,
+                         0,     -0.6f, -1.0f, -0.8f,     0,     0,
+                         0,     0.53f, 0.1f,  10.0f,     80.0f, 0};
   [self applyLights:sunKey kinds:sunKind flags:sunFlags params:sun count:1];
 }
 
@@ -728,6 +738,11 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 
   if (lit.kind == 0) {
     lights.setSunAngularRadius(instance, p[13]);
+    // The disk in the sky is drawn at the light's own colour and brightness,
+    // and the halo is the glow around it. A wide soft one reads as a sun
+    // through air; a tight one reads as a moon on a clear night.
+    lights.setSunHaloSize(instance, p[15]);
+    lights.setSunHaloFalloff(instance, p[16]);
   } else {
     lights.setPosition(instance, float3{p[4], p[5], p[6]});
     lights.setFalloff(instance, p[10]);
@@ -847,22 +862,49 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _view->setFogOptions(fog);
 }
 
-- (void)setSkyColour:(const float *)colour ambient:(float)ambient {
+- (void)setSkyColour:(const float *)colour
+             ambient:(float)ambient
+            showBody:(BOOL)showBody {
   if (_disposed) return;
 
   const float3 sky = {colour[0], colour[1], colour[2]};
-  if (_skybox) {
-    _scene->setSkybox(nullptr);
-    _engine->destroy(_skybox);
+  const bool sameColour = _skyBuilt && sky.x == _skyColour.x &&
+                          sky.y == _skyColour.y && sky.z == _skyColour.z;
+
+  // Whether the sun's disk is drawn is fixed when a skybox is built, so only
+  // that forces a new one. A colour is a setter, and a day cycle changing the
+  // sky on every frame should cost one.
+  if (!_skyBuilt || showBody != _skyShowsBody) {
+    if (_skybox) {
+      _scene->setSkybox(nullptr);
+      _engine->destroy(_skybox);
+    }
+    _skybox = Skybox::Builder()
+                  .color({sky.x, sky.y, sky.z, 1.0f})
+                  .showSun(showBody)
+                  .build(*_engine);
+    _scene->setSkybox(_skybox);
+    _skyShowsBody = showBody;
+  } else if (!sameColour) {
+    _skybox->setColor({sky.x, sky.y, sky.z, 1.0f});
   }
-  _skybox = Skybox::Builder()
-                .color({sky.x, sky.y, sky.z, 1.0f})
-                .build(*_engine);
-  _scene->setSkybox(_skybox);
 
   // Lit by the sky it stands under, which is what makes the two read as one
   // environment rather than a backdrop behind an unrelated scene.
-  [self setAmbientColour:sky intensity:ambient];
+  //
+  // The irradiance is fixed when an indirect light is built, so a change of
+  // colour is a new one; a change of only its strength is a setter. Under a
+  // day cycle both move together, and this object holds nine floats — the
+  // rebuild is the cheap kind.
+  if (!_skyBuilt || !sameColour) {
+    [self setAmbientColour:sky intensity:ambient];
+  } else if (ambient != _skyAmbient && _ambient) {
+    _ambient->setIntensity(ambient);
+  }
+
+  _skyColour = sky;
+  _skyAmbient = ambient;
+  _skyBuilt = true;
 }
 
 - (void)setCameraPosition:(const float *)position
@@ -875,6 +917,15 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _camera->setProjection(fieldOfView, double(_width) / double(_height), 0.1,
                          1000.0);
   _fieldOfView = fieldOfView;
+}
+
+- (void)setExposure:(float)aperture
+            shutter:(float)shutter
+        sensitivity:(float)sensitivity {
+  if (_disposed) return;
+  // Filament asks for these in the units a photographer would state them in,
+  // which is also how they arrive, so there is nothing to convert.
+  _camera->setExposure(aperture, shutter, sensitivity);
 }
 
 - (void)allocateBuffers {

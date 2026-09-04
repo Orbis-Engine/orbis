@@ -99,6 +99,8 @@ class OrbisLight {
     this.outerConeAngle = 0.6,
     this.sunAngularRadius = 0.263,
     this.sourceRadius = 0.1,
+    this.haloSize = 10,
+    this.haloFalloff = 80,
     this.castShadows = true,
   }) : colour = colour ?? Vector3(1, 1, 1),
        position = position ?? Vector3.zero(),
@@ -142,6 +144,15 @@ class OrbisLight {
   /// penumbra it casts.
   final double sourceRadius;
 
+  /// The glow around the disk a directional light draws in the sky, and how
+  /// quickly it fades.
+  ///
+  /// Only a directional light has a body to draw. Wide and soft reads as a sun
+  /// seen through air; tight and small reads as a moon on a clear night, which
+  /// is most of what tells the two apart at a glance.
+  final double haloSize;
+  final double haloFalloff;
+
   final bool castShadows;
 
   /// Writes this light's floats into the scene's light block.
@@ -165,19 +176,24 @@ class OrbisLight {
     into[at + 12] = outerConeAngle;
     into[at + 13] = sunAngularRadius;
     into[at + 14] = sourceRadius;
-    into[at + 15] = 0;
+    into[at + 15] = haloSize;
+    into[at + 16] = haloFalloff;
+    into[at + 17] = 0;
   }
 
   /// How many floats one light occupies.
-  static const int stride = 16;
+  static const int stride = 18;
 }
 
-/// Where the viewer is.
+/// Where the viewer is, and how much light reaches it.
 class OrbisCamera {
   const OrbisCamera({
     required this.position,
     required this.target,
     this.fieldOfView = 50,
+    this.aperture = 16,
+    this.shutterSpeed = 1 / 125,
+    this.sensitivity = 100,
   });
 
   final Vector3 position;
@@ -185,6 +201,34 @@ class OrbisCamera {
 
   /// Vertical field of view in degrees.
   final double fieldOfView;
+
+  /// The three settings that decide how much light gets in: the f-number, the
+  /// shutter speed in seconds, and the sensitivity in ISO.
+  ///
+  /// The defaults are sunny sixteen — what a camera is set to outdoors at
+  /// midday. A scene lit by anything dimmer has to say so, because the range
+  /// between a night and a noon is about seventeen stops and no single setting
+  /// covers both.
+  final double aperture;
+  final double shutterSpeed;
+  final double sensitivity;
+
+  /// The same camera somewhere else, keeping how it is set.
+  OrbisCamera copyWith({
+    Vector3? position,
+    Vector3? target,
+    double? fieldOfView,
+    double? aperture,
+    double? shutterSpeed,
+    double? sensitivity,
+  }) => OrbisCamera(
+    position: position ?? this.position,
+    target: target ?? this.target,
+    fieldOfView: fieldOfView ?? this.fieldOfView,
+    aperture: aperture ?? this.aperture,
+    shutterSpeed: shutterSpeed ?? this.shutterSpeed,
+    sensitivity: sensitivity ?? this.sensitivity,
+  );
 }
 
 /// The sky, and the light it casts on everything.
@@ -194,7 +238,7 @@ class OrbisCamera {
 /// Without it, every shadow and every surface facing away from the sun renders
 /// pure black.
 class OrbisSky {
-  OrbisSky({Vector3? colour, this.ambient = 28000})
+  OrbisSky({Vector3? colour, this.ambient = 28000, this.showBody = true})
     : colour = colour ?? Vector3(0.10, 0.12, 0.16);
 
   /// Linear RGB.
@@ -203,6 +247,14 @@ class OrbisSky {
   /// How much light the sky casts, in lux. Roughly a tenth of the sun on a
   /// clear day, which is about the ratio outdoors.
   final double ambient;
+
+  /// Whether whatever is lighting the scene is drawn in the sky as a disk.
+  ///
+  /// A sun nobody can see is a scene lit from a direction that has to be
+  /// worked out from the shadows. The disk is drawn at the light's own colour
+  /// and brightness, so a dim pale one reads as a moon without being a
+  /// separate feature.
+  final bool showBody;
 }
 
 /// Air with something in it.
@@ -370,8 +422,12 @@ class OrbisScene {
       'cameraPosition': _vector(camera.position),
       'cameraTarget': _vector(camera.target),
       'fieldOfView': camera.fieldOfView,
+      'aperture': camera.aperture,
+      'shutterSpeed': camera.shutterSpeed,
+      'sensitivity': camera.sensitivity,
       'skyColour': _vector(sky.colour),
       'ambient': sky.ambient,
+      'showBody': sky.showBody,
       'fogEnabled': fog.isVisible,
       'fogParams': fog._packed,
     };

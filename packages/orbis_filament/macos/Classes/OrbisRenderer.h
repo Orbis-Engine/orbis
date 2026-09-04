@@ -57,9 +57,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// remade, which would drop its shadow map and flicker.
 ///
 /// `kinds` is one per light — 0 directional, 1 point, 2 spot. `params` is
-/// sixteen floats each: colour, intensity, position, direction, falloff
-/// radius, inner and outer cone in radians, the sun's angular radius in
-/// degrees, and the source radius in metres. `flags` bit 1 casts shadows.
+/// eighteen floats each: colour, intensity, position, direction, falloff
+/// radius, inner and outer cone in radians, the body's angular radius in
+/// degrees, the source radius in metres, and the size and falloff of the halo
+/// around the disk a directional light draws in the sky. `flags` bit 1 casts
+/// shadows.
 - (void)applyLights:(const int64_t *)keys
               kinds:(const int32_t *)kinds
               flags:(const int32_t *)flags
@@ -80,18 +82,36 @@ NS_ASSUME_NONNULL_BEGIN
 /// quietly wrong and leaving somebody to wonder.
 @property(nonatomic, readonly) NSDictionary<NSString *, NSString *> *notes;
 
-/// Sets the sky's colour and how much light it casts, in lux.
+/// Sets the sky's colour, how much light it casts in lux, and whether the
+/// disk of whatever is lighting the scene is drawn in it.
 ///
 /// The sky and the ambient are one setting because they are one thing: a
 /// backdrop that lights nothing reads as a photograph behind the scene rather
 /// than the sky the scene is standing under.
-- (void)setSkyColour:(const float *)colour ambient:(float)ambient;
+///
+/// A colour is written into the sky that is already there. Only a change to
+/// the disk builds a new one, because that is fixed when a sky is made — and
+/// a day cycle moves the colour on every single frame.
+- (void)setSkyColour:(const float *)colour
+             ambient:(float)ambient
+            showBody:(BOOL)showBody;
 
 /// Places the camera, looking at a point, with a vertical field of view in
 /// degrees.
 - (void)setCameraPosition:(const float *)position
                    target:(const float *)target
               fieldOfView:(float)fieldOfView;
+
+/// Sets how much light reaches the camera: the f-number, the shutter speed in
+/// seconds, and the sensitivity in ISO.
+///
+/// Not decoration. A day is about seventeen stops brighter than a night lit by
+/// the moon, and on one fixed exposure either the night is black or the day is
+/// white. Every camera and every eye answers this the same way, and so does
+/// this one.
+- (void)setExposure:(float)aperture
+            shutter:(float)shutter
+        sensitivity:(float)sensitivity;
 
 /// Requests new dimensions. Safe from any thread — the work happens at the
 /// top of the next frame, on the thread that owns the engine.

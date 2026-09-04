@@ -128,11 +128,16 @@ private final class Viewport {
       }
     }
 
-    renderer.setSkyColour(scene.skyColour, ambient: scene.ambient)
+    renderer.setSkyColour(scene.skyColour,
+                          ambient: scene.ambient,
+                          showBody: scene.showBody)
     renderer.setFogEnabled(scene.fogEnabled, params: scene.fogParams)
     renderer.setCameraPosition(scene.cameraPosition,
                                target: scene.cameraTarget,
                                fieldOfView: scene.fieldOfView)
+    renderer.setExposure(scene.aperture,
+                         shutter: scene.shutterSpeed,
+                         sensitivity: scene.sensitivity)
   }
 
   /// What the scene asked for that could not be given, and why.
@@ -167,15 +172,19 @@ private struct Scene {
   let cameraPosition: [Float]
   let cameraTarget: [Float]
   let fieldOfView: Float
+  let aperture: Float
+  let shutterSpeed: Float
+  let sensitivity: Float
   let skyColour: [Float]
   let ambient: Float
+  let showBody: Bool
   let fogEnabled: Bool
   let fogParams: [Float]
 
   /// How many floats one light occupies, and how many the fog does. Both
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
-  private static let lightStride = 16
+  private static let lightStride = 18
   private static let fogStride = 10
 
   init?(arguments: [String: Any]) {
@@ -194,7 +203,11 @@ private struct Scene {
           let skyColour = (arguments["skyColour"] as? FlutterStandardTypedData)?.floats,
           let fogParams = (arguments["fogParams"] as? FlutterStandardTypedData)?.floats,
           let fogEnabled = arguments["fogEnabled"] as? Bool,
+          let showBody = arguments["showBody"] as? Bool,
           let ambient = arguments["ambient"] as? Double,
+          let aperture = arguments["aperture"] as? Double,
+          let shutterSpeed = arguments["shutterSpeed"] as? Double,
+          let sensitivity = arguments["sensitivity"] as? Double,
           let fieldOfView = arguments["fieldOfView"] as? Double else { return nil }
 
     // Every one of these lengths is a pointer the renderer will walk. A short
@@ -231,8 +244,12 @@ private struct Scene {
     self.cameraPosition = cameraPosition
     self.cameraTarget = cameraTarget
     self.fieldOfView = Float(fieldOfView)
+    self.aperture = Float(aperture)
+    self.shutterSpeed = Float(shutterSpeed)
+    self.sensitivity = Float(sensitivity)
     self.skyColour = skyColour
     self.ambient = Float(ambient)
+    self.showBody = showBody
     self.fogEnabled = fogEnabled
     self.fogParams = fogParams
   }
