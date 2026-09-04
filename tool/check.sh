@@ -1,18 +1,15 @@
 #!/bin/bash
-# Analyzes and tests everything that does not need a window.
+# Analyzes and tests everything in this repository that does not need a window.
 #
 # The renderer is excluded on purpose: it needs Flutter, a macOS host and a
-# Filament download, and it has its own proof. Everything here runs anywhere
-# Dart and a C++ compiler do.
+# Filament download, and it is checked by building it. Networking, scripting
+# and the examples live in their own repositories and check themselves.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 PACKAGES=(
   packages/orbis_codegen
   packages/orbis_core
-  packages/orbis_net
-  packages/orbis_net_dashwire
-  examples/simulation
 )
 
 failures=0

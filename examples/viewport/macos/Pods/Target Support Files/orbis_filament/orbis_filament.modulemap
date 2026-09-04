@@ -1,6 +1,0 @@
-framework module orbis_filament {
-  umbrella header "orbis_filament-umbrella.h"
-
-  export *
-  module * { export * }
-}
