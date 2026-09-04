@@ -322,6 +322,8 @@ void main() {
     });
   });
 
+  _interpolationTests();
+
   group('ownership decides who may write what', () {
     late Peer host;
     late Peer client;
@@ -466,6 +468,123 @@ void main() {
         }),
         throwsArgumentError,
       );
+    });
+  });
+}
+
+void _interpolationTests() {
+  group('interpolation', () {
+    late Peer host;
+    late Peer client;
+    late LoopbackLink link;
+    late NetHost netHost;
+    late NetClient netClient;
+    late double now;
+
+    setUp(() {
+      now = 0;
+      host = Peer(reverseRegistrationOrder: false);
+      client = Peer(reverseRegistrationOrder: true);
+      link = LoopbackLink();
+      netHost =
+          NetHost(world: host.world, set: host.set, networkId: host.networkId);
+      netClient = NetClient(
+        world: client.world,
+        set: client.set,
+        networkId: client.networkId,
+        transport: link.client,
+        interpolationDelay: const Duration(milliseconds: 100),
+        clock: () => now,
+      );
+      netHost.addClient('player-1', link.host);
+    });
+
+    tearDown(() async {
+      await netClient.dispose();
+      await netHost.dispose();
+      await link.close();
+      client.dispose();
+      host.dispose();
+    });
+
+    test('nothing is written until the world is advanced', () async {
+      final entity = host.world.createEntity();
+      final networkId = netHost.spawn(entity);
+      host.world.add(entity, host.position, Float32List.fromList([10, 0, 0]));
+      netHost.publish();
+      await settle();
+
+      expect(netClient.isInterpolating, isTrue);
+      expect(netClient.entityFor(networkId), isNull,
+          reason: 'an interpolating client shows the past, not the newest '
+              'message the moment it lands');
+
+      netClient.advance();
+      expect(netClient.entityFor(networkId), isNotNull);
+    });
+
+    test('a float component blends between two states', () async {
+      final entity = host.world.createEntity();
+      final networkId = netHost.spawn(entity);
+      host.world.add(entity, host.position, Float32List.fromList([0, 0, 0]));
+
+      netHost.publish();
+      await settle();
+
+      now = 0.1;
+      host.world.float32Of(entity, host.position)![0] = 10;
+      netHost.publish();
+      await settle();
+
+      // Render time is now 0.2 - 0.1 = 0.1, exactly the second state.
+      now = 0.2;
+      netClient.advance();
+      final replica = netClient.entityFor(networkId)!;
+      expect(client.world.float32Of(replica, client.position)![0], 10);
+
+      // Halfway between the two arrivals: halfway between the two positions.
+      now = 0.15;
+      netClient.advance();
+      expect(client.world.float32Of(replica, client.position)![0], closeTo(5, 1e-4));
+    });
+
+    test('a non-float component takes the earlier value, never a blend', () async {
+      final entity = host.world.createEntity();
+      final networkId = netHost.spawn(entity);
+      host.world.add(entity, host.position, Float32List.fromList([0, 0, 0]));
+      host.world.add(entity, host.health, Int32List.fromList([100]));
+      netHost.publish();
+      await settle();
+
+      now = 0.1;
+      ByteData.sublistView(host.world.bytesOf(entity, host.health)!)
+          .setInt32(0, 50, Endian.little);
+      netHost.publish();
+      await settle();
+
+      now = 0.15;
+      netClient.advance();
+      final replica = netClient.entityFor(networkId)!;
+      final health = ByteData.sublistView(
+              client.world.bytesOf(replica, client.health)!)
+          .getInt32(0, Endian.little);
+      expect(health, 100,
+          reason: 'half of a hundred and fifty is not a health value');
+    });
+
+    test('past the newest state it holds rather than extrapolating', () async {
+      final entity = host.world.createEntity();
+      final networkId = netHost.spawn(entity);
+      host.world.add(entity, host.position, Float32List.fromList([7, 0, 0]));
+      netHost.publish();
+      await settle();
+
+      now = 10;
+      netClient.advance();
+      final replica = netClient.entityFor(networkId)!;
+      expect(client.world.float32Of(replica, client.position)![0], 7,
+          reason: 'the authority has gone quiet; inventing motion would be a '
+              'guess presented as fact');
     });
   });
 }
