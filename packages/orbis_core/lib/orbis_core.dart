@@ -7,4 +7,12 @@
 library;
 
 export 'src/world.dart'
-    show Chunk, ComponentKind, ComponentType, DeadEntityError, Query, World;
+    show
+        Chunk,
+        ComponentKind,
+        ComponentType,
+        DeadEntityError,
+        Query,
+        TransformComponents,
+        World,
+        transform;

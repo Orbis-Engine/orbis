@@ -204,6 +204,50 @@ class Query {
   }
 }
 
+/// The transform components the core provides.
+///
+/// A scene graph is a tree and an archetype store is flat, so the hierarchy is
+/// a component rather than a structure: an entity names its parent and the
+/// engine derives world space. Reparenting is therefore a write, not a move
+/// through a graph, and the storage stays free of any notion of a tree.
+class TransformComponents {
+  const TransformComponents({
+    required this.local,
+    required this.world,
+    required this.parent,
+  });
+
+  /// Ten floats: translation, rotation as a quaternion, scale.
+  final ComponentType local;
+
+  /// Sixteen floats, column-major, as glTF and Filament both expect.
+  /// Derived — writing it is overwritten by the next propagation.
+  final ComponentType world;
+
+  /// The parent's handle. Absent means the entity is a root.
+  final ComponentType parent;
+}
+
+/// Builds a local transform without pulling in a maths package for three
+/// translations and an identity rotation.
+Float32List transform({
+  double x = 0,
+  double y = 0,
+  double z = 0,
+  double rotationX = 0,
+  double rotationY = 0,
+  double rotationZ = 0,
+  double rotationW = 1,
+  double scaleX = 1,
+  double scaleY = 1,
+  double scaleZ = 1,
+}) =>
+    Float32List.fromList([
+      x, y, z,
+      rotationX, rotationY, rotationZ, rotationW,
+      scaleX, scaleY, scaleZ,
+    ]);
+
 /// An entity-component world.
 ///
 /// Dart owns the lifetime and drives the frame; the storage and the systems
@@ -315,6 +359,35 @@ class World {
     });
     return Query._(pointer, List.unmodifiable(types));
   }
+
+  /// Registers the built-in transform components, or returns the existing ids.
+  TransformComponents registerTransforms() {
+    final ids = native.transformRegister(_alive);
+    return TransformComponents(
+      local: ComponentType(
+          id: ids.local,
+          name: 'orbis.LocalTransform',
+          kind: ComponentKind.float32,
+          arity: 10),
+      world: ComponentType(
+          id: ids.world,
+          name: 'orbis.WorldTransform',
+          kind: ComponentKind.float32,
+          arity: 16),
+      parent: ComponentType(
+          id: ids.parent,
+          name: 'orbis.Parent',
+          kind: ComponentKind.int64,
+          arity: 1),
+    );
+  }
+
+  /// Derives every world transform from local transforms and parent links,
+  /// returning how many were written.
+  ///
+  /// Each entity is resolved once however many children hang off it, so a deep
+  /// chain costs its depth rather than its depth times its breadth.
+  int propagateTransforms() => native.transformPropagate(_alive);
 
   /// Runs the native systems once. Dart systems run around this, over views.
   void tick(double delta) => native.worldTick(_alive, delta);

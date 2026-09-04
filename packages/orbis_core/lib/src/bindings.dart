@@ -115,6 +115,31 @@ external int queryChunkComponents(Pointer<OrbisQueryStruct> query, int chunk,
 external Pointer<Void> queryChunkComponentColumn(
     Pointer<OrbisQueryStruct> query, int chunk, int component);
 
+/// The three component ids the core's transform support registers.
+final class OrbisTransformsStruct extends Struct {
+  @Uint32()
+  external int local;
+
+  @Uint32()
+  external int world;
+
+  @Uint32()
+  external int parent;
+}
+
+@Native<OrbisTransformsStruct Function(Pointer<OrbisWorldStruct>)>(
+    symbol: 'orbis_transform_register', assetId: kOrbisCoreAsset)
+external OrbisTransformsStruct transformRegister(
+    Pointer<OrbisWorldStruct> world);
+
+@Native<Uint32 Function(Pointer<OrbisWorldStruct>)>(
+    symbol: 'orbis_transform_propagate', assetId: kOrbisCoreAsset)
+external int transformPropagate(Pointer<OrbisWorldStruct> world);
+
+@Native<Void Function(Pointer<Float>, Pointer<Float>)>(
+    symbol: 'orbis_transform_compose', assetId: kOrbisCoreAsset)
+external void transformCompose(Pointer<Float> trs, Pointer<Float> out);
+
 @Native<Void Function(Pointer<OrbisWorldStruct>, Double)>(
     symbol: 'orbis_world_tick', assetId: kOrbisCoreAsset)
 external void worldTick(Pointer<OrbisWorldStruct> world, double delta);
