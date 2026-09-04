@@ -9,7 +9,11 @@ Future<void> settle() => Future<void>.delayed(Duration.zero);
 
 /// One side of a session: a world plus the components it replicates.
 class Peer {
-  Peer({required bool reverseRegistrationOrder}) {
+  Peer({
+    required bool reverseRegistrationOrder,
+    bool includeOwner = false,
+    Set<String> ownerWritable = const {},
+  }) {
     world = World();
     // Registering in opposite orders on the two peers proves the wire does not
     // depend on local component ids.
@@ -28,7 +32,11 @@ class Peer {
           kind: ComponentKind.float32, arity: 3);
       health = world.registerComponent('Health', kind: ComponentKind.int32);
     }
-    set = ReplicationSet([position, velocity, health]);
+    owner = world.registerComponent('Owner', kind: ComponentKind.uint32);
+    set = ReplicationSet(
+      [position, velocity, health, if (includeOwner) owner],
+      ownerWritable: ownerWritable,
+    );
   }
 
   late final World world;
@@ -36,6 +44,7 @@ class Peer {
   late final ComponentType position;
   late final ComponentType velocity;
   late final ComponentType health;
+  late final ComponentType owner;
   late final ReplicationSet set;
 
   void dispose() => world.dispose();
@@ -310,6 +319,153 @@ void main() {
       final replica = netClient.entityFor(count)!;
       expect(client.world.float32Of(replica, client.position)![0],
           (count - 1) * 1.0);
+    });
+  });
+
+  group('ownership decides who may write what', () {
+    late Peer host;
+    late Peer client;
+    late LoopbackLink link;
+    late NetHost netHost;
+    late NetClient netClient;
+
+    setUp(() {
+      // Velocity is the client's to drive; position is the authority's answer
+      // about where that got them.
+      host = Peer(
+          reverseRegistrationOrder: false,
+          includeOwner: true,
+          ownerWritable: {'Velocity'});
+      client = Peer(
+          reverseRegistrationOrder: true,
+          includeOwner: true,
+          ownerWritable: {'Velocity'});
+      link = LoopbackLink();
+      netHost = NetHost(
+        world: host.world,
+        set: host.set,
+        networkId: host.networkId,
+        ownerComponent: host.owner,
+      );
+      netClient = NetClient(
+        world: client.world,
+        set: client.set,
+        networkId: client.networkId,
+        transport: link.client,
+      );
+      netHost.addClient('player-1', link.host);
+    });
+
+    tearDown(() async {
+      await netClient.dispose();
+      await netHost.dispose();
+      await link.close();
+      client.dispose();
+      host.dispose();
+    });
+
+    Future<int> spawnOwned({String? owner = 'player-1'}) async {
+      final entity = host.world.createEntity();
+      final networkId = netHost.spawn(entity, owner: owner);
+      host.world.add(entity, host.position, Float32List.fromList([0, 0, 0]));
+      host.world.add(entity, host.velocity, Float32List.fromList([0, 0, 0]));
+      netHost.publish();
+      await settle();
+      return networkId;
+    }
+
+    test('the owner may write an owner-writable component', () async {
+      final networkId = await spawnOwned();
+
+      netClient.sendInput({
+        networkId: {client.velocity: Float32List.fromList([3, 0, 0])},
+      });
+      await settle();
+
+      expect(netHost.acceptedInputs, 1);
+      expect(netHost.rejections, isEmpty);
+
+      // The authority's own world now carries what the client asked for.
+      final authoritative = netHost.entityFor(networkId)!;
+      expect(host.world.float32Of(authoritative, host.velocity), [3, 0, 0]);
+    });
+
+    test('a client may not write a component the authority reserves', () async {
+      final networkId = await spawnOwned();
+
+      netClient.sendInput({
+        networkId: {client.position: Float32List.fromList([999, 0, 0])},
+      });
+      await settle();
+
+      expect(netHost.acceptedInputs, 0);
+      expect(netHost.rejections[InputRejection.notWritable], 1);
+      expect(host.world.float32Of(netHost.entityFor(networkId)!, host.position),
+          [0, 0, 0],
+          reason: 'the reserved component must be untouched');
+    });
+
+    test('a client may not write an entity it does not own', () async {
+      final networkId = await spawnOwned(owner: null);
+
+      netClient.sendInput({
+        networkId: {client.velocity: Float32List.fromList([3, 0, 0])},
+      });
+      await settle();
+
+      expect(netHost.acceptedInputs, 0);
+      expect(netHost.rejections[InputRejection.notOwned], 1);
+    });
+
+    test('an unknown entity is refused rather than crashing', () async {
+      await spawnOwned();
+      netClient.sendInput({
+        9999: {client.velocity: Float32List.fromList([1, 0, 0])},
+      });
+      await settle();
+      expect(netHost.rejections[InputRejection.unknownEntity], 1);
+    });
+
+    test('a malformed payload is counted, not thrown', () async {
+      final networkId = await spawnOwned();
+      // A row claiming velocity but carrying too few bytes.
+      final bit = host.set.bitOf(host.velocity)!;
+      link.client.send(encodeInput(InputMessage(tick: 0, entries: [
+        InputEntry(networkId: networkId, mask: 1 << bit, row: Uint8List(4)),
+      ])));
+      await settle();
+
+      expect(netHost.rejections[InputRejection.malformed], 1);
+      expect(netHost.acceptedInputs, 0);
+    });
+
+    test('ownership replicates so a client knows what it drives', () async {
+      final networkId = await spawnOwned();
+      final replica = netClient.entityFor(networkId)!;
+      final ownerBytes = client.world.bytesOf(replica, client.owner)!;
+      expect(ByteData.sublistView(ownerBytes).getUint32(0, Endian.little), 1,
+          reason: 'the first client is index 1; 0 means the authority');
+    });
+
+    test('a departing client loses what it owned', () async {
+      final networkId = await spawnOwned();
+      expect(netHost.ownerOf(networkId), 'player-1');
+
+      await netHost.removeClient('player-1');
+      expect(netHost.ownerOf(networkId), isNull,
+          reason: 'ownership must not survive under a reconnectable name');
+    });
+
+    test('writing an unreplicated component is a programming error', () async {
+      final networkId = await spawnOwned();
+      final stray =
+          client.world.registerComponent('Stray', kind: ComponentKind.int32);
+      expect(
+        () => netClient.sendInput({
+          networkId: {stray: Int32List.fromList([1])},
+        }),
+        throwsArgumentError,
+      );
     });
   });
 }

@@ -5,6 +5,7 @@ import 'package:orbis_core/orbis_core.dart';
 
 import 'ack.dart';
 import 'codec.dart';
+import 'input.dart';
 import 'replication.dart';
 import 'transport.dart';
 
@@ -58,6 +59,42 @@ class NetClient {
   int? entityFor(int networkId) => _entities[networkId];
 
   Iterable<int> get networkIds => _entities.keys;
+
+  /// Proposes writes to entities this client owns.
+  ///
+  /// The authority decides whether to honour them: only components declared
+  /// owner-writable, and only on entities it agrees this client owns. Anything
+  /// else is counted and dropped there rather than trusted here.
+  void sendInput(Map<int, Map<ComponentType, TypedData>> writes) {
+    final entries = <InputEntry>[];
+
+    for (final entity in writes.entries) {
+      final components = entity.value;
+      var mask = 0;
+      for (final type in components.keys) {
+        final bit = set.bitOf(type);
+        if (bit == null) {
+          throw ArgumentError('${type.name} is not a replicated component.');
+        }
+        mask |= 1 << bit;
+      }
+
+      final row = Uint8List(set.strideOf(mask));
+      var offset = 0;
+      for (final bit in set.bitsOf(mask)) {
+        final type = set.atBit(bit).type;
+        final value = components[type]!;
+        row.setRange(offset, offset + type.byteSize,
+            value.buffer.asUint8List(value.offsetInBytes, type.byteSize));
+        offset += type.byteSize;
+      }
+
+      entries.add(InputEntry(networkId: entity.key, mask: mask, row: row));
+    }
+
+    _transport.send(
+        encodeInput(InputMessage(tick: _lastAppliedTick, entries: entries)));
+  }
 
   void _receive(Uint8List message) {
     final snapshot = _codec.decode(message);
