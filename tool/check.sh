@@ -11,6 +11,7 @@ PACKAGES=(
   packages/orbis_camera
   packages/orbis_codegen
   packages/orbis_core
+  packages/orbis_light
 )
 
 failures=0
