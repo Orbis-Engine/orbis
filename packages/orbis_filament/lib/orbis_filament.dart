@@ -5,4 +5,5 @@
 library;
 
 export 'src/orbis_view.dart' show OrbisView;
-export 'src/scene.dart' show OrbisCamera, OrbisObject, OrbisScene, OrbisSun;
+export 'src/scene.dart'
+    show OrbisCamera, OrbisObject, OrbisScene, OrbisSky, OrbisSun;

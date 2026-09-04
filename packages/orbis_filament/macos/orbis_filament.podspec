@@ -30,9 +30,16 @@ without a trip through the CPU.
   # flags, because a static pod archives instead of linking and flags set on
   # the pod target never reach the application that consumes it.
   lib = 'third_party/filament-mac/filament/lib/arm64'
+  #
+  # The second row is what gltfio pulls in: the loader itself, the pre-built
+  # ubershaders it makes materials from, and the decoders for the formats a
+  # glTF file can carry its geometry and textures in.
   s.vendored_libraries = %w[
     filament backend bluegl bluevk filabridge filaflat
     utils geometry smol-v ibl abseil zstd
+
+    gltfio_core uberarchive uberzlib dracodec meshoptimizer ktxreader
+    stb basis_transcoder mikktspace
   ].map { |name| "#{lib}/lib#{name}.a" }
 
   s.pod_target_xcconfig = {

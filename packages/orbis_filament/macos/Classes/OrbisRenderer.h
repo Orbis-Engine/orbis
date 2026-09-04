@@ -27,10 +27,30 @@ NS_ASSUME_NONNULL_BEGIN
 /// wrong to notice.
 ///
 /// `transforms` is `count` column-major 4x4 matrices; `colours` is `count`
-/// linear RGB triples.
+/// linear RGB triples; `meshes` is `count` indices into `paths`, where -1
+/// means the built-in cube.
+///
+/// Meshes named here are loaded once and kept. A scene arrives on every drag
+/// of a slider, and re-reading a glTF file at that rate would make the editor
+/// unusable — so the parsed asset outlives the scene that mentioned it.
 - (void)setObjects:(const float *)transforms
            colours:(const float *)colours
+            meshes:(const int32_t *)meshes
+             paths:(NSArray<NSString *> *)paths
              count:(uint32_t)count;
+
+/// Files named by a scene that could not be loaded, and why.
+///
+/// Reported back rather than logged, so an editor can say which asset is
+/// missing instead of drawing a placeholder and leaving somebody to wonder.
+@property(nonatomic, readonly) NSDictionary<NSString *, NSString *> *meshErrors;
+
+/// Sets the sky's colour and how much light it casts, in lux.
+///
+/// The sky and the ambient are one setting because they are one thing: a
+/// backdrop that lights nothing reads as a photograph behind the scene rather
+/// than the sky the scene is standing under.
+- (void)setSkyColour:(const float *)colour ambient:(float)ambient;
 
 /// Sets the sun's direction, colour and illuminance in lux.
 - (void)setSunDirection:(const float *)direction

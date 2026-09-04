@@ -86,14 +86,20 @@ private final class Viewport {
     // zero, so an empty scene borrows a valid address it will not touch.
     let transforms = scene.count == 0 ? [Float(0)] : scene.transforms
     let colours = scene.count == 0 ? [Float(0)] : scene.colours
+    let meshes = scene.count == 0 ? [Int32(-1)] : scene.meshes
 
     transforms.withUnsafeBufferPointer { transformPointer in
       colours.withUnsafeBufferPointer { colourPointer in
-        renderer.setObjects(transformPointer.baseAddress!,
-                            colours: colourPointer.baseAddress!,
-                            count: UInt32(scene.count))
+        meshes.withUnsafeBufferPointer { meshPointer in
+          renderer.setObjects(transformPointer.baseAddress!,
+                              colours: colourPointer.baseAddress!,
+                              meshes: meshPointer.baseAddress!,
+                              paths: scene.paths,
+                              count: UInt32(scene.count))
+        }
       }
     }
+    renderer.setSkyColour(scene.skyColour, ambient: scene.ambient)
     renderer.setSunDirection(scene.sunDirection,
                              colour: scene.sunColour,
                              illuminance: scene.sunIlluminance)
@@ -101,6 +107,9 @@ private final class Viewport {
                                target: scene.cameraTarget,
                                fieldOfView: scene.fieldOfView)
   }
+
+  /// Files a scene named that could not be loaded, and why.
+  var meshErrors: [String: String] { renderer.meshErrors }
 
   func dispose() {
     if let displayLink {
@@ -119,21 +128,29 @@ private struct Scene {
   let count: Int
   let transforms: [Float]
   let colours: [Float]
+  let meshes: [Int32]
+  let paths: [String]
   let sunDirection: [Float]
   let sunColour: [Float]
   let sunIlluminance: Float
   let cameraPosition: [Float]
   let cameraTarget: [Float]
   let fieldOfView: Float
+  let skyColour: [Float]
+  let ambient: Float
 
   init?(arguments: [String: Any]) {
     guard let transforms = (arguments["transforms"] as? FlutterStandardTypedData)?.floats,
           let colours = (arguments["colours"] as? FlutterStandardTypedData)?.floats,
+          let meshes = (arguments["meshes"] as? FlutterStandardTypedData)?.int32s,
+          let paths = arguments["meshPaths"] as? [String],
           let sunDirection = (arguments["sunDirection"] as? FlutterStandardTypedData)?.floats,
           let sunColour = (arguments["sunColour"] as? FlutterStandardTypedData)?.floats,
           let cameraPosition = (arguments["cameraPosition"] as? FlutterStandardTypedData)?.floats,
           let cameraTarget = (arguments["cameraTarget"] as? FlutterStandardTypedData)?.floats,
+          let skyColour = (arguments["skyColour"] as? FlutterStandardTypedData)?.floats,
           let illuminance = arguments["sunIlluminance"] as? Double,
+          let ambient = arguments["ambient"] as? Double,
           let fieldOfView = arguments["fieldOfView"] as? Double else { return nil }
 
     // Every one of these lengths is a pointer the renderer will walk. A short
@@ -141,18 +158,26 @@ private struct Scene {
     // trusted.
     let count = transforms.count / 16
     guard transforms.count == count * 16, colours.count == count * 3,
-          sunDirection.count == 3, sunColour.count == 3,
+          meshes.count == count,
+          // Every index is used to subscript `paths` in C++. One out of range
+          // is a read past the end there rather than a missing model here.
+          meshes.allSatisfy({ $0 < Int32(paths.count) }),
+          sunDirection.count == 3, sunColour.count == 3, skyColour.count == 3,
           cameraPosition.count == 3, cameraTarget.count == 3 else { return nil }
 
     self.count = count
     self.transforms = transforms
     self.colours = colours
+    self.meshes = meshes
+    self.paths = paths
     self.sunDirection = sunDirection
     self.sunColour = sunColour
     self.sunIlluminance = Float(illuminance)
     self.cameraPosition = cameraPosition
     self.cameraTarget = cameraTarget
     self.fieldOfView = Float(fieldOfView)
+    self.skyColour = skyColour
+    self.ambient = Float(ambient)
   }
 }
 
@@ -160,6 +185,11 @@ extension FlutterStandardTypedData {
   fileprivate var floats: [Float]? {
     guard type == .float32 else { return nil }
     return data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+  }
+
+  fileprivate var int32s: [Int32]? {
+    guard type == .int32 else { return nil }
+    return data.withUnsafeBytes { Array($0.bindMemory(to: Int32.self)) }
   }
 }
 
@@ -225,8 +255,14 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
                             details: nil))
         return
       }
-      viewports[Int64(textureId)]?.apply(scene: scene)
-      result(nil)
+      guard let viewport = viewports[Int64(textureId)] else {
+        result(nil)
+        return
+      }
+      viewport.apply(scene: scene)
+      // Returned rather than logged: an editor can name the asset it could not
+      // load instead of drawing a placeholder and leaving somebody guessing.
+      result(viewport.meshErrors)
 
     case "dispose":
       guard let args = call.arguments as? [String: Any],

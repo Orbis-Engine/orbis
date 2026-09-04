@@ -6,6 +6,7 @@
 #include <filament/Camera.h>
 #include <filament/Engine.h>
 #include <filament/IndexBuffer.h>
+#include <filament/IndirectLight.h>
 #include <filament/LightManager.h>
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
@@ -19,9 +20,18 @@
 #include <filament/View.h>
 #include <filament/Viewport.h>
 #include <geometry/SurfaceOrientation.h>
+#include <gltfio/AssetLoader.h>
+#include <gltfio/FilamentAsset.h>
+#include <gltfio/FilamentInstance.h>
+#include <gltfio/MaterialProvider.h>
+#include <gltfio/ResourceLoader.h>
+#include <gltfio/TextureProvider.h>
+#include <gltfio/materials/uberarchive.h>
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
 
+#include <map>
+#include <string>
 #include <vector>
 #include <utils/Panic.h>
 
@@ -29,8 +39,23 @@
 
 #include "generated/lit_material.h"
 
+
 using namespace filament;
 using namespace filament::math;
+
+/// One loaded glTF file, and the copies of it currently in the scene.
+///
+/// Instances rather than one asset per object: a scene with fifty of the same
+/// crate parses the file once and shares its geometry and materials.
+struct Mesh {
+  filament::gltfio::FilamentAsset *asset = nullptr;
+  std::vector<filament::gltfio::FilamentInstance *> instances;
+};
+
+/// The ambient the scene starts with: the skybox's own colour, so an
+/// unconfigured scene is lit by the sky it appears to be standing under.
+static constexpr float3 kDefaultAmbient = {0.10f, 0.12f, 0.16f};
+static constexpr float kDefaultAmbientIntensity = 28000.0f;
 
 namespace {
 
@@ -101,9 +126,26 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   utils::Entity _cameraEntity;
   std::vector<utils::Entity> _objects;
   std::vector<MaterialInstance *> _instances;
+
+  gltfio::AssetLoader *_assetLoader;
+  gltfio::ResourceLoader *_resourceLoader;
+  gltfio::MaterialProvider *_materialProvider;
+  gltfio::TextureProvider *_stbTextures;
+  gltfio::TextureProvider *_ktxTextures;
+
+  /// Loaded glTF files, by path. Kept for the life of the renderer: a scene
+  /// arrives on every drag, and the parse is the expensive part.
+  std::map<std::string, Mesh> _meshes;
+
+  /// Instances currently in the scene, so they can be taken out again without
+  /// walking every mesh.
+  std::vector<gltfio::FilamentInstance *> _placed;
+
+  NSMutableDictionary<NSString *, NSString *> *_meshErrors;
   utils::Entity _light;
   bool _sceneIsOwnedByHost;
   Skybox *_skybox;
+  IndirectLight *_ambient;
   Material *_material;
   VertexBuffer *_vertexBuffer;
   IndexBuffer *_indexBuffer;
@@ -168,6 +210,10 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _skybox = Skybox::Builder().color({0.10f, 0.12f, 0.16f, 1.0f}).build(*_engine);
   _scene->setSkybox(_skybox);
 
+  [self setAmbientColour:kDefaultAmbient intensity:kDefaultAmbientIntensity];
+
+  _meshErrors = [NSMutableDictionary dictionary];
+  [self startAssetLoader];
   [self buildGeometry];
   [self allocateBuffers];
   [self applyViewportSize];
@@ -176,7 +222,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   // recognisably working rather than indistinguishable from a broken one.
   const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
   const float colour[3] = {0.85f, 0.28f, 0.18f};
-  [self setObjects:identity colours:colour count:1];
+  const int32_t noMesh[1] = {-1};
+  [self setObjects:identity colours:colour meshes:noMesh paths:@[] count:1];
 }
 
 - (void)buildGeometry {
@@ -242,6 +289,122 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _scene->addEntity(_light);
 }
 
+- (void)setAmbientColour:(float3)colour intensity:(float)intensity {
+  if (_disposed) return;
+
+  // Replaced rather than mutated: an IndirectLight's irradiance is fixed at
+  // build time.
+  if (_ambient) {
+    _scene->setIndirectLight(nullptr);
+    _engine->destroy(_ambient);
+    _ambient = nullptr;
+  }
+
+  // One band, which is a constant term — light arriving equally from every
+  // direction. A real environment map would vary with direction and is what
+  // this becomes once there is an asset pipeline to bake one; until then the
+  // choice is between flat ambient and none, and none means every shadow and
+  // every surface facing away from the sun renders pure black.
+  //
+  // The band-0 basis function is 1/(2*sqrt(pi)), so dividing by it makes the
+  // coefficient mean the irradiance somebody actually asked for.
+  constexpr float kBand0 = 0.28209479177f;  // 1 / (2 * sqrt(pi))
+  const float3 sh[1] = {colour / kBand0};
+
+  _ambient = IndirectLight::Builder()
+                 .irradiance(1, sh)
+                 .intensity(intensity)
+                 .build(*_engine);
+  _scene->setIndirectLight(_ambient);
+}
+
+- (void)startAssetLoader {
+  _materialProvider = gltfio::createUbershaderProvider(
+      _engine, UBERARCHIVE_DEFAULT_DATA, UBERARCHIVE_DEFAULT_SIZE);
+
+  gltfio::AssetConfiguration assetConfig{};
+  assetConfig.engine = _engine;
+  assetConfig.materials = _materialProvider;
+  _assetLoader = gltfio::AssetLoader::create(assetConfig);
+
+  gltfio::ResourceConfiguration resourceConfig{};
+  resourceConfig.engine = _engine;
+  // Well-formed files do not need this; a file exported by something careless
+  // does, and a character whose weights do not sum to one deforms subtly
+  // wrongly in a way that is very hard to trace back to the exporter.
+  resourceConfig.normalizeSkinningWeights = true;
+  _resourceLoader = new gltfio::ResourceLoader(resourceConfig);
+
+  _stbTextures = gltfio::createStbProvider(_engine);
+  _ktxTextures = gltfio::createKtx2Provider(_engine);
+  _resourceLoader->addTextureProvider("image/png", _stbTextures);
+  _resourceLoader->addTextureProvider("image/jpeg", _stbTextures);
+  _resourceLoader->addTextureProvider("image/ktx2", _ktxTextures);
+}
+
+/// Loads a glTF or glb file, once.
+///
+/// Returns null and records why if it cannot be read, so the caller draws the
+/// placeholder rather than nothing at all.
+- (Mesh *)meshAtPath:(const std::string &)path {
+  auto found = _meshes.find(path);
+  if (found != _meshes.end()) {
+    return found->second.asset ? &found->second : nullptr;
+  }
+
+  // Recorded either way, so a missing file is read from disk once rather than
+  // on every frame of a drag.
+  Mesh &entry = _meshes[path];
+
+  NSString *native = [NSString stringWithUTF8String:path.c_str()];
+  NSData *data = [NSData dataWithContentsOfFile:native];
+  if (data == nil) {
+    _meshErrors[native] = @"The file could not be read.";
+    return nullptr;
+  }
+
+  gltfio::FilamentInstance *first = nullptr;
+  entry.asset = _assetLoader->createInstancedAsset(
+      static_cast<const uint8_t *>(data.bytes),
+      static_cast<uint32_t>(data.length), &first, 1);
+
+  if (entry.asset == nullptr) {
+    _meshErrors[native] = @"This is not a glTF file that Filament can read.";
+    return nullptr;
+  }
+
+  // The base path, so a .gltf can find the .bin and the textures sitting
+  // beside it. A .glb carries everything and does not need it.
+  const std::string base = path.substr(0, path.find_last_of('/') + 1);
+  _resourceLoader->setConfiguration({
+      .engine = _engine,
+      .gltfPath = base.c_str(),
+      .normalizeSkinningWeights = true,
+  });
+
+  if (!_resourceLoader->loadResources(entry.asset)) {
+    _meshErrors[native] = @"Its geometry or textures could not be loaded.";
+  }
+
+  // Deliberately not calling releaseSourceData: more instances can only be
+  // made while it is still there, and a second object using this mesh is the
+  // ordinary case rather than the exception.
+  entry.instances.push_back(first);
+  return &entry;
+}
+
+/// The nth copy of a mesh, making more as a scene asks for them.
+- (gltfio::FilamentInstance *)instanceOf:(Mesh *)mesh at:(size_t)index {
+  while (mesh->instances.size() <= index) {
+    auto *extra = _assetLoader->createInstance(mesh->asset);
+    // A refusal here means no more instances are possible; the objects beyond
+    // this point fall back to the placeholder rather than vanishing.
+    if (extra == nullptr) return nullptr;
+    mesh->instances.push_back(extra);
+  }
+  return mesh->instances[index];
+}
+
 - (void)clearObjects {
   auto &entities = utils::EntityManager::get();
   for (utils::Entity object : _objects) {
@@ -254,17 +417,51 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   }
   _objects.clear();
   _instances.clear();
+
+  for (auto *instance : _placed) {
+    _scene->removeEntities(instance->getEntities(), instance->getEntityCount());
+  }
+  _placed.clear();
 }
 
 - (void)setObjects:(const float *)transforms
            colours:(const float *)colours
+            meshes:(const int32_t *)meshes
+             paths:(NSArray<NSString *> *)paths
              count:(uint32_t)count {
   if (_disposed) return;
   [self clearObjects];
 
   auto &transformManager = _engine->getTransformManager();
 
+  // How many objects have already asked for each mesh this frame, so the
+  // second crate gets the second instance rather than moving the first.
+  std::map<std::string, size_t> used;
+
   for (uint32_t i = 0; i < count; i++) {
+    mat4f placement;
+    std::memcpy(&placement, transforms + i * 16, sizeof(float) * 16);
+
+    const int32_t meshIndex = meshes[i];
+    if (meshIndex >= 0 && meshIndex < static_cast<int32_t>(paths.count)) {
+      const std::string path = paths[meshIndex].UTF8String;
+      Mesh *mesh = [self meshAtPath:path];
+      if (mesh != nullptr) {
+        auto *instance = [self instanceOf:mesh at:used[path]];
+        if (instance != nullptr) {
+          used[path] += 1;
+          transformManager.setTransform(
+              transformManager.getInstance(instance->getRoot()), placement);
+          _scene->addEntities(instance->getEntities(),
+                              instance->getEntityCount());
+          _placed.push_back(instance);
+          continue;
+        }
+      }
+      // Fell through: the file is missing or unreadable, so the object is
+      // drawn as the placeholder cube. Somewhere visible beats nowhere.
+    }
+
     // One instance per object, because the colour is a material parameter and
     // sharing an instance would make every object the last one's colour.
     MaterialInstance *instance = _material->createInstance();
@@ -285,15 +482,32 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
         .castShadows(true)
         .build(*_engine, object);
 
-    mat4f matrix;
-    std::memcpy(&matrix, transforms + i * 16, sizeof(float) * 16);
-    transformManager.setTransform(transformManager.getInstance(object), matrix);
+    transformManager.setTransform(transformManager.getInstance(object),
+                                  placement);
 
     _scene->addEntity(object);
     _objects.push_back(object);
   }
 
   _sceneIsOwnedByHost = true;
+}
+
+- (void)setSkyColour:(const float *)colour ambient:(float)ambient {
+  if (_disposed) return;
+
+  const float3 sky = {colour[0], colour[1], colour[2]};
+  if (_skybox) {
+    _scene->setSkybox(nullptr);
+    _engine->destroy(_skybox);
+  }
+  _skybox = Skybox::Builder()
+                .color({sky.x, sky.y, sky.z, 1.0f})
+                .build(*_engine);
+  _scene->setSkybox(_skybox);
+
+  // Lit by the sky it stands under, which is what makes the two read as one
+  // environment rather than a backdrop behind an unrelated scene.
+  [self setAmbientColour:sky intensity:ambient];
 }
 
 - (void)setSunDirection:(const float *)direction
@@ -478,6 +692,20 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   // teardown mirrors construction in reverse.
   [self clearObjects];
 
+  for (auto &pair : _meshes) {
+    if (pair.second.asset) _assetLoader->destroyAsset(pair.second.asset);
+  }
+  _meshes.clear();
+
+  delete _resourceLoader;
+  _resourceLoader = nullptr;
+  gltfio::AssetLoader::destroy(&_assetLoader);
+  _materialProvider->destroyMaterials();
+  delete _materialProvider;
+  _materialProvider = nullptr;
+  delete _stbTextures;
+  delete _ktxTextures;
+
   auto &entities = utils::EntityManager::get();
   _scene->remove(_light);
   _engine->destroy(_light);
@@ -485,6 +713,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _engine->destroyCameraComponent(_cameraEntity);
   entities.destroy(_cameraEntity);
   _engine->destroy(_skybox);
+  if (_ambient) _engine->destroy(_ambient);
   _engine->destroy(_material);
   _engine->destroy(_vertexBuffer);
   _engine->destroy(_indexBuffer);
@@ -494,6 +723,10 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _engine->destroy(_renderer);
   Engine::destroy(&_engine);
   _engine = nullptr;
+}
+
+- (NSDictionary<NSString *, NSString *> *)meshErrors {
+  return [_meshErrors copy];
 }
 
 - (void)dealloc {

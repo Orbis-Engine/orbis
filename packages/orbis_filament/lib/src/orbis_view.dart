@@ -11,11 +11,14 @@ import 'scene.dart';
 /// the whole point of routing Filament through the texture registry rather
 /// than a platform view.
 class OrbisView extends StatefulWidget {
-  const OrbisView({super.key, this.scene});
+  const OrbisView({super.key, this.scene, this.onMeshErrors});
 
   /// What to draw. While this is null the renderer shows its own placeholder,
   /// so an unconfigured view is visibly working rather than merely blank.
   final OrbisScene? scene;
+
+  /// Called with any mesh files the renderer could not load, by path.
+  final ValueChanged<Map<String, String>>? onMeshErrors;
 
   @override
   State<OrbisView> createState() => _OrbisViewState();
@@ -43,7 +46,13 @@ class _OrbisViewState extends State<OrbisView> {
     if (id == null || scene == null || _error != null) return;
     _sentScene = scene;
     try {
-      await _channel.invokeMethod<void>('setScene', scene.toMessage(id));
+      final errors = await _channel.invokeMapMethod<String, String>(
+        'setScene',
+        scene.toMessage(id),
+      );
+      if (errors != null && errors.isNotEmpty) {
+        widget.onMeshErrors?.call(errors);
+      }
     } catch (error) {
       if (mounted) setState(() => _error = error);
     }
