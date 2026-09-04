@@ -1,0 +1,25 @@
+name: orbis_filament
+description: >-
+  Filament rendering for Orbis, composited by Flutter. Renders into
+  IOSurface-backed pixel buffers the texture registry adopts without a readback.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      macos:
+        pluginClass: OrbisFilamentPlugin
