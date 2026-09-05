@@ -65,7 +65,7 @@ material {
 }
 
 fragment {
-    #define MARCH_STEPS 16
+    #define MARCH_STEPS 18
     #define LIGHT_STEPS 3
 
     float hash13(vec3 p) {
@@ -182,6 +182,28 @@ fragment {
         // Sharp rather than a ramp from the cut to solid. A cumulus has an
         // edge you could trace; what a linear ramp draws is a smudge.
         float d = smoothstep(cut, cut + 0.10, n);
+
+        // Bitten away at the edges by something much finer than the shape.
+        //
+        // This is the difference between cotton wool and cauliflower. Four
+        // octaves of smooth noise gives a rounded blob however it is cut,
+        // because the finest thing in it is still a quarter the size of the
+        // cloud. Taking a high-frequency bite out of the *edge* only — where
+        // the cloud is already thinning — is what puts the florets on it,
+        // and it costs nothing in the middle where it would not show.
+        if (fine > 0.5 && detail > 0.35 && d > 0.001 && d < 0.85) {
+            float bite = lightNoise(p * materialParams.scale * 6.5,
+                                    materialParams.billow);
+            d -= (1.0 - smoothstep(0.0, 0.85, d)) * bite * 0.55 * detail;
+            d = clamp(d, 0.0, 1.0);
+        }
+
+        // Past the edge it is still not uniform. Without this a closed sky
+        // has one density everywhere, so it takes one amount of light
+        // everywhere and draws as a flat sheet — which is what an overcast
+        // looked like, and what a thunderhead must never look like. Keeping
+        // the field inside the cloud is what gives a storm its shape.
+        d *= 0.45 + 0.55 * smoothstep(cut - 0.16, cut + 0.24, n);
 
         return d * profile * materialParams.density;
     }
@@ -304,7 +326,15 @@ fragment {
             float span = min(top - base, materialParams.thickness * 3.0);
 
             if (base < 26000.0) {
-                float stepLength = span / float(MARCH_STEPS);
+                // Two step lengths, not one.
+                //
+                // Most of a ray through a fair-weather sky is empty, and
+                // spending the same sixteen steps on the empty part as on the
+                // cloud is what forces the steps to be coarse enough to alias.
+                // Striding through nothing and slowing down inside something
+                // buys the resolution where it is looked at, for free.
+                float stride = span / float(MARCH_STEPS) * 2.2;
+                float creep = stride * 0.30;
                 float lightStep = materialParams.thickness * 0.42;
 
                 // Ten steps band into ten visible shells unless each pixel
@@ -320,12 +350,23 @@ fragment {
                 // looking towards it, which is the silver lining.
                 float phase = 0.9 + 6.0 * scatterPhase(mu, 0.6);
 
+                // Offset by a whole coarse step, not a fine one. Every ray
+                // enters the cloud at a stride boundary otherwise, and
+                // sixteen of those at the same distance from the camera draw
+                // as rings in the sky.
+                float along = base + jitter * stride;
+                float end = base + span;
+
                 for (int i = 0; i < MARCH_STEPS; i++) {
-                    vec3 p = materialParams.eye
-                           + direction * (base + (float(i) + jitter) * stepLength);
+                    if (along > end) break;
+                    vec3 p = materialParams.eye + direction * along;
 
                     float d = cloudAt(p, 1.0, detail);
-                    if (d > 0.002) {
+                    if (d <= 0.002) {
+                        along += stride;
+                        continue;
+                    }
+                    {
                         // How much of the sun reaches here, marched toward
                         // it. This is what puts a shadow on the underside and
                         // a blaze on the top, and it is the whole of why a
@@ -346,10 +387,11 @@ fragment {
                         vec3 lum = materialParams.bodyColour * lit * phase * powder
                                  + materialParams.ambient;
 
-                        float a = 1.0 - exp(-d * stepLength * materialParams.extinction);
+                        float a = 1.0 - exp(-d * creep * materialParams.extinction);
                         scattered += transmittance * lum * a;
                         transmittance *= 1.0 - a;
 
+                        along += creep;
                         if (transmittance < 0.02) break;
                     }
                 }
@@ -367,10 +409,12 @@ fragment {
 
         // ---- The strike -----------------------------------------------
         if (materialParams.flash > 0.001) {
-            // The whole sky lifts, because a strike lights the cloud from
-            // inside and the cloud is most of what is up there.
-            colour += vec3(0.55, 0.60, 0.75) * materialParams.flash
-                    * (0.25 + 0.75 * (1.0 - transmittance));
+            // The sky lifts a little, because a strike lights the cloud from
+            // inside and the cloud is most of what is up there. Only a
+            // little: a strike is bright because it is a thin line against a
+            // dark sky, and lifting the whole sky is how you lose both.
+            colour += vec3(0.34, 0.38, 0.52) * materialParams.flash
+                    * (0.06 + 0.34 * (1.0 - transmittance));
 
             vec3 strike = normalize(materialParams.flashDirection);
             if (dot(direction, strike) > 0.25) {
@@ -385,8 +429,8 @@ fragment {
                 float core = exp(-near * 900.0);
                 float halo = exp(-near * 70.0);
 
-                colour += vec3(0.80, 0.85, 1.0)
-                        * materialParams.flash * (core * 9.0 + halo * 0.6);
+                colour += vec3(0.86, 0.90, 1.0)
+                        * materialParams.flash * (core * 26.0 + halo * 1.1);
             }
         }
 

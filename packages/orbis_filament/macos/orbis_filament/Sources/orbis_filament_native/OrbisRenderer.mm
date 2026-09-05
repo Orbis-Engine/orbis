@@ -341,6 +341,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   BOOL _disposed;
   int _frameCount;
   double _startedAt;
+  float _skyFlash;
+  bool _dumped;
 }
 
 - (nullable instancetype)initWithWidth:(uint32_t)width height:(uint32_t)height {
@@ -749,6 +751,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     _cloudInstance->setParameter("extinction", params[23]);
     _cloudInstance->setParameter("wind", float2{params[24], params[25]});
 
+    _skyFlash = params[26];
     _cloudInstance->setParameter("flash", params[26]);
     _cloudInstance->setParameter("flashDirection",
                                  float3{params[27], params[28], params[29]});
@@ -1568,7 +1571,26 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   // rendering fault from a handoff fault. Enabled by an environment variable
   // so it costs nothing when unset.
   if (_frameCount == 0) _startedAt = CFAbsoluteTimeGetCurrent();
-  if (++_frameCount == 60 && getenv("ORBIS_DUMP_FRAME")) {
+
+  // Which frame to catch. Sixty by default, because that is a second in and
+  // everything has settled. A number picks that frame instead; the word
+  // `flash` waits for a strike, which is the only way to catch one — a bolt
+  // lasts a tenth of a second and lands on whichever frame it lands on.
+  const char *dumpAt = getenv("ORBIS_DUMP_FRAME");
+  ++_frameCount;
+
+  bool due = false;
+  if (dumpAt) {
+    if (strcmp(dumpAt, "flash") == 0) {
+      due = _skyFlash > 0.5f && !_dumped;
+    } else {
+      const int wanted = atoi(dumpAt) > 1 ? atoi(dumpAt) : 60;
+      due = _frameCount == wanted;
+    }
+  }
+
+  if (due) {
+    _dumped = true;
     // What sixty frames actually cost, so a change to the sky can be judged
     // on its price as well as on how it looks.
     const double elapsed = CFAbsoluteTimeGetCurrent() - _startedAt;
