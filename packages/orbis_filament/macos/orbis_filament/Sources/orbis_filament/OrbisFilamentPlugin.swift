@@ -116,6 +116,55 @@ private final class Viewport {
       }
     }
 
+    // Populations. Everything about them travels in parallel arrays, and the
+    // buffers only travel for the ones whose revision has moved — which for a
+    // scene that is standing still is none of them.
+    let populationCount = scene.populationKeys.count
+    if populationCount > 0 || renderer.hasPopulations {
+      let keys = populationCount == 0 ? [Int32(0)] : scene.populationKeys
+      let counts = populationCount == 0 ? [Int32(0)] : scene.populationCounts
+      let meshes = populationCount == 0 ? [Int32(0)] : scene.populationMeshes
+      let flags = populationCount == 0 ? [Int32(0)] : scene.populationFlags
+      let revisions = populationCount == 0 ? [Int32(0)] : scene.populationRevisions
+      let bounds = populationCount == 0 ? [Float(0)] : scene.populationBounds
+      let changed = scene.populationChanged.isEmpty ? [Int32(0)] : scene.populationChanged
+      let transforms = scene.populationTransforms.isEmpty
+        ? [Float(0)] : scene.populationTransforms
+      let colours = scene.populationColours.isEmpty ? [Float(0)] : scene.populationColours
+
+      keys.withUnsafeBufferPointer { keyPointer in
+        counts.withUnsafeBufferPointer { countPointer in
+          meshes.withUnsafeBufferPointer { meshPointer in
+            flags.withUnsafeBufferPointer { flagPointer in
+              revisions.withUnsafeBufferPointer { revisionPointer in
+                bounds.withUnsafeBufferPointer { boundsPointer in
+                  changed.withUnsafeBufferPointer { changedPointer in
+                    transforms.withUnsafeBufferPointer { transformPointer in
+                      colours.withUnsafeBufferPointer { colourPointer in
+                        renderer.applyPopulations(
+                          keyPointer.baseAddress!,
+                          counts: countPointer.baseAddress!,
+                          meshes: meshPointer.baseAddress!,
+                          flags: flagPointer.baseAddress!,
+                          revisions: revisionPointer.baseAddress!,
+                          bounds: boundsPointer.baseAddress!,
+                          paths: scene.populationPaths,
+                          changed: changedPointer.baseAddress!,
+                          changedCount: UInt32(scene.populationChanged.count),
+                          transforms: transformPointer.baseAddress!,
+                          colours: colourPointer.baseAddress!,
+                          count: UInt32(populationCount))
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
     let lightCount = scene.lightCount
     let lightKeys = lightCount == 0 ? [Int64(0)] : scene.lightKeys
     let lightKinds = lightCount == 0 ? [Int32(0)] : scene.lightKinds
@@ -194,6 +243,19 @@ private struct Scene {
   let precipitationEnabled: Bool
   let precipitationParams: [Float]
   let skyEnabled: Bool
+
+  /// Populations travel as parallel arrays, one entry each, plus the buffers
+  /// for whichever of them have actually changed.
+  let populationKeys: [Int32]
+  let populationCounts: [Int32]
+  let populationMeshes: [Int32]
+  let populationFlags: [Int32]
+  let populationRevisions: [Int32]
+  let populationBounds: [Float]
+  let populationPaths: [String]
+  let populationChanged: [Int32]
+  let populationTransforms: [Float]
+  let populationColours: [Float]
   let skyParams: [Float]
 
   /// How many floats one light occupies, and how many the fog does. Both
@@ -281,6 +343,58 @@ private struct Scene {
     self.precipitationParams = precipitationParams
     self.skyEnabled = skyEnabled
     self.skyParams = skyParams
+
+    // Absent when a scene has none, which is every scene that never uses
+    // them — so this stays optional rather than being required of everybody.
+    let populationKeys =
+      (arguments["populationKeys"] as? FlutterStandardTypedData)?.int32s ?? []
+    let populationCounts =
+      (arguments["populationCounts"] as? FlutterStandardTypedData)?.int32s ?? []
+    let populationMeshes =
+      (arguments["populationMeshes"] as? FlutterStandardTypedData)?.int32s ?? []
+    let populationFlags =
+      (arguments["populationFlags"] as? FlutterStandardTypedData)?.int32s ?? []
+    let populationRevisions =
+      (arguments["populationRevisions"] as? FlutterStandardTypedData)?.int32s ?? []
+    let populationBounds =
+      (arguments["populationBounds"] as? FlutterStandardTypedData)?.floats ?? []
+    let populationChanged =
+      (arguments["populationChanged"] as? FlutterStandardTypedData)?.int32s ?? []
+    let populationTransforms =
+      (arguments["populationTransforms"] as? FlutterStandardTypedData)?.floats ?? []
+    let populationColours =
+      (arguments["populationColours"] as? FlutterStandardTypedData)?.floats ?? []
+    let populationPaths = arguments["populationPaths"] as? [String] ?? []
+
+    // Every one of these is walked in C++ against a length taken from
+    // somewhere else, so the lengths are checked here rather than trusted.
+    // A hundred thousand transforms read one element past the end is not a
+    // wrong picture, it is a crash on somebody's machine.
+    let members = populationChanged.reduce(0) { total, key in
+      guard let at = populationKeys.firstIndex(of: key) else { return total }
+      return total + Int(populationCounts[at])
+    }
+    guard populationCounts.count == populationKeys.count,
+          populationMeshes.count == populationKeys.count,
+          populationFlags.count == populationKeys.count,
+          populationRevisions.count == populationKeys.count,
+          populationBounds.count == populationKeys.count * 6,
+          populationMeshes.allSatisfy({ $0 < Int32(populationPaths.count) }),
+          populationCounts.allSatisfy({ $0 >= 0 }),
+          populationChanged.allSatisfy({ populationKeys.contains($0) }),
+          populationTransforms.count == members * 16,
+          populationColours.count == members * 3 else { return nil }
+
+    self.populationKeys = populationKeys
+    self.populationCounts = populationCounts
+    self.populationMeshes = populationMeshes
+    self.populationFlags = populationFlags
+    self.populationRevisions = populationRevisions
+    self.populationBounds = populationBounds
+    self.populationPaths = populationPaths
+    self.populationChanged = populationChanged
+    self.populationTransforms = populationTransforms
+    self.populationColours = populationColours
   }
 }
 

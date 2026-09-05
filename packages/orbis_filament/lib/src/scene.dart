@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:vector_math/vector_math_64.dart';
 
+import 'population.dart';
+
 /// One thing to draw: where it is, what it is made of, and how it behaves
 /// towards light.
 ///
@@ -700,12 +702,22 @@ class OrbisScene {
     OrbisSky? sky,
     OrbisFog? fog,
     OrbisPrecipitation? precipitation,
+    List<OrbisPopulation>? populations,
   }) : lights = lights ?? const [],
+       populations = populations ?? const [],
        sky = sky ?? OrbisSky(),
        fog = fog ?? OrbisFog.none,
        precipitation = precipitation ?? OrbisPrecipitation.none;
 
   final List<OrbisObject> objects;
+
+  /// The parts of the scene that are many copies of one thing.
+  ///
+  /// Kept apart from [objects] because they are a different question. An
+  /// object is tracked one at a time; a population is submitted whole. Mixing
+  /// them would mean either paying an object's price for every tree or losing
+  /// an object's individuality for every one that needs it.
+  final List<OrbisPopulation> populations;
 
   /// Every light in the scene. A scene with none is lit by its sky alone,
   /// which is dim and even and perfectly legitimate.
@@ -717,7 +729,12 @@ class OrbisScene {
   final OrbisPrecipitation precipitation;
 
   /// Packs the scene into the flat arrays the channel carries.
-  Map<String, Object> toMessage(int textureId) {
+  /// The whole scene, as the renderer takes it.
+  ///
+  /// [sentRevisions] is what the renderer already holds for each population,
+  /// so that buffers it already has are left out. Passing null sends
+  /// everything, which is what a fresh renderer needs.
+  Map<String, Object> toMessage(int textureId, {Map<int, int>? sentRevisions}) {
     final count = objects.length;
     final keys = Int64List(count);
     final transforms = Float32List(count * 16);
@@ -791,6 +808,94 @@ class OrbisScene {
       'precipitationEnabled': precipitation.isVisible,
       'precipitationParams': precipitation._packed,
       'skyEnabled': sky.drawn,
+      ...?_populationMessage(sentRevisions),
+    };
+  }
+
+  /// What the renderer needs to know about the populations.
+  ///
+  /// The transforms and colours are left out for any population whose
+  /// revision the renderer already has. That is the entire point: six
+  /// megabytes of transforms is not something to send sixty times a second in
+  /// order to say that nothing moved.
+  Map<String, Object>? _populationMessage(Map<int, int>? sent) {
+    if (populations.isEmpty) return null;
+
+    final keys = Int32List(populations.length);
+    final counts = Int32List(populations.length);
+    final meshes = Int32List(populations.length);
+    final flags = Int32List(populations.length);
+    final revisions = Int32List(populations.length);
+    final bounds = Float32List(populations.length * 6);
+    final paths = <String>[];
+
+    // Only the ones that have changed, packed end to end. The renderer takes
+    // them in the order the changed keys appear.
+    final changed = <OrbisPopulation>[];
+    var members = 0;
+
+    for (var i = 0; i < populations.length; i++) {
+      final population = populations[i];
+      keys[i] = population.key;
+      counts[i] = population.count;
+      flags[i] = population.flags;
+      revisions[i] = population.revision;
+
+      meshes[i] = -1;
+      if (population.mesh != null) {
+        meshes[i] = paths.indexOf(population.mesh!);
+        if (meshes[i] < 0) {
+          meshes[i] = paths.length;
+          paths.add(population.mesh!);
+        }
+      }
+
+      bounds[i * 6 + 0] = population.minimum.x;
+      bounds[i * 6 + 1] = population.minimum.y;
+      bounds[i * 6 + 2] = population.minimum.z;
+      bounds[i * 6 + 3] = population.maximum.x;
+      bounds[i * 6 + 4] = population.maximum.y;
+      bounds[i * 6 + 5] = population.maximum.z;
+
+      if (sent == null || sent[population.key] != population.revision) {
+        changed.add(population);
+        members += population.count;
+      }
+    }
+
+    final transforms = Float32List(members * 16);
+    final colours = Float32List(members * 3);
+    final changedKeys = Int32List(changed.length);
+    var atTransform = 0;
+    var atColour = 0;
+
+    for (var i = 0; i < changed.length; i++) {
+      changedKeys[i] = changed[i].key;
+      transforms.setRange(
+        atTransform,
+        atTransform + changed[i].transforms.length,
+        changed[i].transforms,
+      );
+      colours.setRange(
+        atColour,
+        atColour + changed[i].colours.length,
+        changed[i].colours,
+      );
+      atTransform += changed[i].transforms.length;
+      atColour += changed[i].colours.length;
+    }
+
+    return {
+      'populationKeys': keys,
+      'populationCounts': counts,
+      'populationMeshes': meshes,
+      'populationFlags': flags,
+      'populationRevisions': revisions,
+      'populationBounds': bounds,
+      'populationPaths': paths,
+      'populationChanged': changedKeys,
+      'populationTransforms': transforms,
+      'populationColours': colours,
     };
   }
 

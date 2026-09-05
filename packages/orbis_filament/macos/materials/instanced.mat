@@ -1,0 +1,78 @@
+// One mesh, drawn many thousands of times in a single submission.
+//
+// Filament draws sixty-four copies at a time. That is the size of the block
+// of per-renderable uniforms it indexes by the copy's own number, and asking
+// for more does not fail — it reads past the end of that block and draws
+// whatever was after it, which is a screen full of wedges.
+//
+// So a population is submitted in sixty-fours, and the transforms come from a
+// texture rather than from anything per-draw: four texels a member, three rows
+// of an affine and a colour. The book is one texture for the whole population,
+// uploaded once and left alone, and each draw says where in it to start. There
+// is no per-member cost on the processor at all.
+material {
+    name : orbisInstanced,
+    shadingModel : lit,
+    parameters : [
+        { type : sampler2d, name : book, precision : high, format : float },
+        // Which member of the population this renderable's first copy is.
+        // Filament hands each copy an index counted from its own draw, and
+        // the book is kept for the whole population rather than per draw.
+        { type : int, name : base }
+    ],
+    variables : [ tint ],
+    culling : back
+}
+
+vertex {
+    // The book is two thousand wide and as tall as it needs to be, so any
+    // number of instances fits inside what a texture is allowed to be.
+    vec4 page(int index) {
+        return texelFetch(materialParams_book,
+                          ivec2(index % 2048, index / 2048), 0);
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        int at = (materialParams.base + instance_index) * 4;
+        vec4 r0 = page(at);
+        vec4 r1 = page(at + 1);
+        vec4 r2 = page(at + 2);
+
+        // Rows, so the translation is the w of each and the rotation and
+        // scale are the rest. Built into columns here, which is what a mat3
+        // constructor takes.
+        mat3 basis = mat3(vec3(r0.x, r1.x, r2.x),
+                          vec3(r0.y, r1.y, r2.y),
+                          vec3(r0.z, r1.z, r2.z));
+        vec3 offset = vec3(r0.w, r1.w, r2.w);
+
+        // Moved by the difference rather than set outright.
+        //
+        // Filament renders camera-relative: what is in worldPosition is the
+        // point measured from wherever the camera is, not from the world's
+        // origin. Assigning an absolute position into it puts everything an
+        // entire camera-position away from where it belongs — which, from
+        // inside, looks like the screen going black. A delta is the same
+        // whichever origin it is measured from.
+        vec3 local = getPosition().xyz;
+        material.worldPosition.xyz += (basis * local + offset) - local;
+
+        // The normal has to be turned with it, or every instance is lit as
+        // though it were facing the way the mesh was modelled. Right for a
+        // rotation with the scale along its own axes, which is what a
+        // population of boxes and trees has.
+        material.worldNormal = normalize(basis * material.worldNormal);
+
+        material.tint = page(at + 3);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(variable_tint.rgb, 1.0);
+        material.roughness = 0.8;
+        material.metallic = 0.0;
+        material.reflectance = 0.35;
+    }
+}

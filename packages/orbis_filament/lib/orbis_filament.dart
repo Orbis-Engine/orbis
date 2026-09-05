@@ -6,6 +6,7 @@
 library;
 
 export 'src/orbis_view.dart' show OrbisView;
+export 'src/population.dart' show OrbisPopulation;
 export 'src/strike.dart' show OrbisStrike;
 export 'src/scene.dart'
     show

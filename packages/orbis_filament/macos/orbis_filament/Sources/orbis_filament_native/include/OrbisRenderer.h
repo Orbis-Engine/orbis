@@ -81,6 +81,34 @@ NS_ASSUME_NONNULL_BEGIN
 /// of cloud lying in a valley. Disabled skips both.
 - (void)setFogEnabled:(BOOL)enabled params:(const float *)params;
 
+/// Whether anything is holding population buffers, so a scene that has just
+/// dropped its last one still gets the call that clears them.
+@property(nonatomic, readonly) BOOL hasPopulations;
+
+/// States the scene's populations: many copies of one mesh, drawn in one call.
+///
+/// Everything travels as parallel arrays of `count` entries — the key each
+/// population is kept against, how many members it has, which mesh, its flags,
+/// its revision and its bounding box. `changed` names the populations whose
+/// `transforms` and `colours` are actually present, packed end to end in the
+/// order they are named.
+///
+/// The split is the whole point. A hundred thousand transforms is six
+/// megabytes, and a scene that is standing still sends none of it: the
+/// renderer keeps the buffers it built and draws them again.
+- (void)applyPopulations:(const int32_t *)keys
+                  counts:(const int32_t *)counts
+                  meshes:(const int32_t *)meshes
+                   flags:(const int32_t *)flags
+               revisions:(const int32_t *)revisions
+                  bounds:(const float *)bounds
+                   paths:(NSArray<NSString *> *)paths
+                 changed:(const int32_t *)changed
+            changedCount:(uint32_t)changedCount
+              transforms:(const float *)transforms
+                 colours:(const float *)colours
+                   count:(uint32_t)count;
+
 /// Sets the sky: its gradient, the body in it, its cloud, and its lightning.
 ///
 /// `params` is thirty-one floats, in the order `OrbisSky` packs them: the

@@ -14,6 +14,8 @@
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/Skybox.h>
+#include <filament/Texture.h>
+#include <filament/TextureSampler.h>
 #include <filament/SwapChain.h>
 #include <filament/TransformManager.h>
 #include <filament/VertexBuffer.h>
@@ -42,6 +44,7 @@
 
 #include "generated/lit_material.h"
 #include "generated/mist_material.h"
+#include "generated/instanced_material.h"
 #include "generated/sky_material.h"
 #include "generated/rain_material.h"
 
@@ -61,6 +64,52 @@ struct Mesh {
   filament::gltfio::FilamentAsset *asset = nullptr;
   std::vector<filament::gltfio::FilamentInstance *> all;
   std::vector<filament::gltfio::FilamentInstance *> spare;
+};
+
+/// The most copies Filament will draw from one renderable.
+///
+/// Its own limit, and a hard one: this is the size of the block of
+/// per-renderable uniforms it indexes by the copy's own number. Asking for
+/// more does not fail, it reads past the end of that block — which draws a
+/// screen full of wedges rather than anything recognisable.
+///
+/// So a population is submitted in sixty-fours. A hundred thousand members is
+/// sixteen hundred draws rather than a hundred thousand, and each of those
+/// sixteen hundred is culled as one — which for a large world is worth having
+/// on its own.
+constexpr uint32_t kInstancesPerDraw = 64;
+
+/// How wide the book of transforms is.
+///
+/// A texture rather than a uniform array. Filament's own InstanceBuffer would
+/// carry a transform each, but it fills the per-renderable uniform block and
+/// so is capped at sixty-four instances — which is not a number that draws a
+/// forest. Two dimensions rather than one so the width stays well inside what
+/// every platform allows.
+constexpr uint32_t kBookWidth = 2048;
+
+/// Four texels an instance: three rows of an affine, and a colour.
+constexpr uint32_t kTexelsPerMember = 4;
+
+/// One population as the renderer holds it between frames.
+///
+/// The buffers are the expensive part and they are built once. What arrives
+/// each frame is a revision number, and when it has not moved there is
+/// nothing to do at all — which is the only reason a hundred thousand members
+/// costs less than a hundred thousand of anything.
+struct Grown {
+  std::vector<utils::Entity> entities;
+  std::vector<filament::MaterialInstance *> materials;
+
+  /// One book for the whole population. Sixty-four members a draw would
+  /// otherwise mean sixteen hundred textures for a hundred thousand.
+  filament::Texture *book = nullptr;
+
+  uint32_t count = 0;
+  int32_t revision = INT32_MIN;
+  int32_t flags = -1;
+  std::string path;
+  uint64_t seen = 0;
 };
 
 /// One object as the renderer holds it between frames.
@@ -294,6 +343,12 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   bool _skyShowsBody;
   bool _skyBuilt;
   Material *_material;
+
+  /// Drawn many times over from one submission. Built the first time a scene
+  /// has a population in it, because most have none.
+  Material *_instancedMaterial;
+  std::unordered_map<int32_t, Grown> _populations;
+  uint64_t _populationGeneration;
   VertexBuffer *_vertexBuffer;
   IndexBuffer *_indexBuffer;
 
@@ -1091,6 +1146,202 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _scene->addEntity(drawn.entity);
 }
 
+- (BOOL)hasPopulations {
+  return !_populations.empty();
+}
+
+/// Takes a population apart. Every buffer it holds is its own.
+- (void)clearPopulation:(Grown &)grown {
+  if (grown.book != nullptr) _engine->destroy(grown.book);
+  grown.book = nullptr;
+  for (auto *material : grown.materials) _engine->destroy(material);
+  for (auto entity : grown.entities) {
+    _scene->remove(entity);
+    _engine->destroy(entity);
+    utils::EntityManager::get().destroy(entity);
+  }
+  grown.materials.clear();
+  grown.entities.clear();
+  grown.count = 0;
+  grown.revision = INT32_MIN;
+}
+
+/// Builds the renderables one population needs, in chunks of what Filament
+/// will draw at once.
+- (void)growPopulation:(Grown &)grown
+                 count:(uint32_t)count
+                bounds:(const float *)bounds
+                 flags:(int32_t)flags {
+  [self clearPopulation:grown];
+  if (count == 0) return;
+
+  if (_instancedMaterial == nullptr) {
+    _instancedMaterial = Material::Builder()
+                             .package(kinstancedMaterial, kinstancedMaterial_len)
+                             .build(*_engine);
+  }
+
+  const Box box{{bounds[0], bounds[1], bounds[2]},
+                {bounds[3], bounds[4], bounds[5]}};
+
+  const uint32_t texels = count * kTexelsPerMember;
+  const uint32_t rows = (texels + kBookWidth - 1) / kBookWidth;
+
+  // Four channels rather than three: Metal has no three-channel float
+  // texture, and asking for one gets it padded somewhere less visible.
+  grown.book = Texture::Builder()
+                   .width(kBookWidth)
+                   .height(rows)
+                   .levels(1)
+                   .sampler(Texture::Sampler::SAMPLER_2D)
+                   .format(Texture::InternalFormat::RGBA32F)
+                   .build(*_engine);
+
+  const TextureSampler nearest(TextureSampler::MinFilter::NEAREST,
+                               TextureSampler::MagFilter::NEAREST);
+
+  for (uint32_t at = 0; at < count; at += kInstancesPerDraw) {
+    const uint32_t chunk = std::min(kInstancesPerDraw, count - at);
+
+    MaterialInstance *material = _instancedMaterial->createInstance();
+    material->setParameter("book", grown.book, nearest);
+    material->setParameter("base", int32_t(at));
+
+    utils::Entity entity = utils::EntityManager::get().create();
+    RenderableManager::Builder(1)
+        // Every member is culled by this one box, so it has to cover all of
+        // them. A box around the mesh rather than around the population would
+        // make the lot disappear as soon as the camera left the origin.
+        .boundingBox(box)
+        .material(0, material)
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
+                  _indexBuffer, 0, 36)
+        // No instance buffer: each copy is handed nothing but its own number,
+        // and reads its transform out of the book with it.
+        .instances(chunk)
+        .receiveShadows((flags & 2) != 0)
+        .castShadows((flags & 1) != 0)
+        .build(*_engine, entity);
+
+    _scene->addEntity(entity);
+
+    grown.entities.push_back(entity);
+    grown.materials.push_back(material);
+  }
+
+  grown.count = count;
+  grown.flags = flags;
+}
+
+/// Writes a population's transforms and colours into the book it already has.
+/// Only ever called when the revision has moved.
+- (void)fillPopulation:(Grown &)grown
+            transforms:(const float *)transforms
+               colours:(const float *)colours {
+  if (grown.book == nullptr || grown.count == 0) return;
+
+  const uint32_t texels = grown.count * kTexelsPerMember;
+  const uint32_t rows = (texels + kBookWidth - 1) / kBookWidth;
+  const size_t pixels = size_t(rows) * kBookWidth;
+
+  auto *page = new float[pixels * 4];
+  std::fill(page, page + pixels * 4, 0.0f);
+
+  for (uint32_t i = 0; i < grown.count; i++) {
+    // Column-major coming in, rows going out: element (row, column) of a
+    // column-major sixteen is at column * 4 + row, and the shader wants the
+    // rows so that each one carries a component of the translation in its
+    // fourth place.
+    const float *m = transforms + size_t(i) * 16;
+    float *to = page + size_t(i) * kTexelsPerMember * 4;
+
+    for (int row = 0; row < 3; row++) {
+      to[row * 4 + 0] = m[0 * 4 + row];
+      to[row * 4 + 1] = m[1 * 4 + row];
+      to[row * 4 + 2] = m[2 * 4 + row];
+      to[row * 4 + 3] = m[3 * 4 + row];
+    }
+
+    const float *colour = colours + size_t(i) * 3;
+    to[12] = colour[0];
+    to[13] = colour[1];
+    to[14] = colour[2];
+    to[15] = 1.0f;
+  }
+
+  grown.book->setImage(
+      *_engine, 0,
+      Texture::PixelBufferDescriptor(
+          page, pixels * 4 * sizeof(float),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+          Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+          [](void *buffer, size_t, void *) {
+            delete[] static_cast<float *>(buffer);
+          }));
+}
+
+- (void)applyPopulations:(const int32_t *)keys
+                  counts:(const int32_t *)counts
+                  meshes:(const int32_t *)meshes
+                   flags:(const int32_t *)flags
+               revisions:(const int32_t *)revisions
+                  bounds:(const float *)bounds
+                   paths:(NSArray<NSString *> *)paths
+                 changed:(const int32_t *)changed
+            changedCount:(uint32_t)changedCount
+              transforms:(const float *)transforms
+                 colours:(const float *)colours
+                   count:(uint32_t)count {
+  if (_disposed) return;
+
+  const uint64_t generation = ++_populationGeneration;
+
+  // Where in the packed buffers each changed population's members begin. The
+  // sender packs them end to end in the order it names them.
+  std::unordered_map<int32_t, size_t> arriving;
+  size_t at = 0;
+  for (uint32_t c = 0; c < changedCount; c++) {
+    for (uint32_t i = 0; i < count; i++) {
+      if (keys[i] != changed[c]) continue;
+      arriving[changed[c]] = at;
+      at += size_t(counts[i]);
+      break;
+    }
+  }
+
+  for (uint32_t i = 0; i < count; i++) {
+    Grown &grown = _populations[keys[i]];
+    grown.seen = generation;
+
+    const uint32_t wanted = uint32_t(std::max(counts[i], 0));
+
+    // A different size, a different mesh or different flags is a different
+    // set of renderables. Anything else is a write into the ones there are.
+    if (grown.count != wanted || grown.flags != flags[i] ||
+        grown.entities.empty()) {
+      [self growPopulation:grown count:wanted bounds:bounds + i * 6 flags:flags[i]];
+    }
+
+    auto found = arriving.find(keys[i]);
+    if (found != arriving.end() && wanted > 0) {
+      [self fillPopulation:grown
+                transforms:transforms + found->second * 16
+                   colours:colours + found->second * 3];
+      grown.revision = revisions[i];
+    }
+  }
+
+  // Anything not named this time has gone.
+  for (auto it = _populations.begin(); it != _populations.end();) {
+    if (it->second.seen == generation) {
+      ++it;
+      continue;
+    }
+    [self clearPopulation:it->second];
+    it = _populations.erase(it);
+  }
+}
+
 - (void)applyObjects:(const int64_t *)keys
           transforms:(const float *)transforms
              colours:(const float *)colours
@@ -1409,7 +1660,11 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   if (!_skyBuilt || showBody != _skyShowsBody) {
     if (_skybox) {
       _scene->setSkybox(nullptr);
-      _engine->destroy(_skybox);
+      for (auto &entry : _populations) [self clearPopulation:entry.second];
+  _populations.clear();
+  if (_instancedMaterial != nullptr) _engine->destroy(_instancedMaterial);
+
+  _engine->destroy(_skybox);
     }
     _skybox = Skybox::Builder()
                   .color({sky.x, sky.y, sky.z, 1.0f})
@@ -1664,6 +1919,10 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   auto &entities = utils::EntityManager::get();
   _engine->destroyCameraComponent(_cameraEntity);
   entities.destroy(_cameraEntity);
+  for (auto &entry : _populations) [self clearPopulation:entry.second];
+  _populations.clear();
+  if (_instancedMaterial != nullptr) _engine->destroy(_instancedMaterial);
+
   _engine->destroy(_skybox);
   if (_ambient) _engine->destroy(_ambient);
   for (size_t sheet = 0; sheet < _mistEntities.size(); sheet++) {

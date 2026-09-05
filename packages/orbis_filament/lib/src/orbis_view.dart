@@ -43,6 +43,13 @@ class _OrbisViewState extends State<OrbisView> {
   }
 
   /// Pushes the current scene to the native surface, if there is one of each.
+  /// Which revision of each population's buffers the renderer already holds.
+  ///
+  /// Kept here rather than on the scene because it is a fact about this
+  /// renderer, not about the scene: two views of the same scene have had
+  /// different things sent to them.
+  final Map<int, int> _sentRevisions = {};
+
   Future<void> _sendScene() async {
     final id = _textureId;
     final scene = widget.scene;
@@ -51,7 +58,17 @@ class _OrbisViewState extends State<OrbisView> {
     try {
       final notes = await _channel.invokeMapMethod<String, String>(
         'setScene',
-        scene.toMessage(id),
+        scene.toMessage(id, sentRevisions: _sentRevisions),
+      );
+
+      // Only after it has landed. A send that threw left the renderer with
+      // whatever it had, and claiming otherwise would leave a population
+      // frozen at an old shape with nothing to put it right.
+      for (final population in scene.populations) {
+        _sentRevisions[population.key] = population.revision;
+      }
+      _sentRevisions.removeWhere(
+        (key, _) => !scene.populations.any((p) => p.key == key),
       );
       if (notes != null && notes.isNotEmpty) {
         widget.onSceneNotes?.call(notes);
