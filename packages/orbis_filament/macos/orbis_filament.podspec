@@ -23,6 +23,13 @@ without a trip through the CPU.
 
   # Fetches the Filament SDK and compiles materials. Idempotent, so it is free
   # after the first install.
+  #
+  # This is also why the plugin is CocoaPods rather than Swift Package Manager,
+  # and why Flutter warns about it. A Swift package cannot do this: its plugins
+  # run sandboxed with no network, so nothing in one can fetch a hundred
+  # megabytes of renderer at build time. Adopting SPM means shipping Filament
+  # as a binary target — an .xcframework with a URL and a checksum — which is a
+  # release artefact to host and version rather than a file to write.
   s.prepare_command = 'bash setup.sh'
 
   # Listed rather than globbed: the SDK ships thirty archives and this is the

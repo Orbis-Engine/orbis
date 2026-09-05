@@ -42,6 +42,7 @@
 
 #include "generated/lit_material.h"
 #include "generated/mist_material.h"
+#include "generated/clouds_material.h"
 #include "generated/rain_material.h"
 
 
@@ -173,6 +174,15 @@ constexpr uint16_t kMistIndices[6] = {0, 1, 2, 2, 3, 0};
 /// a full-screen pass of four-octave noise, which is the whole cost of this.
 constexpr int kMistSheets = 10;
 
+/// How finely the sky dome is divided, and how big it is.
+///
+/// The dome is only somewhere to put pixels: the cloud is worked out per
+/// pixel from where that pixel's view ray crosses a flat layer, so the mesh
+/// needs enough triangles to interpolate a direction smoothly and no more.
+constexpr int kSkyRings = 10;
+constexpr int kSkySegments = 32;
+constexpr float kSkyRadius = 900.0f;
+
 /// How many panes a curtain of rain is drawn with, and how far in front of
 /// the camera each one hangs.
 ///
@@ -294,6 +304,14 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   IndexBuffer *_quadIndices;
   std::vector<utils::Entity> _mistEntities;
   std::vector<MaterialInstance *> _mistInstances;
+
+  /// The dome the sky's cloud is drawn on, and what it is made of.
+  Material *_cloudMaterial;
+  VertexBuffer *_skyVertices;
+  IndexBuffer *_skyIndices;
+  utils::Entity _cloudEntity;
+  MaterialInstance *_cloudInstance;
+  bool _cloudsShowing;
 
   /// The panes a curtain of rain or snow is drawn on.
   Material *_rainMaterial;
@@ -571,6 +589,152 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     _mistInstances[sheet]->setParameter("time", float(time));
     _mistInstances[sheet]->setParameter("eye", eye);
   }
+}
+
+/// Builds the dome the sky's cloud is drawn on.
+///
+/// A hemisphere with a skirt below the horizon, so there is no seam where it
+/// meets the ground, and enough rings to interpolate a direction without
+/// faceting. Nothing about the cloud is in this mesh — it is somewhere to put
+/// pixels and nothing else.
+- (void)buildClouds {
+  if (_cloudMaterial != nullptr) return;
+
+  _cloudMaterial = Material::Builder()
+                       .package(kcloudsMaterial, kcloudsMaterial_len)
+                       .build(*_engine);
+
+  const int rings = kSkyRings;
+  const int segments = kSkySegments;
+  const int count = (rings + 1) * (segments + 1);
+
+  auto *vertices = new MistVertex[count];
+  for (int ring = 0; ring <= rings; ring++) {
+    // From a little below the horizon to straight up.
+    const float t = float(ring) / float(rings);
+    const float elevation = (-0.06f + 1.06f * t) * float(M_PI) * 0.5f;
+
+    for (int segment = 0; segment <= segments; segment++) {
+      const float azimuth =
+          float(segment) / float(segments) * 2.0f * float(M_PI);
+      const int index = ring * (segments + 1) + segment;
+
+      vertices[index] = {
+          float3{std::cos(elevation) * std::sin(azimuth), std::sin(elevation),
+                 std::cos(elevation) * std::cos(azimuth)},
+          float2{float(segment) / float(segments), t},
+      };
+    }
+  }
+
+  auto *indices = new uint16_t[rings * segments * 6];
+  int at = 0;
+  for (int ring = 0; ring < rings; ring++) {
+    for (int segment = 0; segment < segments; segment++) {
+      const uint16_t a = uint16_t(ring * (segments + 1) + segment);
+      const uint16_t b = uint16_t(a + 1);
+      const uint16_t c = uint16_t(a + segments + 1);
+      const uint16_t d = uint16_t(c + 1);
+
+      indices[at++] = a;
+      indices[at++] = c;
+      indices[at++] = b;
+      indices[at++] = b;
+      indices[at++] = c;
+      indices[at++] = d;
+    }
+  }
+
+  _skyVertices =
+      VertexBuffer::Builder()
+          .vertexCount(count)
+          .bufferCount(1)
+          .attribute(VertexAttribute::POSITION, 0,
+                     VertexBuffer::AttributeType::FLOAT3,
+                     offsetof(MistVertex, position), sizeof(MistVertex))
+          .attribute(VertexAttribute::UV0, 0,
+                     VertexBuffer::AttributeType::FLOAT2,
+                     offsetof(MistVertex, uv), sizeof(MistVertex))
+          .build(*_engine);
+  _skyVertices->setBufferAt(
+      *_engine, 0,
+      VertexBuffer::BufferDescriptor(
+          vertices, sizeof(MistVertex) * count,
+          [](void *buffer, size_t, void *) {
+            delete[] static_cast<MistVertex *>(buffer);
+          }));
+
+  _skyIndices = IndexBuffer::Builder()
+                    .indexCount(rings * segments * 6)
+                    .bufferType(IndexBuffer::IndexType::USHORT)
+                    .build(*_engine);
+  _skyIndices->setBuffer(
+      *_engine,
+      IndexBuffer::BufferDescriptor(
+          indices, sizeof(uint16_t) * rings * segments * 6,
+          [](void *buffer, size_t, void *) {
+            delete[] static_cast<uint16_t *>(buffer);
+          }));
+
+  _cloudInstance = _cloudMaterial->createInstance();
+
+  _cloudEntity = utils::EntityManager::get().create();
+  RenderableManager::Builder(1)
+      .boundingBox({{-kSkyRadius, -kSkyRadius, -kSkyRadius},
+                    {kSkyRadius, kSkyRadius, kSkyRadius}})
+      .material(0, _cloudInstance)
+      .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _skyVertices,
+                _skyIndices, 0, rings * segments * 6)
+      .receiveShadows(false)
+      .castShadows(false)
+      // Behind everything else transparent: the sky is behind the weather,
+      // and cloud a hundred metres up is behind the rain in front of the lens.
+      .priority(0)
+      .culling(false)
+      .build(*_engine, _cloudEntity);
+}
+
+/// Keeps the dome around the camera and lets the wind carry the weather.
+///
+/// The dome moves with the viewer and the cloud does not: what a pixel shows
+/// is worked out from where its ray crosses the layer in world space, so
+/// walking a kilometre walks under different cloud.
+- (void)updateCloudsAtTime:(double)time {
+  if (!_cloudsShowing || !_cloudEntity) return;
+
+  auto &transforms = _engine->getTransformManager();
+  const float3 eye = _camera->getPosition();
+
+  transforms.setTransform(
+      transforms.getInstance(_cloudEntity),
+      mat4f::translation(eye) * mat4f::scaling(float3{kSkyRadius}));
+
+  _cloudInstance->setParameter("time", float(time));
+  _cloudInstance->setParameter("eye", eye);
+}
+
+- (void)setCloudsEnabled:(BOOL)enabled params:(const float *)params {
+  if (_disposed) return;
+
+  const float cover = params[3];
+  const bool showing = enabled && cover > 0.01f;
+
+  if (showing) {
+    [self buildClouds];
+
+    _cloudInstance->setParameter("colour",
+                                 float3{params[0], params[1], params[2]});
+    _cloudInstance->setParameter("cover", cover);
+    _cloudInstance->setParameter("wind", float2{params[4], params[5]});
+    _cloudInstance->setParameter("scale", params[6]);
+    _cloudInstance->setParameter("altitude", std::max(params[7], 1.0f));
+
+    if (!_cloudsShowing) _scene->addEntity(_cloudEntity);
+  } else if (_cloudsShowing) {
+    _scene->remove(_cloudEntity);
+  }
+
+  _cloudsShowing = showing;
 }
 
 /// Builds the panes a curtain of rain or snow hangs on.
@@ -1349,6 +1513,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     }
   }
 
+  [self updateCloudsAtTime:time];
   [self updateMistAtTime:time];
   [self updateRainAtTime:time];
 
@@ -1447,6 +1612,23 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   }
   _mistEntities.clear();
   _mistInstances.clear();
+
+  if (_cloudEntity) {
+    _scene->remove(_cloudEntity);
+    _engine->destroy(_cloudEntity);
+    entities.destroy(_cloudEntity);
+    _cloudEntity = utils::Entity();
+  }
+  if (_cloudInstance) {
+    _engine->destroy(_cloudInstance);
+    _cloudInstance = nullptr;
+  }
+  if (_cloudMaterial) {
+    _engine->destroy(_skyVertices);
+    _engine->destroy(_skyIndices);
+    _engine->destroy(_cloudMaterial);
+    _cloudMaterial = nullptr;
+  }
 
   for (size_t pane = 0; pane < _rainEntities.size(); pane++) {
     _scene->remove(_rainEntities[pane]);

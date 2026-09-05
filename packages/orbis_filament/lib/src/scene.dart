@@ -361,6 +361,59 @@ class OrbisFog {
   static const int stride = 16;
 }
 
+/// The cloud in the sky.
+///
+/// Not the same thing as the fog, and worth keeping apart: fog is the air
+/// between here and the horizon, and cloud is a layer a long way overhead
+/// that the light comes through. A scene can have either without the other,
+/// and a setting that did both would be wrong for every scene that wants one.
+class OrbisClouds {
+  OrbisClouds({
+    Vector3? colour,
+    this.cover = 0,
+    Vector2? wind,
+    this.featureSize = 1 / 320,
+    this.altitude = 140,
+  }) : colour = colour ?? Vector3(0.62, 0.66, 0.72),
+       wind = wind ?? Vector2(3, 1);
+
+  /// A clear sky, and cheap: the deck is not drawn at all.
+  static final OrbisClouds none = OrbisClouds(cover: 0);
+
+  /// Linear RGB. What the underside of the cloud looks like, which is what
+  /// anybody standing under it sees.
+  final Vector3 colour;
+
+  /// How much of the sky is covered, from nothing to everything.
+  final double cover;
+
+  /// What carries it across the sky, in metres a second.
+  final Vector2 wind;
+
+  /// Turns of the noise per metre: the reciprocal of how big a cloud is.
+  /// A three-hundred-metre cloud is a summer's afternoon.
+  final double featureSize;
+
+  /// How high the deck hangs, in metres.
+  final double altitude;
+
+  bool get isVisible => cover > 0.01;
+
+  Float32List get _packed => Float32List.fromList([
+    colour.x,
+    colour.y,
+    colour.z,
+    cover,
+    wind.x,
+    wind.y,
+    featureSize,
+    altitude,
+  ]);
+
+  /// How many floats the sky's cloud occupies.
+  static const int stride = 8;
+}
+
 /// Water or snow on its way down.
 ///
 /// One description for both, because they are the same thing at different
@@ -445,10 +498,12 @@ class OrbisScene {
     OrbisSky? sky,
     OrbisFog? fog,
     OrbisPrecipitation? precipitation,
+    OrbisClouds? clouds,
   }) : lights = lights ?? const [],
        sky = sky ?? OrbisSky(),
        fog = fog ?? OrbisFog.none,
-       precipitation = precipitation ?? OrbisPrecipitation.none;
+       precipitation = precipitation ?? OrbisPrecipitation.none,
+       clouds = clouds ?? OrbisClouds.none;
 
   final List<OrbisObject> objects;
 
@@ -460,6 +515,7 @@ class OrbisScene {
   final OrbisSky sky;
   final OrbisFog fog;
   final OrbisPrecipitation precipitation;
+  final OrbisClouds clouds;
 
   /// Packs the scene into the flat arrays the channel carries.
   Map<String, Object> toMessage(int textureId) {
@@ -534,6 +590,8 @@ class OrbisScene {
       'fogParams': fog._packed,
       'precipitationEnabled': precipitation.isVisible,
       'precipitationParams': precipitation._packed,
+      'cloudsEnabled': clouds.isVisible,
+      'cloudParams': clouds._packed,
     };
   }
 

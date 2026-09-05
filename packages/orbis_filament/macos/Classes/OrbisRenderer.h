@@ -81,6 +81,17 @@ NS_ASSUME_NONNULL_BEGIN
 /// of cloud lying in a valley. Disabled skips both.
 - (void)setFogEnabled:(BOOL)enabled params:(const float *)params;
 
+/// Sets the cloud in the sky.
+///
+/// `params` is eight floats: colour, how much of the sky is covered, the wind
+/// carrying it in metres a second, how large its features are as turns per
+/// metre, and how high it hangs.
+///
+/// A deck rather than a dome. Seen from underneath, a flat layer converges at
+/// the horizon the way a real overcast does; what it cannot do is be looked
+/// at from above.
+- (void)setCloudsEnabled:(BOOL)enabled params:(const float *)params;
+
 /// Sets the rain or snow falling through the scene.
 ///
 /// `params` is twelve floats: colour, how much of it there is, how fast it

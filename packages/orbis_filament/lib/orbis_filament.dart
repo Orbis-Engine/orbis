@@ -9,6 +9,7 @@ export 'src/orbis_view.dart' show OrbisView;
 export 'src/scene.dart'
     show
         OrbisCamera,
+        OrbisClouds,
         OrbisFog,
         OrbisLight,
         OrbisLightKind,

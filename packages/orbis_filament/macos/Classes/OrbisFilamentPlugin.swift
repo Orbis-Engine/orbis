@@ -134,6 +134,7 @@ private final class Viewport {
     renderer.setFogEnabled(scene.fogEnabled, params: scene.fogParams)
     renderer.setPrecipitationEnabled(scene.precipitationEnabled,
                                      params: scene.precipitationParams)
+    renderer.setCloudsEnabled(scene.cloudsEnabled, params: scene.cloudParams)
     renderer.setCameraPosition(scene.cameraPosition,
                                target: scene.cameraTarget,
                                fieldOfView: scene.fieldOfView)
@@ -184,6 +185,8 @@ private struct Scene {
   let fogParams: [Float]
   let precipitationEnabled: Bool
   let precipitationParams: [Float]
+  let cloudsEnabled: Bool
+  let cloudParams: [Float]
 
   /// How many floats one light occupies, and how many the fog does. Both
   /// match the packing on the Dart side; a mismatch is caught here as a
@@ -191,6 +194,7 @@ private struct Scene {
   private static let lightStride = 18
   private static let fogStride = 16
   private static let precipitationStride = 12
+  private static let cloudStride = 8
 
   init?(arguments: [String: Any]) {
     guard let keys = (arguments["objectKeys"] as? FlutterStandardTypedData)?.int64s,
@@ -210,6 +214,9 @@ private struct Scene {
           let precipitationParams =
             (arguments["precipitationParams"] as? FlutterStandardTypedData)?.floats,
           let precipitationEnabled = arguments["precipitationEnabled"] as? Bool,
+          let cloudParams =
+            (arguments["cloudParams"] as? FlutterStandardTypedData)?.floats,
+          let cloudsEnabled = arguments["cloudsEnabled"] as? Bool,
           let fogEnabled = arguments["fogEnabled"] as? Bool,
           let showBody = arguments["showBody"] as? Bool,
           let ambient = arguments["ambient"] as? Double,
@@ -235,6 +242,7 @@ private struct Scene {
           lightKinds.allSatisfy({ $0 >= 0 && $0 <= 2 }),
           fogParams.count == Scene.fogStride,
           precipitationParams.count == Scene.precipitationStride,
+          cloudParams.count == Scene.cloudStride,
           skyColour.count == 3,
           cameraPosition.count == 3, cameraTarget.count == 3 else { return nil }
 
@@ -263,6 +271,8 @@ private struct Scene {
     self.fogParams = fogParams
     self.precipitationEnabled = precipitationEnabled
     self.precipitationParams = precipitationParams
+    self.cloudsEnabled = cloudsEnabled
+    self.cloudParams = cloudParams
   }
 }
 
