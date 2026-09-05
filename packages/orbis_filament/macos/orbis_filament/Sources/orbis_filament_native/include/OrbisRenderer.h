@@ -81,16 +81,18 @@ NS_ASSUME_NONNULL_BEGIN
 /// of cloud lying in a valley. Disabled skips both.
 - (void)setFogEnabled:(BOOL)enabled params:(const float *)params;
 
-/// Sets the cloud in the sky.
+/// Sets the sky: its gradient, the body in it, its cloud, and its lightning.
 ///
-/// `params` is eight floats: colour, how much of the sky is covered, the wind
-/// carrying it in metres a second, how large its features are as turns per
-/// metre, and how high it hangs.
+/// `params` is thirty-one floats, in the order `OrbisSky` packs them: the
+/// zenith and horizon colours, the body's direction, colour, angular size and
+/// whether to draw it, then the cloud's own sky-light, cover, base altitude,
+/// depth, feature size, density, billow and extinction, the wind carrying it,
+/// and finally the strike — how bright, which way, and which strike.
 ///
-/// A deck rather than a dome. Seen from underneath, a flat layer converges at
-/// the horizon the way a real overcast does; what it cannot do is be looked
-/// at from above.
-- (void)setCloudsEnabled:(BOOL)enabled params:(const float *)params;
+/// All of it is one shader on one dome because all of it is one question:
+/// what is along this view ray. Answering it once is what lets the cloud
+/// cover the sun, the sun light the cloud, and a strike light both.
+- (void)setSkyEnabled:(BOOL)enabled params:(const float *)params;
 
 /// Sets the rain or snow falling through the scene.
 ///

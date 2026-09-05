@@ -1,0 +1,395 @@
+// The sky: its gradient, the body in it, the cloud, and the lightning.
+//
+// One shader on one dome, because all four are the same question — what is
+// along this view ray — and answering it once means the cloud can occlude the
+// sun, the sun can light the cloud, and a strike can light both.
+//
+// The dome is only somewhere to put pixels. Nothing about the sky is in the
+// mesh: every pixel takes its own direction and works out what is along it,
+// which is why the cloud is overhead when you look up, crowds at the horizon,
+// and stays put when the camera turns. A picture painted on a dome cannot do
+// any of that.
+material {
+    name : orbisSky,
+    shadingModel : unlit,
+    // Opaque in effect — alpha is always one — but kept in the transparent
+    // queue so it draws behind the rain and the mist, which are nearer.
+    blending : transparent,
+    depthWrite : false,
+    // The camera is inside it.
+    culling : none,
+    parameters : [
+        // The gradient. Deep overhead, pale at the horizon, because that is
+        // more air to look through and every bit of it scatters.
+        { type : float3, name : zenith },
+        { type : float3, name : horizon },
+
+        // The sun or the moon: which way it is, what colour it is, how wide
+        // it is in radians, and whether to draw it at all.
+        { type : float3, name : bodyDirection },
+        { type : float3, name : bodyColour },
+        { type : float,  name : bodySize },
+        { type : float,  name : showBody },
+
+        // What the sky itself puts back into the cloud's shadowed side. Real
+        // cloud is never black underneath; it is lit by the blue above it.
+        { type : float3, name : ambient },
+
+        // The layer: how much sky it takes, how high its base is, how deep
+        // it is, how big the lumps are, and how solid.
+        { type : float,  name : cover },
+        { type : float,  name : altitude },
+        { type : float,  name : thickness },
+        { type : float,  name : scale },
+        { type : float,  name : density },
+
+        // How strongly a metre of solid cloud takes the light out of a ray.
+        // The same number does the seeing and the shadowing, because it is
+        // the same cloud either way.
+        { type : float,  name : extinction },
+
+        // How much the noise is folded. Nothing is a smooth sheet of
+        // stratus; all of it is the cauliflower of a cumulus.
+        { type : float,  name : billow },
+
+        { type : float,  name : time },
+        { type : float2, name : wind },
+        { type : float3, name : eye },
+
+        // A strike: how bright it is this instant, which way it is, and which
+        // strike it is — the seed the bolt is drawn from.
+        { type : float,  name : flash },
+        { type : float3, name : flashDirection },
+        { type : float,  name : flashSeed }
+    ],
+}
+
+fragment {
+    #define MARCH_STEPS 16
+    #define LIGHT_STEPS 3
+
+    float hash13(vec3 p) {
+        p = fract(p * 0.1031);
+        p += dot(p, p.zyx + 31.32);
+        return fract((p.x + p.y) * p.z);
+    }
+
+    float hash11(float p) {
+        return fract(sin(p * 78.233) * 43758.5453123);
+    }
+
+    float valueNoise(vec3 p) {
+        vec3 cell = floor(p);
+        vec3 f = fract(p);
+        vec3 w = f * f * (3.0 - 2.0 * f);
+
+        float a = hash13(cell + vec3(0.0, 0.0, 0.0));
+        float b = hash13(cell + vec3(1.0, 0.0, 0.0));
+        float c = hash13(cell + vec3(0.0, 1.0, 0.0));
+        float d = hash13(cell + vec3(1.0, 1.0, 0.0));
+        float e = hash13(cell + vec3(0.0, 0.0, 1.0));
+        float g = hash13(cell + vec3(1.0, 0.0, 1.0));
+        float h = hash13(cell + vec3(0.0, 1.0, 1.0));
+        float i = hash13(cell + vec3(1.0, 1.0, 1.0));
+
+        return mix(mix(mix(a, b, w.x), mix(c, d, w.x), w.y),
+                   mix(mix(e, g, w.x), mix(h, i, w.x), w.y), w.z);
+    }
+
+    // One octave, folded about its middle by `billow`.
+    //
+    // Folding turns a smooth swell into a ridge, and a stack of ridges is
+    // what a cauliflower head is. It is the single difference between cloud
+    // that looks like weather and cloud that looks like smoke.
+    float octave(vec3 p, float billow) {
+        float n = valueNoise(p);
+        return mix(n, 1.0 - abs(n * 2.0 - 1.0), billow);
+    }
+
+    // Four octaves, for what the eye is actually looking at.
+    //
+    // `detail` fades the fine ones out with distance. A seventy-metre lump
+    // three kilometres away is smaller than a pixel, and asking for it does
+    // not draw it — it draws the noise between one sample of it and the next,
+    // which is the speckle a cloud must not have. Dropping it is the same
+    // thing a mipmap does, done by hand because this field has no texture to
+    // build one from.
+    float shapeNoise(vec3 p, float billow, float detail) {
+        float total = 0.0;
+        float amplitude = 0.5;
+        float norm = 0.0;
+        vec3 q = p;
+
+        for (int i = 0; i < 4; i++) {
+            float weight = amplitude * (i < 2 ? 1.0 : detail);
+            total += weight * octave(q, billow);
+            norm += weight;
+            q = q * 2.11 + vec3(3.1, 1.7, 5.3);
+            amplitude *= 0.5;
+        }
+        return total / max(norm, 0.0001);
+    }
+
+    // Two, for the march toward the light, where nothing is looked at
+    // directly and the detail would only cost.
+    float lightNoise(vec3 p, float billow) {
+        float total = octave(p, billow);
+        total += 0.5 * octave(p * 2.11 + vec3(3.1, 1.7, 5.3), billow);
+        return total / 1.5;
+    }
+
+    /// How much cloud is at a point, from nothing to solid.
+    ///
+    /// `fine` is one for the march the eye follows and zero for the march
+    /// towards the light, where the detail would only cost. `detail` fades
+    /// the small stuff out with distance.
+    float cloudAt(vec3 p, float fine, float detail) {
+        // The wind carries the weather; the sky stays where it is.
+        p.xz -= materialParams.wind * materialParams.time;
+
+        // Where in the layer this is, from the base to the top.
+        float h = clamp((p.y - materialParams.altitude) /
+                        max(materialParams.thickness, 1.0), 0.0, 1.0);
+
+        // A flat base and a rounded top. Cumulus condense at one height and
+        // billow up from it, which is why the underside of a fair-weather sky
+        // is a straight line and the top is not.
+        float profile = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(0.55, 1.0, h));
+
+        float n = fine > 0.5
+            ? shapeNoise(p * materialParams.scale, materialParams.billow, detail)
+            : lightNoise(p * materialParams.scale, materialParams.billow);
+
+        // Where cloud forms at all, on a scale several times larger than the
+        // clouds themselves.
+        //
+        // Without this the field is evenly busy everywhere, and an evenly
+        // busy sky is a texture rather than weather. Real cloud comes in
+        // masses with clear sky between them, because what makes it is
+        // convection over some ground and not over the rest.
+        float mass = valueNoise(vec3(p.xz * materialParams.scale * 0.22, 11.0));
+
+        // Cover is where the field is cut. Everything below the cut is sky.
+        //
+        // The range is what it is because a stack of value noise piles up
+        // around its own middle rather than spreading evenly: nearly all of
+        // the field sits between a third and two thirds, so a cut anywhere
+        // near a half is a closed sky whatever the slider says. Cutting high
+        // is what leaves blue between the clouds.
+        float cut = mix(0.86, 0.32, clamp(materialParams.cover, 0.0, 1.0))
+                  + (mass - 0.5) * 0.20;
+
+        // Sharp rather than a ramp from the cut to solid. A cumulus has an
+        // edge you could trace; what a linear ramp draws is a smudge.
+        float d = smoothstep(cut, cut + 0.10, n);
+
+        return d * profile * materialParams.density;
+    }
+
+    /// Henyey–Greenstein: how much light a droplet throws forward.
+    ///
+    /// This is the silver lining. Cloud between the eye and the sun is
+    /// brighter at its edge than anything a Lambert term would give, because
+    /// water scatters strongly forward, and no amount of tinting fakes it.
+    float scatterPhase(float mu, float g) {
+        float gg = g * g;
+        float d = 1.0 + gg - 2.0 * g * mu;
+        return (1.0 - gg) / (4.0 * 3.14159265 * max(d * sqrt(d), 0.0001));
+    }
+
+    /// Distance from a point to a segment, for drawing the bolt.
+    float toSegment(vec2 p, vec2 a, vec2 b) {
+        vec2 pa = p - a;
+        vec2 ba = b - a;
+        float t = clamp(dot(pa, ba) / max(dot(ba, ba), 0.00001), 0.0, 1.0);
+        return length(pa - ba * t);
+    }
+
+    /// A bolt, in the flat frame around the direction of the strike.
+    ///
+    /// Ten segments walking down from the cloud base, each stepping sideways
+    /// by an amount fixed by the seed — so a strike is jagged, is a different
+    /// shape every time, and is the same shape whenever that second of that
+    /// storm is played again. Two forks, because a bolt that does not branch
+    /// reads as a crack in the screen.
+    float boltAt(vec2 uv, float seed) {
+        float near = 1000.0;
+
+        vec2 a = vec2(0.0, 0.34);
+        float drift = 0.0;
+
+        vec2 forkAt = a;
+        vec2 forkTo = a;
+
+        for (int i = 1; i <= 10; i++) {
+            float f = float(i) / 10.0;
+            // Accumulated rather than rolled fresh, so the channel wanders
+            // down the sky instead of shaking about one line.
+            drift += (hash11(seed + float(i) * 3.7) - 0.5) * 0.075;
+            vec2 b = vec2(drift, 0.34 - f * 0.66);
+            near = min(near, toSegment(uv, a, b));
+
+            if (i == 4) forkAt = b;
+            if (i == 7) forkTo = b;
+            a = b;
+        }
+
+        // Two forks off the channel, each a short run of its own.
+        vec2 p = forkAt;
+        for (int i = 1; i <= 3; i++) {
+            vec2 q = p + vec2((hash11(seed + 40.0 + float(i)) - 0.5) * 0.12, -0.10);
+            near = min(near, toSegment(uv, p, q));
+            p = q;
+        }
+        p = forkTo;
+        for (int i = 1; i <= 2; i++) {
+            vec2 q = p + vec2((hash11(seed + 70.0 + float(i)) - 0.5) * 0.10, -0.08);
+            near = min(near, toSegment(uv, p, q));
+            p = q;
+        }
+
+        return near;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec3 direction = normalize(getWorldPosition() - materialParams.eye);
+        float up = direction.y;
+
+        // ---- The sky itself -------------------------------------------
+        //
+        // Pale at the horizon and deep overhead. The curve is not linear
+        // because the air is not: most of the whitening happens in the last
+        // few degrees above the ground.
+        float height = clamp(up, 0.0, 1.0);
+        vec3 sky = mix(materialParams.horizon, materialParams.zenith,
+                       pow(height, 0.42));
+
+        // Below the horizon the dome is only there to close the gap between
+        // where the sky stops and where the ground starts. Darkened, so what
+        // shows through that gap reads as distance rather than as more sky.
+        sky *= mix(0.45, 1.0, smoothstep(-0.30, 0.0, up));
+
+        vec3 bodyDirection = normalize(materialParams.bodyDirection);
+        float mu = dot(direction, bodyDirection);
+
+        if (materialParams.showBody > 0.5) {
+            // The disc, at the angle it actually subtends, and the glow
+            // around it — which is the same light, scattered by the air on
+            // its way here rather than arriving straight.
+            float angle = acos(clamp(mu, -1.0, 1.0));
+            float size = max(materialParams.bodySize, 0.002);
+            float disc = 1.0 - smoothstep(size * 0.80, size * 1.25, angle);
+
+            float near = pow(max(mu, 0.0), 900.0);
+            float wide = pow(max(mu, 0.0), 14.0);
+
+            sky += materialParams.bodyColour * (disc * 6.0 + near * 2.0 + wide * 0.10);
+        }
+
+        // ---- The cloud ------------------------------------------------
+        float transmittance = 1.0;
+        vec3 scattered = vec3(0.0);
+
+        if (up > 0.015 && materialParams.cover > 0.001 && materialParams.density > 0.0) {
+            float base = materialParams.altitude / up;
+            float top = (materialParams.altitude + materialParams.thickness) / up;
+
+            // Near the horizon a ray lies almost flat and would cross
+            // kilometres of the layer. Capped at a few times its depth —
+            // not to save the steps, but because sixteen steps spread over
+            // five kilometres land far enough apart to miss whole clouds
+            // between them, and what that draws is salt and pepper.
+            float span = min(top - base, materialParams.thickness * 3.0);
+
+            if (base < 26000.0) {
+                float stepLength = span / float(MARCH_STEPS);
+                float lightStep = materialParams.thickness * 0.42;
+
+                // Ten steps band into ten visible shells unless each pixel
+                // starts somewhere different. Fixed per direction rather than
+                // per frame, so a still frame is the same still frame twice.
+                float jitter = hash13(direction * 977.0);
+
+                // How much of the fine detail is worth asking for at this
+                // distance. Nothing beyond a few kilometres is.
+                float detail = 1.0 - smoothstep(1200.0, 5000.0, base);
+
+                // Roughly one away from the sun and several times that
+                // looking towards it, which is the silver lining.
+                float phase = 0.9 + 6.0 * scatterPhase(mu, 0.6);
+
+                for (int i = 0; i < MARCH_STEPS; i++) {
+                    vec3 p = materialParams.eye
+                           + direction * (base + (float(i) + jitter) * stepLength);
+
+                    float d = cloudAt(p, 1.0, detail);
+                    if (d > 0.002) {
+                        // How much of the sun reaches here, marched toward
+                        // it. This is what puts a shadow on the underside and
+                        // a blaze on the top, and it is the whole of why a
+                        // cloud reads as a solid a mile wide.
+                        float blocked = 0.0;
+                        for (int j = 1; j <= LIGHT_STEPS; j++) {
+                            blocked += cloudAt(
+                                p + bodyDirection * (float(j) * lightStep), 0.0, detail);
+                        }
+                        float lit = exp(-blocked * lightStep * materialParams.extinction);
+
+                        // The edge facing the light is brighter than
+                        // absorption alone predicts, because light scatters
+                        // in before it is absorbed. Without this every cloud
+                        // has a dark rim, which is the opposite of the truth.
+                        float powder = 1.0 - exp(-d * 6.0);
+
+                        vec3 lum = materialParams.bodyColour * lit * phase * powder
+                                 + materialParams.ambient;
+
+                        float a = 1.0 - exp(-d * stepLength * materialParams.extinction);
+                        scattered += transmittance * lum * a;
+                        transmittance *= 1.0 - a;
+
+                        if (transmittance < 0.02) break;
+                    }
+                }
+
+                // Out at the horizon, and out at distance, where there is too
+                // much air in the way for any of it to still be readable.
+                float fade = smoothstep(0.015, 0.13, up)
+                           * (1.0 - smoothstep(11000.0, 24000.0, base));
+                transmittance = mix(1.0, transmittance, fade);
+                scattered *= fade;
+            }
+        }
+
+        vec3 colour = sky * transmittance + scattered;
+
+        // ---- The strike -----------------------------------------------
+        if (materialParams.flash > 0.001) {
+            // The whole sky lifts, because a strike lights the cloud from
+            // inside and the cloud is most of what is up there.
+            colour += vec3(0.55, 0.60, 0.75) * materialParams.flash
+                    * (0.25 + 0.75 * (1.0 - transmittance));
+
+            vec3 strike = normalize(materialParams.flashDirection);
+            if (dot(direction, strike) > 0.25) {
+                // A flat frame around the strike, so the bolt is drawn in the
+                // sky rather than on the screen and stays put when the camera
+                // turns.
+                vec3 side = normalize(cross(vec3(0.0, 1.0, 0.0), strike));
+                vec3 rise = cross(strike, side);
+                vec2 uv = vec2(dot(direction, side), dot(direction, rise));
+
+                float near = boltAt(uv, materialParams.flashSeed);
+                float core = exp(-near * 900.0);
+                float halo = exp(-near * 70.0);
+
+                colour += vec3(0.80, 0.85, 1.0)
+                        * materialParams.flash * (core * 9.0 + halo * 0.6);
+            }
+        }
+
+        material.baseColor = vec4(colour, 1.0);
+    }
+}

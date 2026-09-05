@@ -42,7 +42,7 @@
 
 #include "generated/lit_material.h"
 #include "generated/mist_material.h"
-#include "generated/clouds_material.h"
+#include "generated/sky_material.h"
 #include "generated/rain_material.h"
 
 
@@ -340,6 +340,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   NSLock *_presentLock;
   BOOL _disposed;
   int _frameCount;
+  double _startedAt;
 }
 
 - (nullable instancetype)initWithWidth:(uint32_t)width height:(uint32_t)height {
@@ -601,7 +602,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   if (_cloudMaterial != nullptr) return;
 
   _cloudMaterial = Material::Builder()
-                       .package(kcloudsMaterial, kcloudsMaterial_len)
+                       .package(kskyMaterial, kskyMaterial_len)
                        .build(*_engine);
 
   const int rings = kSkyRings;
@@ -610,9 +611,14 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 
   auto *vertices = new MistVertex[count];
   for (int ring = 0; ring <= rings; ring++) {
-    // From a little below the horizon to straight up.
+    // Well below the horizon to straight up.
+    //
+    // A shallow skirt leaves a band between where the dome stops and where
+    // the ground starts, and what shows through it is the flat skybox — a
+    // dark ring around the whole scene. Reaching a good way down costs two
+    // rings of triangles and closes it.
     const float t = float(ring) / float(rings);
-    const float elevation = (-0.06f + 1.06f * t) * float(M_PI) * 0.5f;
+    const float elevation = (-0.45f + 1.45f * t) * float(M_PI) * 0.5f;
 
     for (int segment = 0; segment <= segments; segment++) {
       const float azimuth =
@@ -713,21 +719,40 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _cloudInstance->setParameter("eye", eye);
 }
 
-- (void)setCloudsEnabled:(BOOL)enabled params:(const float *)params {
+- (void)setSkyEnabled:(BOOL)enabled params:(const float *)params {
   if (_disposed) return;
 
-  const float cover = params[3];
-  const bool showing = enabled && cover > 0.01f;
+  const bool showing = enabled;
 
   if (showing) {
     [self buildClouds];
 
-    _cloudInstance->setParameter("colour",
-                                 float3{params[0], params[1], params[2]});
-    _cloudInstance->setParameter("cover", cover);
-    _cloudInstance->setParameter("wind", float2{params[4], params[5]});
-    _cloudInstance->setParameter("scale", params[6]);
-    _cloudInstance->setParameter("altitude", std::max(params[7], 1.0f));
+    // The order here is the order `OrbisSky.packed` writes them. It is one
+    // array rather than a dozen arguments because the sky is one thing.
+    _cloudInstance->setParameter("zenith", float3{params[0], params[1], params[2]});
+    _cloudInstance->setParameter("horizon", float3{params[3], params[4], params[5]});
+    _cloudInstance->setParameter("bodyDirection",
+                                 float3{params[6], params[7], params[8]});
+    _cloudInstance->setParameter("bodyColour",
+                                 float3{params[9], params[10], params[11]});
+    _cloudInstance->setParameter("bodySize", std::max(params[12], 0.001f));
+    _cloudInstance->setParameter("showBody", params[13]);
+
+    _cloudInstance->setParameter("ambient",
+                                 float3{params[14], params[15], params[16]});
+    _cloudInstance->setParameter("cover", params[17]);
+    _cloudInstance->setParameter("altitude", std::max(params[18], 1.0f));
+    _cloudInstance->setParameter("thickness", std::max(params[19], 1.0f));
+    _cloudInstance->setParameter("scale", params[20]);
+    _cloudInstance->setParameter("density", params[21]);
+    _cloudInstance->setParameter("billow", params[22]);
+    _cloudInstance->setParameter("extinction", params[23]);
+    _cloudInstance->setParameter("wind", float2{params[24], params[25]});
+
+    _cloudInstance->setParameter("flash", params[26]);
+    _cloudInstance->setParameter("flashDirection",
+                                 float3{params[27], params[28], params[29]});
+    _cloudInstance->setParameter("flashSeed", params[30]);
 
     if (!_cloudsShowing) _scene->addEntity(_cloudEntity);
   } else if (_cloudsShowing) {
@@ -1299,7 +1324,16 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   fog.color = LinearColor{params[0], params[1], params[2]};
   fog.density = params[3];
   fog.distance = params[4];
-  fog.cutOffDistance = params[5];
+  // Never past the sky.
+  //
+  // Filament fogs everything in the view, and the sky is geometry like
+  // anything else: a dome at nine hundred metres inside fog thick enough to
+  // hide a valley is a dome nobody can see. Fog that reaches it turns the
+  // whole frame into one flat grey, which is exactly what it did.
+  //
+  // Clamped here rather than asked of every caller, because a caller who
+  // forgets does not get a subtly wrong sky, they get no sky at all.
+  fog.cutOffDistance = std::min(params[5], kSkyRadius - 40.0f);
   fog.maximumOpacity = params[6];
   fog.height = params[7];
   fog.heightFalloff = params[8];
@@ -1533,7 +1567,13 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   // Debug aid: dumps exactly the buffer Flutter samples, which separates a
   // rendering fault from a handoff fault. Enabled by an environment variable
   // so it costs nothing when unset.
+  if (_frameCount == 0) _startedAt = CFAbsoluteTimeGetCurrent();
   if (++_frameCount == 60 && getenv("ORBIS_DUMP_FRAME")) {
+    // What sixty frames actually cost, so a change to the sky can be judged
+    // on its price as well as on how it looks.
+    const double elapsed = CFAbsoluteTimeGetCurrent() - _startedAt;
+    NSLog(@"[orbis] 60 frames in %.2fs (%.1f ms each)", elapsed,
+          elapsed * 1000.0 / 60.0);
     // The app is sandboxed, so this goes to the container's temporary
     // directory rather than anywhere the caller might name.
     NSString *path =

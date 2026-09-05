@@ -238,15 +238,52 @@ class OrbisCamera {
 /// Without it, every shadow and every surface facing away from the sun renders
 /// pure black.
 class OrbisSky {
-  OrbisSky({Vector3? colour, this.ambient = 28000, this.showBody = true})
-    : colour = colour ?? Vector3(0.10, 0.12, 0.16);
+  OrbisSky({
+    Vector3? colour,
+    Vector3? zenith,
+    Vector3? horizon,
+    this.ambient = 28000,
+    this.showBody = true,
+    this.drawn = true,
+    Vector3? bodyDirection,
+    Vector3? bodyColour,
+    this.bodySize = 0.0047,
+    this.flash = 0,
+    Vector3? flashDirection,
+    this.flashSeed = 0,
+    OrbisClouds? clouds,
+  }) : colour = colour ?? Vector3(0.10, 0.12, 0.16),
+       zenith = zenith ?? Vector3(0.05, 0.17, 0.48),
+       horizon = horizon ?? Vector3(0.60, 0.74, 0.90),
+       bodyDirection = bodyDirection ?? Vector3(0.35, 0.78, 0.52),
+       bodyColour = bodyColour ?? Vector3(1.00, 0.96, 0.90),
+       flashDirection = flashDirection ?? Vector3(0.0, 0.35, 1.0),
+       clouds = clouds ?? OrbisClouds.none;
 
-  /// Linear RGB.
+  /// Linear RGB. What the sky is worth as a light source, which is not the
+  /// same question as what it looks like: this is the one colour the image
+  /// based lighting is built from, and it is an average of a whole dome.
   final Vector3 colour;
+
+  /// Linear RGB, straight up and along the ground.
+  ///
+  /// Two colours rather than one because the sky is not one colour. Overhead
+  /// there is the least air to look through and it is deepest; at the horizon
+  /// there is the most and it is nearly white. A single flat colour is the
+  /// difference between a sky and a backdrop.
+  final Vector3 zenith;
+  final Vector3 horizon;
 
   /// How much light the sky casts, in lux. Roughly a tenth of the sun on a
   /// clear day, which is about the ratio outdoors.
   final double ambient;
+
+  /// Whether there is a sky to draw at all.
+  ///
+  /// An interior has none, and a scene that does not draw one pays for none:
+  /// the dome is the most expensive thing in a frame and it is skipped
+  /// outright rather than drawn empty.
+  final bool drawn;
 
   /// Whether whatever is lighting the scene is drawn in the sky as a disk.
   ///
@@ -255,6 +292,70 @@ class OrbisSky {
   /// and brightness, so a dim pale one reads as a moon without being a
   /// separate feature.
   final bool showBody;
+
+  /// Which way the body is, what colour it is, and how wide it is in radians.
+  ///
+  /// The same direction the cloud is lit from, which is the point of having
+  /// it here: a sun drawn in one place and a cloud lit from another is the
+  /// single thing that gives a sky away.
+  final Vector3 bodyDirection;
+  final Vector3 bodyColour;
+  final double bodySize;
+
+  /// A strike, this instant: how bright, which way, and which strike.
+  ///
+  /// The seed is what the bolt is drawn from, so one strike is a different
+  /// shape from the next and the same shape whenever that instant is played
+  /// again.
+  final double flash;
+  final Vector3 flashDirection;
+  final double flashSeed;
+
+  /// The layer of cloud in it.
+  ///
+  /// Held by the sky rather than beside it, because a cloud is a thing the
+  /// sky has: it is lit by the sky's own body, it covers the sky's own
+  /// gradient, and drawing either without the other is what made the last
+  /// two attempts read as wallpaper.
+  final OrbisClouds clouds;
+
+  /// Everything the sky is drawn from, in one array.
+  ///
+  /// The gradient, the body, the cloud and the strike travel together because
+  /// they are drawn together: one pass along one view ray, so the cloud can
+  /// cover the sun, the sun can light the cloud, and a strike can light both.
+  Float32List get packed {
+    final body = bodyDirection.length2 > 0
+        ? (bodyDirection.clone()..normalize())
+        : Vector3(0, 1, 0);
+    final strike = flashDirection.length2 > 0
+        ? (flashDirection.clone()..normalize())
+        : Vector3(0, 0, 1);
+
+    return Float32List.fromList([
+      zenith.x, zenith.y, zenith.z,
+      horizon.x, horizon.y, horizon.z,
+      body.x, body.y, body.z,
+      bodyColour.x, bodyColour.y, bodyColour.z,
+      bodySize,
+      showBody ? 1 : 0,
+      clouds.colour.x, clouds.colour.y, clouds.colour.z,
+      clouds.cover,
+      clouds.altitude,
+      clouds.thickness,
+      clouds.featureSize,
+      clouds.density,
+      clouds.billow,
+      clouds.extinction,
+      clouds.wind.x, clouds.wind.y,
+      flash,
+      strike.x, strike.y, strike.z,
+      flashSeed,
+    ]);
+  }
+
+  /// How many floats the sky occupies.
+  static const int stride = 31;
 }
 
 /// Air with something in it.
@@ -368,20 +469,100 @@ class OrbisFog {
 /// that the light comes through. A scene can have either without the other,
 /// and a setting that did both would be wrong for every scene that wants one.
 class OrbisClouds {
-  OrbisClouds({
-    Vector3? colour,
+  const OrbisClouds({
+    required this.colour,
     this.cover = 0,
-    Vector2? wind,
-    this.featureSize = 1 / 320,
-    this.altitude = 140,
-  }) : colour = colour ?? Vector3(0.62, 0.66, 0.72),
-       wind = wind ?? Vector2(3, 1);
+    required this.wind,
+    this.featureSize = 1 / 700,
+    this.altitude = 900,
+    this.thickness = 600,
+    this.density = 1,
+    this.billow = 0.85,
+    this.extinction = 0.012,
+  });
 
-  /// A clear sky, and cheap: the deck is not drawn at all.
-  static final OrbisClouds none = OrbisClouds(cover: 0);
+  /// A clear sky, and cheap: the layer is not marched at all.
+  static final OrbisClouds none = OrbisClouds(
+    colour: Vector3(0.17, 0.22, 0.33),
+    wind: Vector2.zero(),
+  );
 
-  /// Linear RGB. What the underside of the cloud looks like, which is what
-  /// anybody standing under it sees.
+  /// Fair-weather cumulus: flat bases at the condensation level, cauliflower
+  /// tops, and a lot of blue between them. The default sky, and the one
+  /// everybody pictures when they picture a cloud.
+  factory OrbisClouds.cumulus({double cover = 0.35, Vector2? wind}) =>
+      OrbisClouds(
+        colour: Vector3(0.17, 0.22, 0.33),
+        cover: cover,
+        wind: wind ?? Vector2(4, 1.5),
+      );
+
+  /// The flatter, wider version: lumps that have run together into a layer
+  /// with breaks in it rather than shapes with sky around them.
+  factory OrbisClouds.stratocumulus({double cover = 0.6, Vector2? wind}) =>
+      OrbisClouds(
+        colour: Vector3(0.15, 0.19, 0.28),
+        cover: cover,
+        wind: wind ?? Vector2(5, 2),
+        featureSize: 1 / 950,
+        altitude: 700,
+        thickness: 320,
+        density: 0.85,
+        billow: 0.5,
+        extinction: 0.010,
+      );
+
+  /// The grey lid. Low, shallow and nearly featureless, which is why an
+  /// overcast day has no shape to its sky and no shadows under it.
+  factory OrbisClouds.stratus({double cover = 0.95, Vector2? wind}) =>
+      OrbisClouds(
+        colour: Vector3(0.14, 0.16, 0.21),
+        cover: cover,
+        wind: wind ?? Vector2(3, 1),
+        featureSize: 1 / 1700,
+        altitude: 480,
+        thickness: 260,
+        density: 0.75,
+        billow: 0.08,
+        extinction: 0.009,
+      );
+
+  /// Ice, seven kilometres up. Thin enough that the sun comes straight
+  /// through it, and drawn out into streaks by a wind nothing slows down.
+  factory OrbisClouds.cirrus({double cover = 0.4, Vector2? wind}) =>
+      OrbisClouds(
+        colour: Vector3(0.26, 0.32, 0.44),
+        cover: cover,
+        wind: wind ?? Vector2(16, 6),
+        featureSize: 1 / 2600,
+        altitude: 7000,
+        thickness: 900,
+        density: 0.22,
+        billow: 0.3,
+        extinction: 0.004,
+      );
+
+  /// The anvil. Deep enough that its own base is in its own shadow, which is
+  /// the whole reason a storm sky is dark while the day around it is not.
+  factory OrbisClouds.cumulonimbus({double cover = 0.85, Vector2? wind}) =>
+      OrbisClouds(
+        colour: Vector3(0.08, 0.09, 0.12),
+        cover: cover,
+        wind: wind ?? Vector2(9, 4),
+        featureSize: 1 / 1200,
+        altitude: 600,
+        thickness: 2600,
+        density: 1.25,
+        billow: 0.7,
+        extinction: 0.016,
+      );
+
+  /// Linear RGB: what the sky puts back into the side the sun does not reach.
+  ///
+  /// Not the colour of the cloud — a cloud has no colour of its own, it is
+  /// white water lit by whatever reaches it. This is the blue that fills in
+  /// the shadowed side, and it is why an underside reads as grey-blue rather
+  /// than as black.
   final Vector3 colour;
 
   /// How much of the sky is covered, from nothing to everything.
@@ -390,28 +571,49 @@ class OrbisClouds {
   /// What carries it across the sky, in metres a second.
   final Vector2 wind;
 
-  /// Turns of the noise per metre: the reciprocal of how big a cloud is.
-  /// A three-hundred-metre cloud is a summer's afternoon.
+  /// Turns of the noise per metre: the reciprocal of how big a lump is.
   final double featureSize;
 
-  /// How high the deck hangs, in metres.
+  /// How high the base hangs and how deep the layer is, in metres.
+  ///
+  /// Depth is what separates cloud from a painted ceiling. A layer with none
+  /// can only be lit from one side; a layer with six hundred metres of it has
+  /// a lit top, a shadowed base and an edge the light comes through.
   final double altitude;
+  final double thickness;
 
-  bool get isVisible => cover > 0.01;
+  /// How solid it is where it is solid at all.
+  final double density;
 
-  Float32List get _packed => Float32List.fromList([
-    colour.x,
-    colour.y,
-    colour.z,
-    cover,
-    wind.x,
-    wind.y,
-    featureSize,
-    altitude,
-  ]);
+  /// How far the noise is folded, from a smooth sheet to a cauliflower.
+  final double billow;
 
-  /// How many floats the sky's cloud occupies.
-  static const int stride = 8;
+  /// How much light a metre of it takes out of a ray.
+  final double extinction;
+
+  bool get isVisible => cover > 0.01 && density > 0;
+
+  OrbisClouds copyWith({
+    Vector3? colour,
+    double? cover,
+    Vector2? wind,
+    double? featureSize,
+    double? altitude,
+    double? thickness,
+    double? density,
+    double? billow,
+    double? extinction,
+  }) => OrbisClouds(
+    colour: colour ?? this.colour,
+    cover: cover ?? this.cover,
+    wind: wind ?? this.wind,
+    featureSize: featureSize ?? this.featureSize,
+    altitude: altitude ?? this.altitude,
+    thickness: thickness ?? this.thickness,
+    density: density ?? this.density,
+    billow: billow ?? this.billow,
+    extinction: extinction ?? this.extinction,
+  );
 }
 
 /// Water or snow on its way down.
@@ -498,12 +700,10 @@ class OrbisScene {
     OrbisSky? sky,
     OrbisFog? fog,
     OrbisPrecipitation? precipitation,
-    OrbisClouds? clouds,
   }) : lights = lights ?? const [],
        sky = sky ?? OrbisSky(),
        fog = fog ?? OrbisFog.none,
-       precipitation = precipitation ?? OrbisPrecipitation.none,
-       clouds = clouds ?? OrbisClouds.none;
+       precipitation = precipitation ?? OrbisPrecipitation.none;
 
   final List<OrbisObject> objects;
 
@@ -515,7 +715,6 @@ class OrbisScene {
   final OrbisSky sky;
   final OrbisFog fog;
   final OrbisPrecipitation precipitation;
-  final OrbisClouds clouds;
 
   /// Packs the scene into the flat arrays the channel carries.
   Map<String, Object> toMessage(int textureId) {
@@ -586,12 +785,12 @@ class OrbisScene {
       'skyColour': _vector(sky.colour),
       'ambient': sky.ambient,
       'showBody': sky.showBody,
+      'skyParams': sky.packed,
       'fogEnabled': fog.isVisible,
       'fogParams': fog._packed,
       'precipitationEnabled': precipitation.isVisible,
       'precipitationParams': precipitation._packed,
-      'cloudsEnabled': clouds.isVisible,
-      'cloudParams': clouds._packed,
+      'skyEnabled': sky.drawn,
     };
   }
 
