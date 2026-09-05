@@ -361,6 +361,70 @@ class OrbisFog {
   static const int stride = 16;
 }
 
+/// Water or snow on its way down.
+///
+/// One description for both, because they are the same thing at different
+/// speeds: a field of drops falling and being blown sideways. What separates
+/// them is [stretch] — how far a drop travels while the shutter is open, which
+/// is the difference between a streak and a flake.
+class OrbisPrecipitation {
+  OrbisPrecipitation({
+    Vector3? colour,
+    this.amount = 0,
+    this.fall = 9,
+    Vector2? wind,
+    this.dropsPerMetre = 6,
+    this.stretch = 26,
+    this.threshold = 0.72,
+  }) : colour = colour ?? Vector3(0.72, 0.78, 0.86),
+       wind = wind ?? Vector2.zero();
+
+  /// Dry weather, and cheap: the curtains are not drawn at all.
+  static final OrbisPrecipitation none = OrbisPrecipitation(amount: 0);
+
+  /// Linear RGB.
+  final Vector3 colour;
+
+  /// How much of it there is, from nothing to a downpour.
+  final double amount;
+
+  /// Metres a second, downwards. Rain falls at about nine; snow at under one.
+  final double fall;
+
+  /// What carries it sideways, in metres a second.
+  final Vector2 wind;
+
+  /// How many drops there are in a metre.
+  final double dropsPerMetre;
+
+  /// How far a drop is smeared along its fall. One is a flake; forty is rain
+  /// caught in a headlight.
+  final double stretch;
+
+  /// How much of the field is drop rather than air. Higher is sparser.
+  final double threshold;
+
+  bool get isVisible => amount > 0;
+
+  Float32List get _packed => Float32List.fromList([
+    colour.x,
+    colour.y,
+    colour.z,
+    amount,
+    fall,
+    wind.x,
+    wind.y,
+    dropsPerMetre,
+    stretch,
+    threshold,
+    0,
+    0,
+  ]);
+
+  /// How many floats the weather on its way down occupies.
+  static const int stride = 12;
+}
+
 /// Everything the renderer needs for a frame.
 ///
 /// Sent whole rather than as a diff. A message that describes the entire scene
@@ -380,9 +444,11 @@ class OrbisScene {
     List<OrbisLight>? lights,
     OrbisSky? sky,
     OrbisFog? fog,
+    OrbisPrecipitation? precipitation,
   }) : lights = lights ?? const [],
        sky = sky ?? OrbisSky(),
-       fog = fog ?? OrbisFog.none;
+       fog = fog ?? OrbisFog.none,
+       precipitation = precipitation ?? OrbisPrecipitation.none;
 
   final List<OrbisObject> objects;
 
@@ -393,6 +459,7 @@ class OrbisScene {
   final OrbisCamera camera;
   final OrbisSky sky;
   final OrbisFog fog;
+  final OrbisPrecipitation precipitation;
 
   /// Packs the scene into the flat arrays the channel carries.
   Map<String, Object> toMessage(int textureId) {
@@ -465,6 +532,8 @@ class OrbisScene {
       'showBody': sky.showBody,
       'fogEnabled': fog.isVisible,
       'fogParams': fog._packed,
+      'precipitationEnabled': precipitation.isVisible,
+      'precipitationParams': precipitation._packed,
     };
   }
 

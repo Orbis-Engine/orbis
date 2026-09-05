@@ -132,6 +132,8 @@ private final class Viewport {
                           ambient: scene.ambient,
                           showBody: scene.showBody)
     renderer.setFogEnabled(scene.fogEnabled, params: scene.fogParams)
+    renderer.setPrecipitationEnabled(scene.precipitationEnabled,
+                                     params: scene.precipitationParams)
     renderer.setCameraPosition(scene.cameraPosition,
                                target: scene.cameraTarget,
                                fieldOfView: scene.fieldOfView)
@@ -180,12 +182,15 @@ private struct Scene {
   let showBody: Bool
   let fogEnabled: Bool
   let fogParams: [Float]
+  let precipitationEnabled: Bool
+  let precipitationParams: [Float]
 
   /// How many floats one light occupies, and how many the fog does. Both
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
   private static let lightStride = 18
   private static let fogStride = 16
+  private static let precipitationStride = 12
 
   init?(arguments: [String: Any]) {
     guard let keys = (arguments["objectKeys"] as? FlutterStandardTypedData)?.int64s,
@@ -202,6 +207,9 @@ private struct Scene {
           let cameraTarget = (arguments["cameraTarget"] as? FlutterStandardTypedData)?.floats,
           let skyColour = (arguments["skyColour"] as? FlutterStandardTypedData)?.floats,
           let fogParams = (arguments["fogParams"] as? FlutterStandardTypedData)?.floats,
+          let precipitationParams =
+            (arguments["precipitationParams"] as? FlutterStandardTypedData)?.floats,
+          let precipitationEnabled = arguments["precipitationEnabled"] as? Bool,
           let fogEnabled = arguments["fogEnabled"] as? Bool,
           let showBody = arguments["showBody"] as? Bool,
           let ambient = arguments["ambient"] as? Double,
@@ -226,6 +234,7 @@ private struct Scene {
           // falling through, which is a silent wrong answer.
           lightKinds.allSatisfy({ $0 >= 0 && $0 <= 2 }),
           fogParams.count == Scene.fogStride,
+          precipitationParams.count == Scene.precipitationStride,
           skyColour.count == 3,
           cameraPosition.count == 3, cameraTarget.count == 3 else { return nil }
 
@@ -252,6 +261,8 @@ private struct Scene {
     self.showBody = showBody
     self.fogEnabled = fogEnabled
     self.fogParams = fogParams
+    self.precipitationEnabled = precipitationEnabled
+    self.precipitationParams = precipitationParams
   }
 }
 

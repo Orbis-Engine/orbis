@@ -81,6 +81,17 @@ NS_ASSUME_NONNULL_BEGIN
 /// of cloud lying in a valley. Disabled skips both.
 - (void)setFogEnabled:(BOOL)enabled params:(const float *)params;
 
+/// Sets the rain or snow falling through the scene.
+///
+/// `params` is twelve floats: colour, how much of it there is, how fast it
+/// falls in metres a second, the wind carrying it, drops per metre, how far a
+/// drop is smeared along its fall, how much of the field is drop rather than
+/// air, and two spare.
+///
+/// Rain and snow are the same curtain at different settings: what separates
+/// them is how far a drop travels while the shutter is open.
+- (void)setPrecipitationEnabled:(BOOL)enabled params:(const float *)params;
+
 /// What a scene asked for that could not be given, and why.
 ///
 /// Reported back rather than logged, so an editor can name the asset it could

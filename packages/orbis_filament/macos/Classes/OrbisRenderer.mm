@@ -42,6 +42,7 @@
 
 #include "generated/lit_material.h"
 #include "generated/mist_material.h"
+#include "generated/rain_material.h"
 
 
 using namespace filament;
@@ -172,6 +173,14 @@ constexpr uint16_t kMistIndices[6] = {0, 1, 2, 2, 3, 0};
 /// a full-screen pass of four-octave noise, which is the whole cost of this.
 constexpr int kMistSheets = 10;
 
+/// How many panes a curtain of rain is drawn with, and how far in front of
+/// the camera each one hangs.
+///
+/// Three, at three depths, because one pane is a flat pattern and the eye
+/// reads depth from things moving past each other at different rates.
+constexpr int kRainCurtains = 3;
+constexpr float kRainDistances[kRainCurtains] = {2.5f, 7.0f, 18.0f};
+
 /// How far a bank reaches, in metres. Centred on the camera, so it is always
 /// around whoever is looking rather than somewhere in the world they might
 /// walk out of.
@@ -281,10 +290,16 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   /// The sheets a bank of mist is drawn with, and what they are made of.
   /// Built the first time a scene asks for weather and kept after that.
   Material *_mistMaterial;
-  VertexBuffer *_mistVertices;
-  IndexBuffer *_mistIndices;
+  VertexBuffer *_quadVertices;
+  IndexBuffer *_quadIndices;
   std::vector<utils::Entity> _mistEntities;
   std::vector<MaterialInstance *> _mistInstances;
+
+  /// The panes a curtain of rain or snow is drawn on.
+  Material *_rainMaterial;
+  std::vector<utils::Entity> _rainEntities;
+  std::vector<MaterialInstance *> _rainInstances;
+  bool _rainShowing;
 
   /// What the current weather is, so the sheets are only rewritten when it
   /// changes rather than on every frame.
@@ -454,12 +469,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 ///
 /// Lazily because most scenes have none, and a scene with none should not pay
 /// for a material, two buffers and ten renderables it never draws.
-- (void)buildMist {
-  if (_mistMaterial != nullptr) return;
-
-  _mistMaterial = Material::Builder()
-                      .package(kmistMaterial, kmistMaterial_len)
-                      .build(*_engine);
+- (void)buildQuad {
+  if (_quadVertices != nullptr) return;
 
   // Heap and freed by the callback, for the same reason the cube's vertices
   // are: Filament holds the pointer until its own thread performs the upload,
@@ -467,7 +478,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   auto *corners = new MistVertex[4];
   for (int i = 0; i < 4; i++) corners[i] = kMistCorners[i];
 
-  _mistVertices =
+  _quadVertices =
       VertexBuffer::Builder()
           .vertexCount(4)
           .bufferCount(1)
@@ -478,7 +489,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
                      VertexBuffer::AttributeType::FLOAT2,
                      offsetof(MistVertex, uv), sizeof(MistVertex))
           .build(*_engine);
-  _mistVertices->setBufferAt(
+  _quadVertices->setBufferAt(
       *_engine, 0,
       VertexBuffer::BufferDescriptor(
           corners, sizeof(MistVertex) * 4,
@@ -486,14 +497,24 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
             delete[] static_cast<MistVertex *>(buffer);
           }));
 
-  _mistIndices = IndexBuffer::Builder()
+  _quadIndices = IndexBuffer::Builder()
                      .indexCount(6)
                      .bufferType(IndexBuffer::IndexType::USHORT)
                      .build(*_engine);
-  _mistIndices->setBuffer(
+  _quadIndices->setBuffer(
       *_engine,
       IndexBuffer::BufferDescriptor(kMistIndices, sizeof(kMistIndices),
                                     nullptr));
+}
+
+/// Builds the sheets a bank of mist is drawn with.
+- (void)buildMist {
+  if (_mistMaterial != nullptr) return;
+  [self buildQuad];
+
+  _mistMaterial = Material::Builder()
+                      .package(kmistMaterial, kmistMaterial_len)
+                      .build(*_engine);
 
   auto &entities = utils::EntityManager::get();
   for (int sheet = 0; sheet < kMistSheets; sheet++) {
@@ -511,7 +532,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
         .boundingBox({{-1, -0.02f, -1}, {1, 0.02f, 1}})
         .material(0, instance)
         .geometry(0, RenderableManager::PrimitiveType::TRIANGLES,
-                  _mistVertices, _mistIndices, 0, 6)
+                  _quadVertices, _quadIndices, 0, 6)
         // Mist does not take part in shadows either way: a sheet that cast
         // one would drop a hard rectangle across the ground.
         .receiveShadows(false)
@@ -550,6 +571,115 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     _mistInstances[sheet]->setParameter("time", float(time));
     _mistInstances[sheet]->setParameter("eye", eye);
   }
+}
+
+/// Builds the panes a curtain of rain or snow hangs on.
+- (void)buildRain {
+  if (_rainMaterial != nullptr) return;
+  [self buildQuad];
+
+  _rainMaterial = Material::Builder()
+                      .package(krainMaterial, krainMaterial_len)
+                      .build(*_engine);
+
+  auto &entities = utils::EntityManager::get();
+  for (int pane = 0; pane < kRainCurtains; pane++) {
+    MaterialInstance *instance = _rainMaterial->createInstance();
+
+    utils::Entity entity = entities.create();
+    RenderableManager::Builder(1)
+        .boundingBox({{-1, -0.02f, -1}, {1, 0.02f, 1}})
+        .material(0, instance)
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES,
+                  _quadVertices, _quadIndices, 0, 6)
+        .receiveShadows(false)
+        .castShadows(false)
+        .build(*_engine, entity);
+
+    _rainInstances.push_back(instance);
+    _rainEntities.push_back(entity);
+  }
+}
+
+/// Hangs the panes in front of the camera and lets the weather fall past.
+///
+/// Turned to face the viewer every frame, and sampled in world space, so
+/// looking around moves the panes through the weather instead of taking it
+/// along. Three of them at three distances, because depth is read from things
+/// passing each other at different rates, and one pane passes nothing.
+- (void)updateRainAtTime:(double)time {
+  if (!_rainShowing || _rainEntities.empty()) return;
+
+  auto &transforms = _engine->getTransformManager();
+
+  const float3 eye = _camera->getPosition();
+  const float3 forward = normalize(_camera->getForwardVector());
+  // Right and up from the camera's own basis rather than the world's, so a
+  // pane stays square to the view when it is pitched up at the sky.
+  const float3 right = -normalize(_camera->getLeftVector());
+  const float3 up = normalize(_camera->getUpVector());
+
+  const float aspect = float(_width) / float(std::max(_height, 1u));
+  const float half =
+      std::tan((_fieldOfView > 0 ? _fieldOfView : 50.0f) * float(M_PI) / 360.0f);
+
+  for (size_t pane = 0; pane < _rainEntities.size(); pane++) {
+    const float distance = kRainDistances[pane];
+    // A quarter over the frustum, so the edges of a pane are never on screen.
+    const float height = distance * half * 1.25f;
+    const float width = height * aspect;
+
+    const mat4f placement{
+        float4{right * width, 0},
+        // The quad lies flat with its face along +Y, so that axis is the one
+        // pointed back at the camera.
+        float4{-forward, 0},
+        float4{up * height, 0},
+        float4{eye + forward * distance, 1},
+    };
+
+    transforms.setTransform(transforms.getInstance(_rainEntities[pane]),
+                            placement);
+    _rainInstances[pane]->setParameter("time", float(time));
+    _rainInstances[pane]->setParameter("eye", eye);
+  }
+}
+
+- (void)setPrecipitationEnabled:(BOOL)enabled params:(const float *)params {
+  if (_disposed) return;
+
+  const bool showing = enabled && params[3] > 0;
+
+  if (showing) {
+    [self buildRain];
+
+    for (size_t pane = 0; pane < _rainInstances.size(); pane++) {
+      MaterialInstance *instance = _rainInstances[pane];
+      instance->setParameter("colour",
+                             float3{params[0], params[1], params[2]});
+      // The nearer panes carry less of it. All three at full strength is
+      // three times the weather anybody asked for, and the far one is what
+      // gives the view its depth.
+      const float share = pane == 0 ? 0.5f : (pane == 1 ? 0.75f : 1.0f);
+      instance->setParameter("amount", params[3] * share);
+      instance->setParameter("fall", params[4]);
+      instance->setParameter("wind", float2{params[5], params[6]});
+      // Drops per metre, thinned with distance so the far pane does not turn
+      // into a grey wall of specks too small to resolve.
+      instance->setParameter("scale",
+                             params[7] / (1.0f + float(pane) * 0.8f));
+      instance->setParameter("stretch", params[8]);
+      instance->setParameter("threshold", params[9]);
+    }
+
+    if (!_rainShowing) {
+      for (utils::Entity entity : _rainEntities) _scene->addEntity(entity);
+    }
+  } else if (_rainShowing) {
+    for (utils::Entity entity : _rainEntities) _scene->remove(entity);
+  }
+
+  _rainShowing = showing;
 }
 
 - (void)setAmbientColour:(float3)colour intensity:(float)intensity {
@@ -1220,6 +1350,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   }
 
   [self updateMistAtTime:time];
+  [self updateRainAtTime:time];
 
   if (!_renderer->beginFrame(target)) return;
   _renderer->render(_view);
@@ -1316,11 +1447,28 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   }
   _mistEntities.clear();
   _mistInstances.clear();
+
+  for (size_t pane = 0; pane < _rainEntities.size(); pane++) {
+    _scene->remove(_rainEntities[pane]);
+    _engine->destroy(_rainEntities[pane]);
+    entities.destroy(_rainEntities[pane]);
+    _engine->destroy(_rainInstances[pane]);
+  }
+  _rainEntities.clear();
+  _rainInstances.clear();
+
   if (_mistMaterial) {
-    _engine->destroy(_mistVertices);
-    _engine->destroy(_mistIndices);
     _engine->destroy(_mistMaterial);
     _mistMaterial = nullptr;
+  }
+  if (_rainMaterial) {
+    _engine->destroy(_rainMaterial);
+    _rainMaterial = nullptr;
+  }
+  if (_quadVertices) {
+    _engine->destroy(_quadVertices);
+    _engine->destroy(_quadIndices);
+    _quadVertices = nullptr;
   }
 
   _engine->destroy(_material);

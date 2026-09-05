@@ -13,5 +13,6 @@ export 'src/scene.dart'
         OrbisLight,
         OrbisLightKind,
         OrbisObject,
+        OrbisPrecipitation,
         OrbisScene,
         OrbisSky;

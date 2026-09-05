@@ -1,0 +1,112 @@
+// A curtain of falling water, or of snow.
+//
+// One material for both, because they are the same thing at different speeds:
+// a field of drops moving down and sideways, seen through a pane held in
+// front of the camera. What separates them is how far a drop travels while
+// the shutter is open — rain smears into a streak, snow does not.
+//
+// Sampled in world space, so turning the camera moves the pane through the
+// weather rather than dragging the weather with it. That is the whole trick;
+// a pattern locked to the screen reads as dirt on the lens the moment anybody
+// looks around.
+material {
+    name : orbisRain,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    culling : none,
+    requires : [ uv0 ],
+    parameters : [
+        { type : float3, name : colour },
+        // How much of it there is, from nothing to a downpour.
+        { type : float,  name : amount },
+        { type : float,  name : time },
+        // Metres a second, downwards.
+        { type : float,  name : fall },
+        { type : float2, name : wind },
+        // Drops per metre.
+        { type : float,  name : scale },
+        // How far a drop is smeared along its fall. One is a flake; forty is
+        // rain in a headlight.
+        { type : float,  name : stretch },
+        // How much of the field is drop rather than air. Higher is sparser.
+        { type : float,  name : threshold },
+        { type : float3, name : eye }
+    ],
+}
+
+fragment {
+    float hash(vec2 cell) {
+        return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    float valueNoise(vec2 p) {
+        vec2 cell = floor(p);
+        vec2 f = fract(p);
+        vec2 w = f * f * (3.0 - 2.0 * f);
+
+        float a = hash(cell);
+        float b = hash(cell + vec2(1.0, 0.0));
+        float c = hash(cell + vec2(0.0, 1.0));
+        float d = hash(cell + vec2(1.0, 1.0));
+
+        return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec3 world = getWorldPosition();
+
+        // The weather moves, rather than the pane: drops fall, and the wind
+        // carries them along the ground.
+        vec3 p = world;
+        p.y += materialParams.time * materialParams.fall;
+        p.xz -= materialParams.wind * materialParams.time;
+
+        // Which columns of air have something falling in them.
+        //
+        // A cell and a hash rather than smooth noise. Using a smooth value as
+        // the phase of what follows draws its own contour lines — the drops
+        // come out as rings around the hills of the noise field, which is a
+        // pattern nobody has ever seen out of a window.
+        vec2 grid = p.xz * materialParams.scale;
+        vec2 cell = floor(grid);
+        float id = hash(cell);
+        float column = step(materialParams.threshold, id);
+
+        // Thin: a drop is a line, not a column of air the width of a cell.
+        vec2 offset = fract(grid) - 0.5;
+        float thin = 1.0 - smoothstep(0.05, 0.26, length(offset));
+
+        // Where this pixel sits between one drop and the next down that
+        // column. The column's own number offsets it, so neighbours do not
+        // fall in step like a curtain of beads.
+        float spacing = 3.0 / max(materialParams.scale, 0.05);
+        float along = fract(p.y / spacing + id * 13.0);
+
+        // The drop itself: bright at the head, fading down the tail. How long
+        // that tail is, is the whole difference between rain and snow — a
+        // streak is a flake photographed while it moved.
+        float tail = clamp(materialParams.stretch * 0.01, 0.012, 0.6);
+        float shape = 1.0 - smoothstep(0.0, tail, along);
+
+        float drop = column * thin * shape;
+
+        // Softened at the borders of the pane, so a curtain does not end in a
+        // straight line down the middle of the view.
+        vec2 uv = getUV0();
+        vec2 edge = smoothstep(vec2(0.0), vec2(0.18), uv) *
+                    smoothstep(vec2(0.0), vec2(0.18), vec2(1.0) - uv);
+
+        // And where it would otherwise be right against the lens.
+        float near = smoothstep(0.3, 1.6,
+                                distance(world, materialParams.eye));
+
+        float alpha =
+            clamp(drop * materialParams.amount * edge.x * edge.y * near,
+                  0.0, 1.0);
+
+        material.baseColor = vec4(materialParams.colour * alpha, alpha);
+    }
+}
