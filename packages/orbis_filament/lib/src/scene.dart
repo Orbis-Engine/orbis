@@ -273,10 +273,11 @@ class OrbisFog {
     this.height = 0,
     this.heightFalloff = 1,
     this.structure = 0,
-    this.drift = 0.4,
+    Vector2? wind,
     this.featureSize = 0.02,
     this.thickness = 6,
-  }) : colour = colour ?? Vector3(0.5, 0.55, 0.6);
+  }) : colour = colour ?? Vector3(0.5, 0.55, 0.6),
+       wind = wind ?? Vector2(0.4, 0.15);
 
   /// Nothing in the air, and cheap: the pass is switched off rather than run
   /// with a density of zero.
@@ -315,8 +316,13 @@ class OrbisFog {
   /// nothing — the sheets are not drawn at all.
   final double structure;
 
-  /// How fast the shape moves, in metres a second.
-  final double drift;
+  /// Which way the air is moving across the ground, and how fast, in metres
+  /// a second.
+  ///
+  /// Sent as a speed rather than as a rate the pattern scrolls at, because
+  /// only the renderer knows how big the pattern is — and wind that changed
+  /// speed when somebody resized the clouds would be a setting that lies.
+  final Vector2 wind;
 
   /// How large its features are: how much of a metre one turn of the noise
   /// covers. Smaller is bigger cloud.
@@ -343,10 +349,10 @@ class OrbisFog {
     height,
     heightFalloff,
     structure,
-    drift,
+    wind.x,
+    wind.y,
     featureSize,
     thickness,
-    0,
     0,
     0,
   ]);

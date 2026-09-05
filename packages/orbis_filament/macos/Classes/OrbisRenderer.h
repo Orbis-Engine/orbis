@@ -72,8 +72,8 @@ NS_ASSUME_NONNULL_BEGIN
 ///
 /// `params` is sixteen floats: colour, density, distance, cut-off distance,
 /// maximum opacity, height, height falloff, how much structure the air has,
-/// how fast it drifts in metres a second, how large its features are, how
-/// thick the bank is in metres, and three spare.
+/// the wind across the ground in metres a second, how large its features are,
+/// how thick the bank is in metres, and two spare.
 ///
 /// Structure is what turns fog into weather. Even fog is right for distance
 /// and cannot look like anything in particular; above zero, a stack of noise

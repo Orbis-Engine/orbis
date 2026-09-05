@@ -1028,13 +1028,19 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     // to be far thinner than the bank as a whole. Sheets thick enough to read
     // on their own are sheets you can count.
     const float alpha = std::min(params[3] * 1.6f, 0.35f) * structure;
-    const float2 drift = normalize(float2{1.0f, 0.35f}) * params[10];
+
+    // Wind arrives in metres a second and the noise is sampled in turns per
+    // metre, so the rate the pattern scrolls at is the product of the two.
+    // Negative because moving where the noise is read from backwards is what
+    // moves the cloud forwards.
+    const float2 wind = float2{params[10], params[11]};
+    const float2 drift = -wind * params[12];
 
     for (MaterialInstance *instance : _mistInstances) {
       instance->setParameter("colour",
                              float3{params[0], params[1], params[2]});
       instance->setParameter("density", alpha);
-      instance->setParameter("scale", params[11]);
+      instance->setParameter("scale", params[12]);
       instance->setParameter("drift", drift);
       // Smooth haze at one end and torn wisps at the other, which is the
       // difference between weather and a filter over the lens.
@@ -1042,7 +1048,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     }
 
     _mistHeight = params[7];
-    _mistThickness = params[12];
+    _mistThickness = params[13];
 
     if (!_mistShowing) {
       for (utils::Entity entity : _mistEntities) _scene->addEntity(entity);

@@ -85,7 +85,14 @@ fragment {
         vec3 world = getWorldPosition();
         vec2 flow = materialParams.drift * materialParams.time;
 
-        float n = clouds(world.xz * materialParams.scale, flow);
+        // Height goes into the coordinate as well as the ground plane. Every
+        // sheet sits at a different one, so each is cut by a different part
+        // of the field — without this they are ten copies of one pattern
+        // stacked up, which reads as stripes rather than as a volume.
+        vec2 p = world.xz * materialParams.scale +
+                 world.y * materialParams.scale * vec2(0.37, 0.61);
+
+        float n = clouds(p, flow);
 
         // Turned from a smooth field into cloud and clear air. Half of the
         // noise is the sky, and what is above that thickens quickly.
