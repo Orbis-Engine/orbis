@@ -2,6 +2,14 @@ import CoreVideo
 import FlutterMacOS
 import Foundation
 
+// Under CocoaPods the renderer is in this same module; under Swift Package
+// Manager it is its own target, because a package target holds one language
+// and the renderer is Objective-C++. The import is conditional so one source
+// file serves both.
+#if canImport(orbis_filament_native)
+  import orbis_filament_native
+#endif
+
 /// One 3D surface: a renderer, the texture Flutter samples, and the display
 /// link driving it.
 ///

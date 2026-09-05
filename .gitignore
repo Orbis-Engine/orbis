@@ -13,9 +13,12 @@ spike/spike
 spike/lit.filamat
 spike/spike_output.png
 
-# Fetched by packages/orbis_filament/macos/setup.sh
+# Built by packages/orbis_filament/macos/setup.sh: the fetched SDK, the
+# materials compiled out of it, and the one framework Swift Package Manager
+# takes in place of the SDK's twenty archives.
 packages/orbis_filament/macos/third_party/
-packages/orbis_filament/macos/Classes/generated/
+packages/orbis_filament/macos/orbis_filament/third_party/
+packages/orbis_filament/macos/orbis_filament/Sources/orbis_filament_native/generated/
 
 # Flutter
 .flutter-plugins-dependencies

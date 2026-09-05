@@ -11,10 +11,14 @@ without a trip through the CPU.
   s.license          = { :type => 'MIT' }
   s.author           = { 'Orbis Engine' => 'orbis@example.com' }
   s.source           = { :path => '.' }
-  s.source_files     = 'Classes/**/*.{h,m,mm,swift}'
+  # The sources sit in the layout Swift Package Manager wants — one directory
+  # per target under Sources — and CocoaPods is pointed at them rather than
+  # keeping a second copy. Both build systems compile the same files.
+  src = 'orbis_filament/Sources'
+  s.source_files     = "#{src}/**/*.{h,m,mm,swift}"
   # The compiled material is an implementation detail and defines a symbol, so
   # it stays out of the umbrella header the module exposes.
-  s.public_header_files = 'Classes/OrbisRenderer.h', 'Classes/OrbisTexture.h'
+  s.public_header_files = "#{src}/orbis_filament_native/include/*.h"
   s.dependency 'FlutterMacOS'
 
   s.platform = :osx, '10.15'
@@ -24,12 +28,9 @@ without a trip through the CPU.
   # Fetches the Filament SDK and compiles materials. Idempotent, so it is free
   # after the first install.
   #
-  # This is also why the plugin is CocoaPods rather than Swift Package Manager,
-  # and why Flutter warns about it. A Swift package cannot do this: its plugins
-  # run sandboxed with no network, so nothing in one can fetch a hundred
-  # megabytes of renderer at build time. Adopting SPM means shipping Filament
-  # as a binary target — an .xcframework with a URL and a checksum — which is a
-  # release artefact to host and version rather than a file to write.
+  # Under Swift Package Manager there is no equivalent hook — a package plugin
+  # runs sandboxed with no network — so that path asks for the script to be run
+  # once by hand. Package.swift says so if it has not been.
   s.prepare_command = 'bash setup.sh'
 
   # Listed rather than globbed: the SDK ships thirty archives and this is the
@@ -52,8 +53,12 @@ without a trip through the CPU.
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'CLANG_CXX_LANGUAGE_STANDARD' => 'c++17',
-    'HEADER_SEARCH_PATHS' =>
+    'HEADER_SEARCH_PATHS' => [
       '"$(PODS_TARGET_SRCROOT)/third_party/filament-mac/filament/include"',
+      # Where the renderer's own headers moved to. A quoted include searches
+      # the including file's directory, and that is no longer where they are.
+      '"$(PODS_TARGET_SRCROOT)/orbis_filament/Sources/orbis_filament_native/include"',
+    ].join(' '),
     # Filament ships arm64 only in the mac release.
     'EXCLUDED_ARCHS' => 'x86_64',
   }
