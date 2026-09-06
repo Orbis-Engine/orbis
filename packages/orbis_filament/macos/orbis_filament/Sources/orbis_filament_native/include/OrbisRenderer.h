@@ -101,6 +101,7 @@ NS_ASSUME_NONNULL_BEGIN
                   meshes:(const int32_t *)meshes
                    flags:(const int32_t *)flags
                revisions:(const int32_t *)revisions
+                  ranges:(const float *)ranges
                   bounds:(const float *)bounds
                    paths:(NSArray<NSString *> *)paths
                  changed:(const int32_t *)changed

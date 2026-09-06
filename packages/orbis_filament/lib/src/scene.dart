@@ -886,6 +886,7 @@ class OrbisScene {
     final meshes = Int32List(populations.length);
     final flags = Int32List(populations.length);
     final revisions = Int32List(populations.length);
+    final ranges = Float32List(populations.length);
     final bounds = Float32List(populations.length * 6);
     final paths = <String>[];
 
@@ -900,6 +901,7 @@ class OrbisScene {
       counts[i] = population.count;
       flags[i] = population.flags;
       revisions[i] = population.revision;
+      ranges[i] = population.range;
 
       meshes[i] = -1;
       if (population.mesh != null) {
@@ -951,6 +953,7 @@ class OrbisScene {
       'populationMeshes': meshes,
       'populationFlags': flags,
       'populationRevisions': revisions,
+      'populationRanges': ranges,
       'populationBounds': bounds,
       'populationPaths': paths,
       'populationChanged': changedKeys,

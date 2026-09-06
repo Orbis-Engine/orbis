@@ -101,6 +101,23 @@ struct Grown {
   std::vector<utils::Entity> entities;
   std::vector<filament::MaterialInstance *> materials;
 
+  /// Which member goes in which slot of the book.
+  ///
+  /// Sorted so that members near each other in the world are near each other
+  /// in the book, and therefore in the same draw. Without it a draw's
+  /// sixty-four members are sixty-four places scattered over the whole map,
+  /// its bounding box is the whole map, and nothing can ever be culled — the
+  /// camera looking at one corner still pays for every draw in the world.
+  std::vector<uint32_t> order;
+
+  /// Where each draw's own members actually are, and how far from the middle
+  /// of it to the furthest of them.
+  std::vector<filament::math::float3> middles;
+  std::vector<float> radii;
+
+  /// Which draws are currently in the scene at all.
+  std::vector<bool> shown;
+
   /// One book for the whole population. Sixty-four members a draw would
   /// otherwise mean sixteen hundred textures for a hundred thousand.
   filament::Texture *book = nullptr;
@@ -108,9 +125,32 @@ struct Grown {
   uint32_t count = 0;
   int32_t revision = INT32_MIN;
   int32_t flags = -1;
+
+  /// How far a member is still drawn from, in metres. Zero is always.
+  float range = 0;
+
   std::string path;
   uint64_t seen = 0;
 };
+
+/// A number that puts nearby places near each other.
+///
+/// The bits of three coordinates interleaved, so sorting by it walks the world
+/// in a way that keeps neighbours together. Sorting by any single axis instead
+/// gives draws that are thin slabs across the whole map, which cull almost as
+/// badly as no sorting at all.
+static uint64_t mortonOf(uint32_t x, uint32_t y, uint32_t z) {
+  auto spread = [](uint32_t v) -> uint64_t {
+    uint64_t n = v & 0x1FFFFFull;
+    n = (n | (n << 32)) & 0x1F00000000FFFFull;
+    n = (n | (n << 16)) & 0x1F0000FF0000FFull;
+    n = (n | (n << 8)) & 0x100F00F00F00F00Full;
+    n = (n | (n << 4)) & 0x10C30C30C30C30C3ull;
+    n = (n | (n << 2)) & 0x1249249249249249ull;
+    return n;
+  };
+  return spread(x) | (spread(y) << 1) | (spread(z) << 2);
+}
 
 /// Where the camera was told to be, and when it was told.
 ///
@@ -1346,14 +1386,57 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 
   grown.count = count;
   grown.flags = flags;
+  grown.order.clear();
+  grown.shown.assign(grown.entities.size(), true);
 }
 
-/// Writes a population's transforms and colours into the book it already has.
+/// Puts the members in an order that keeps neighbours together.
+///
+/// Only when the size changes, not on every write: a hundred thousand members
+/// is a hundred thousand keys to sort, which is worth doing once for a forest
+/// and not sixty times a second for one that is swaying. Members drift a
+/// little between sorts and the draws' boxes are recomputed every time
+/// anyway, so a slightly stale order costs nothing but a slightly looser box.
+- (void)sortPopulation:(Grown &)grown transforms:(const float *)transforms {
+  grown.order.resize(grown.count);
+  if (grown.count == 0) return;
+
+  float3 least{std::numeric_limits<float>::max()};
+  float3 most{std::numeric_limits<float>::lowest()};
+  for (uint32_t i = 0; i < grown.count; i++) {
+    const float *m = transforms + size_t(i) * 16;
+    const float3 at{m[12], m[13], m[14]};
+    least = min(least, at);
+    most = max(most, at);
+  }
+
+  const float3 span = max(most - least, float3{1e-4f});
+  std::vector<std::pair<uint64_t, uint32_t>> keys(grown.count);
+
+  for (uint32_t i = 0; i < grown.count; i++) {
+    const float *m = transforms + size_t(i) * 16;
+    const float3 at = (float3{m[12], m[13], m[14]} - least) / span;
+    keys[i] = {mortonOf(uint32_t(std::clamp(at.x, 0.0f, 1.0f) * 1023.0f),
+                        uint32_t(std::clamp(at.y, 0.0f, 1.0f) * 1023.0f),
+                        uint32_t(std::clamp(at.z, 0.0f, 1.0f) * 1023.0f)),
+               i};
+  }
+
+  std::sort(keys.begin(), keys.end());
+  for (uint32_t i = 0; i < grown.count; i++) grown.order[i] = keys[i].second;
+}
+
+/// Writes a population's transforms and colours into the book it already has,
+/// and works out where each draw's own members are.
+///
 /// Only ever called when the revision has moved.
 - (void)fillPopulation:(Grown &)grown
             transforms:(const float *)transforms
                colours:(const float *)colours {
   if (grown.book == nullptr || grown.count == 0) return;
+  if (grown.order.size() != grown.count) {
+    [self sortPopulation:grown transforms:transforms];
+  }
 
   const uint32_t texels = grown.count * kTexelsPerMember;
   const uint32_t rows = (texels + kBookWidth - 1) / kBookWidth;
@@ -1362,13 +1445,22 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   auto *page = new float[pixels * 4];
   std::fill(page, page + pixels * 4, 0.0f);
 
-  for (uint32_t i = 0; i < grown.count; i++) {
+  const size_t draws = grown.entities.size();
+  grown.middles.assign(draws, float3{0.0f});
+  grown.radii.assign(draws, 0.0f);
+
+  std::vector<float3> least(draws, float3{std::numeric_limits<float>::max()});
+  std::vector<float3> most(draws, float3{std::numeric_limits<float>::lowest()});
+
+  for (uint32_t slot = 0; slot < grown.count; slot++) {
+    const uint32_t member = grown.order[slot];
+
     // Column-major coming in, rows going out: element (row, column) of a
     // column-major sixteen is at column * 4 + row, and the shader wants the
     // rows so that each one carries a component of the translation in its
     // fourth place.
-    const float *m = transforms + size_t(i) * 16;
-    float *to = page + size_t(i) * kTexelsPerMember * 4;
+    const float *m = transforms + size_t(member) * 16;
+    float *to = page + size_t(slot) * kTexelsPerMember * 4;
 
     for (int row = 0; row < 3; row++) {
       to[row * 4 + 0] = m[0 * 4 + row];
@@ -1377,11 +1469,43 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
       to[row * 4 + 3] = m[3 * 4 + row];
     }
 
-    const float *colour = colours + size_t(i) * 3;
+    const float *colour = colours + size_t(member) * 3;
     to[12] = colour[0];
     to[13] = colour[1];
     to[14] = colour[2];
     to[15] = 1.0f;
+
+    // How far a member reaches from where it stands, taken from the longest
+    // of its three axes. A box drawn round the positions alone clips whatever
+    // is tall.
+    const float reach =
+        std::max({length(float3{m[0], m[1], m[2]}),
+                  length(float3{m[4], m[5], m[6]}),
+                  length(float3{m[8], m[9], m[10]})});
+    const float3 at{m[12], m[13], m[14]};
+
+    const size_t draw = std::min(size_t(slot / kInstancesPerDraw), draws - 1);
+    least[draw] = min(least[draw], at - reach);
+    most[draw] = max(most[draw], at + reach);
+  }
+
+  auto &renderables = _engine->getRenderableManager();
+  for (size_t draw = 0; draw < draws; draw++) {
+    if (least[draw].x > most[draw].x) continue;
+
+    const float3 middle = (least[draw] + most[draw]) * 0.5f;
+    const float3 half = (most[draw] - least[draw]) * 0.5f;
+
+    grown.middles[draw] = middle;
+    grown.radii[draw] = length(half);
+
+    // Each draw is culled by its own box now, rather than by one drawn round
+    // the whole population. That is the difference between a camera in one
+    // corner of a map paying for that corner and paying for the map.
+    auto instance = renderables.getInstance(grown.entities[draw]);
+    if (instance) {
+      renderables.setAxisAlignedBoundingBox(instance, Box{middle, half});
+    }
   }
 
   grown.book->setImage(
@@ -1395,11 +1519,47 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
           }));
 }
 
+/// Takes out of the scene whatever is further away than it is drawn from.
+///
+/// Called once a frame, because it depends on where the camera is. Filament
+/// culls by what is in front of the camera; this is the other half of it —
+/// what is close enough to be worth drawing at all. A map is mostly things
+/// too far away to see, and a range is what lets one be loaded whole.
+- (void)rangePopulations {
+  const float3 eye = _camera->getPosition();
+
+  for (auto &entry : _populations) {
+    Grown &grown = entry.second;
+    if (grown.range <= 0 || grown.middles.size() != grown.entities.size()) {
+      continue;
+    }
+
+    for (size_t draw = 0; draw < grown.entities.size(); draw++) {
+      // Measured to the nearest part of the draw rather than to its middle,
+      // so a large group does not vanish while part of it is still close.
+      const float away =
+          std::max(length(grown.middles[draw] - eye) - grown.radii[draw], 0.0f);
+      const bool wanted = away <= grown.range;
+
+      if (draw >= grown.shown.size()) grown.shown.resize(draw + 1, true);
+      if (wanted == grown.shown[draw]) continue;
+
+      if (wanted) {
+        _scene->addEntity(grown.entities[draw]);
+      } else {
+        _scene->remove(grown.entities[draw]);
+      }
+      grown.shown[draw] = wanted;
+    }
+  }
+}
+
 - (void)applyPopulations:(const int32_t *)keys
                   counts:(const int32_t *)counts
                   meshes:(const int32_t *)meshes
                    flags:(const int32_t *)flags
                revisions:(const int32_t *)revisions
+                  ranges:(const float *)ranges
                   bounds:(const float *)bounds
                    paths:(NSArray<NSString *> *)paths
                  changed:(const int32_t *)changed
@@ -1429,6 +1589,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     grown.seen = generation;
 
     const uint32_t wanted = uint32_t(std::max(counts[i], 0));
+    grown.range = ranges[i];
 
     // A different size, a different mesh or different flags is a different
     // set of renderables. Anything else is a write into the ones there are.
@@ -2082,6 +2243,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   }
 
   [self placeCamera];
+  [self rangePopulations];
 
   SwapChain *target = _swapChains[_backIndex];
   if (!target) return;

@@ -126,6 +126,7 @@ private final class Viewport {
       let meshes = populationCount == 0 ? [Int32(0)] : scene.populationMeshes
       let flags = populationCount == 0 ? [Int32(0)] : scene.populationFlags
       let revisions = populationCount == 0 ? [Int32(0)] : scene.populationRevisions
+      let rangeValues = populationCount == 0 ? [Float(0)] : scene.populationRanges
       let bounds = populationCount == 0 ? [Float(0)] : scene.populationBounds
       let changed = scene.populationChanged.isEmpty ? [Int32(0)] : scene.populationChanged
       let transforms = scene.populationTransforms.isEmpty
@@ -137,6 +138,7 @@ private final class Viewport {
           meshes.withUnsafeBufferPointer { meshPointer in
             flags.withUnsafeBufferPointer { flagPointer in
               revisions.withUnsafeBufferPointer { revisionPointer in
+                rangeValues.withUnsafeBufferPointer { rangePointer in
                 bounds.withUnsafeBufferPointer { boundsPointer in
                   changed.withUnsafeBufferPointer { changedPointer in
                     transforms.withUnsafeBufferPointer { transformPointer in
@@ -147,6 +149,7 @@ private final class Viewport {
                           meshes: meshPointer.baseAddress!,
                           flags: flagPointer.baseAddress!,
                           revisions: revisionPointer.baseAddress!,
+                          ranges: rangePointer.baseAddress!,
                           bounds: boundsPointer.baseAddress!,
                           paths: scene.populationPaths,
                           changed: changedPointer.baseAddress!,
@@ -157,6 +160,7 @@ private final class Viewport {
                       }
                     }
                   }
+                }
                 }
               }
             }
@@ -255,6 +259,7 @@ private struct Scene {
   let populationMeshes: [Int32]
   let populationFlags: [Int32]
   let populationRevisions: [Int32]
+  let populationRanges: [Float]
   let populationBounds: [Float]
   let populationPaths: [String]
   let populationChanged: [Int32]
@@ -362,6 +367,8 @@ private struct Scene {
       (arguments["populationFlags"] as? FlutterStandardTypedData)?.int32s ?? []
     let populationRevisions =
       (arguments["populationRevisions"] as? FlutterStandardTypedData)?.int32s ?? []
+    let populationRanges =
+      (arguments["populationRanges"] as? FlutterStandardTypedData)?.floats ?? []
     let populationBounds =
       (arguments["populationBounds"] as? FlutterStandardTypedData)?.floats ?? []
     let populationChanged =
@@ -384,6 +391,7 @@ private struct Scene {
           populationMeshes.count == populationKeys.count,
           populationFlags.count == populationKeys.count,
           populationRevisions.count == populationKeys.count,
+          populationRanges.count == populationKeys.count,
           populationBounds.count == populationKeys.count * 6,
           populationMeshes.allSatisfy({ $0 < Int32(populationPaths.count) }),
           populationCounts.allSatisfy({ $0 >= 0 }),
@@ -396,6 +404,7 @@ private struct Scene {
     self.populationMeshes = populationMeshes
     self.populationFlags = populationFlags
     self.populationRevisions = populationRevisions
+    self.populationRanges = populationRanges
     self.populationBounds = populationBounds
     self.populationPaths = populationPaths
     self.populationChanged = populationChanged

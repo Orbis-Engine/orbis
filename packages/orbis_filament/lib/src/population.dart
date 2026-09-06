@@ -30,6 +30,7 @@ class OrbisPopulation {
     required this.minimum,
     required this.maximum,
     this.mesh,
+    this.range = 0,
     this.revision = 0,
     this.castShadows = false,
     this.receiveShadows = true,
@@ -63,6 +64,20 @@ class OrbisPopulation {
   /// answer already.
   final Vector3 minimum;
   final Vector3 maximum;
+
+  /// How far a member is still drawn from, in metres. Zero draws all of them.
+  ///
+  /// The other half of culling. What is in front of the camera is the
+  /// renderer's business and it does it well; what is close enough to be worth
+  /// drawing at all is the application's, because only it knows whether a
+  /// thing a kilometre away is a tree that may as well not exist or a mountain
+  /// that must.
+  ///
+  /// This is what lets a whole map be loaded rather than streamed: the members
+  /// all sit in one buffer, uploaded once, and the ones too far to see cost a
+  /// distance test each frame instead of a draw. They are tested in groups of
+  /// sixty-four, so a hundred thousand of them is sixteen hundred tests.
+  final double range;
 
   /// The mesh every member is a copy of, or null for the built-in cube.
   final String? mesh;

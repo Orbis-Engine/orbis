@@ -80,6 +80,27 @@ void main() {
       expect(packed[2 * 16], 11);
     });
 
+    test('how far a population is drawn from travels with it', () {
+      final message = sceneOf([
+        OrbisPopulation(
+          key: 1,
+          transforms: Float32List(16),
+          colours: Float32List(3),
+          minimum: Vector3(-800, 0, -800),
+          maximum: Vector3(800, 6, 800),
+          range: 350,
+        ),
+      ]).toMessage(1);
+
+      expect((message['populationRanges']! as Float32List).single, 350);
+    });
+
+    test('drawing everything is the default, and says so', () {
+      // Zero rather than infinity, because zero is what "no opinion" reads as
+      // in a float array and infinity is what a mistake reads as.
+      expect(crowd(count: 4).range, 0);
+    });
+
     test('a scene with no populations says nothing about them', () {
       final message = sceneOf(const []).toMessage(1);
       expect(message.containsKey('populationKeys'), isFalse);
