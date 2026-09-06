@@ -1,0 +1,20 @@
+name: orbis_ui
+description: >-
+  The interface a game draws: a tree of elements with a utility class list or
+  CSS on each, built into real Flutter widgets. One document, whether it was
+  laid out by hand in the editor or described by a script.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter
