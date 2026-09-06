@@ -1,0 +1,19 @@
+name: orbis_native
+description: >-
+  Compiling and loading C++ scripts. A script is a file the engine loads, not a
+  file the engine has to have been linked into: it is handed a table of what it
+  may call, and answers start, step and stop.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  ffi: ^2.1.0
+  orbis_core:
+    path: ../orbis_core
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0

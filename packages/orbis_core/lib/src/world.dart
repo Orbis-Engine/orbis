@@ -417,6 +417,14 @@ class World {
     _world = nullptr;
   }
 
+  /// This world as the C ABI sees it.
+  ///
+  /// Public because another front end onto the same core needs it: a native
+  /// script is handed exactly this pointer, and so is a system written in a
+  /// language that is neither Dart nor C++. Nothing in Dart needs it, and one
+  /// held past [dispose] points at freed memory.
+  Pointer<native.OrbisWorldStruct> get nativeHandle => _alive;
+
   Pointer<native.OrbisWorldStruct> get _alive {
     if (_world == nullptr) throw StateError('This World has been disposed.');
     return _world;
