@@ -21,5 +21,7 @@ export 'src/actions.dart' show MeshActions, MeshEdge, edgeOf;
 export 'src/edits.dart' show MeshEdits, MeshHandles;
 export 'src/mesh.dart' show Face, Mesh;
 export 'src/shapes.dart' show Shape, ShapeKind;
+export 'src/uv.dart' show FaceUv, UvFit;
+export 'src/uv_edits.dart' show MeshUvs;
 export 'src/triangles.dart'
     show GlbMaterial, MeshGlb, MeshTriangles, Triangles, angleBetween;

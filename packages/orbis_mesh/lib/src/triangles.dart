@@ -86,20 +86,22 @@ extension MeshTriangles on Mesh {
       }
 
       final normal = normalOf(face);
-      final axes = _uvAxes(normal);
       final first = positionsOut.length ~/ 3;
+      // Whatever the face says its coordinates are: a rule projected flat, or
+      // the ones somebody drew.
+      final coordinates = face.uv.forFace(pointsOf(face), normal);
 
-      for (final index in face.vertices) {
+      for (var corner = 0; corner < face.vertices.length; corner++) {
+        final index = face.vertices[corner];
         final at = positions[index];
         final n = face.smooth ? (smoothed[index] ?? normal) : normal;
 
         positionsOut.addAll([at.x, at.y, at.z]);
         normalsOut.addAll([n.x, n.y, n.z]);
-        // Projected onto the two axes most across the face: a flat unwrap,
-        // which is right for a wall and wrong for a face somebody wants to
-        // paint. Good enough to see a texture's scale, which is what it is
-        // for until there is a UV editor.
-        uvsOut.addAll([at.dot(axes.u), at.dot(axes.v)]);
+        final uv = corner < coordinates.length
+            ? coordinates[corner]
+            : Vector2.zero();
+        uvsOut.addAll([uv.x, uv.y]);
       }
 
       // A fan from the first corner. Right for anything convex, and for the
@@ -147,14 +149,6 @@ extension MeshTriangles on Mesh {
     };
   }
 
-  /// Two axes across a face, for a flat unwrap.
-  ({Vector3 u, Vector3 v}) _uvAxes(Vector3 normal) {
-    // Whichever world axis the face is least aligned with, so the two axes
-    // that come out of it are never parallel to the normal.
-    final away = normal.x.abs() < 0.9 ? Vector3(1, 0, 0) : Vector3(0, 1, 0);
-    final u = normal.cross(away).normalized();
-    return (u: u, v: normal.cross(u).normalized());
-  }
 }
 
 /// One material, as much of it as a `.glb` can carry.

@@ -1,5 +1,7 @@
 import 'package:vector_math/vector_math_64.dart';
 
+import 'uv.dart';
+
 /// One flat surface, named by the corners it joins.
 ///
 /// Any number of corners, not three. A cube has six faces and not twelve
@@ -8,7 +10,8 @@ import 'package:vector_math/vector_math_64.dart';
 /// was cut into. Triangles are what the renderer is given at the end, not what
 /// the editing works on.
 class Face {
-  Face(this.vertices, {this.material = 0, this.smooth = false});
+  Face(this.vertices, {this.material = 0, this.smooth = false, FaceUv? uv})
+      : uv = uv ?? const FaceUv();
 
   /// Indices into the mesh's positions, going round the face.
   ///
@@ -19,6 +22,14 @@ class Face {
   /// Which material this face wears. An index rather than a name, so a mesh
   /// carries no strings and a face can be re-pointed without a lookup.
   int material;
+
+  /// How this face gets its texture coordinates.
+  ///
+  /// Automatic by default, which means a rule rather than coordinates: the
+  /// face is projected flat and then moved, turned and scaled. It survives
+  /// the face being extruded, moved, resized or cut, because it is worked out
+  /// again from whatever the face is now.
+  FaceUv uv;
 
   /// Whether this face's normals are shared with its neighbours.
   ///
@@ -32,12 +43,14 @@ class Face {
   bool get isTriangle => vertices.length == 3;
   bool get isQuad => vertices.length == 4;
 
-  Face copy() => Face([...vertices], material: material, smooth: smooth);
+  Face copy() =>
+      Face([...vertices], material: material, smooth: smooth, uv: uv);
 
   Map<String, Object?> toJson() => {
         'v': vertices,
         if (material != 0) 'm': material,
         if (smooth) 's': true,
+        if (uv.toJson().isNotEmpty) 'uv': uv.toJson(),
       };
 
   static Face? fromJson(Object? value) {
@@ -53,6 +66,7 @@ class Face {
       ],
       material: map['m'] is int ? map['m']! as int : 0,
       smooth: map['s'] == true,
+      uv: FaceUv.fromJson(map['uv']),
     );
   }
 }
