@@ -18,7 +18,27 @@
 library;
 
 export 'src/actions.dart' show MeshActions, MeshEdge, edgeOf;
+export 'src/cut.dart'
+    show
+        AlongEdge,
+        AtCorner,
+        InsideFace,
+        MeshCut,
+        OnFace,
+        flattenFace,
+        pointInsideOutline,
+        signedLoopArea;
+export 'src/drawn.dart'
+    show
+        PolyShape,
+        closesOutline,
+        distanceToSegment,
+        isNewPoint,
+        outlineCrosses,
+        signedAreaOf,
+        turnBetween;
 export 'src/edits.dart' show MeshEdits, MeshHandles;
+export 'src/export.dart' show MeshExport, MeshFormat, Written;
 export 'src/mesh.dart' show Face, Mesh;
 export 'src/shapes.dart' show Shape, ShapeKind;
 export 'src/uv.dart' show FaceUv, UvFit;

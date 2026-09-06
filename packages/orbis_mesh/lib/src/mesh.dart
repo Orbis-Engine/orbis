@@ -142,20 +142,21 @@ class Mesh {
   }
 
   /// How much surface a face has.
+  ///
+  /// Half the length of the sum of the corner cross products, which is exact
+  /// for any face in a plane however bent its outline is — a fan from the
+  /// first corner is not, and a face cut twice is rarely convex. A face whose
+  /// corners are not quite in a plane gets the area of its projection, which
+  /// is the only answer that means anything for one.
   double areaOf(Face face) {
     final points = pointsOf(face);
     if (points.length < 3) return 0;
 
-    // The fan is around the first corner, which is exact for a convex face and
-    // close enough for the concave ones an editor produces.
-    var area = 0.0;
-    for (var i = 1; i + 1 < points.length; i++) {
-      area += (points[i] - points.first)
-              .cross(points[i + 1] - points.first)
-              .length /
-          2;
+    final total = Vector3.zero();
+    for (var i = 0; i < points.length; i++) {
+      total.add(points[i].cross(points[(i + 1) % points.length]));
     }
-    return area;
+    return total.length / 2;
   }
 
   /// The box everything sits inside, as its smallest and largest corner.
