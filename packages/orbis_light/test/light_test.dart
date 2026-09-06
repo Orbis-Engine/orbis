@@ -5,6 +5,8 @@ import 'package:test/test.dart';
 import 'package:vector_math/vector_math_64.dart';
 
 void main() {
+  _tintTests();
+
   group('photometry', () {
     test('watts become lumens at the eye\'s peak efficacy', () {
       // The constant every conversion here rests on: 683 lumens per watt at
@@ -223,5 +225,36 @@ void main() {
       expect(light.specular, 0);
       expect(light.diffuse, 1);
     });
+  });
+}
+
+void _tintTests() {
+  group('a tint', () {
+    test('reads a colour the way one is written', () {
+      const tint = Tint.hex(0xFF8A3D);
+      expect(tint.red, 1.0);
+      expect(tint.green, closeTo(0x8A / 255, 1e-9));
+      expect(tint.blue, closeTo(0x3D / 255, 1e-9));
+    });
+
+    test('converts by the curve sRGB is defined by, not a gamma of 2.2', () {
+      // The dark end is where the two disagree enough to see. A gamma of 2.2
+      // would put mid-grey at 0.218; the real transfer function puts it at
+      // 0.216, and the straight segment near black is off by far more.
+      expect(const Tint(0.5, 0.5, 0.5).linear.x, closeTo(0.2140, 1e-3));
+      expect(const Tint(0.02, 0.02, 0.02).linear.x, closeTo(0.02 / 12.92, 1e-9));
+      expect(Tint.white.linear.x, closeTo(1.0, 1e-9));
+      expect(Tint.black.linear.x, 0.0);
+    });
+
+    test('mixes as an eye reads it, not as light adds up', () {
+      // Halfway from black to white is mid-grey to look at, which is a fifth
+      // of the light. Interpolating linear values would put it at a half,
+      // and a dusk ramp done that way spends its whole length nearly black.
+      final middle = Tint.lerp(Tint.black, Tint.white, 0.5);
+      expect(middle.red, 0.5);
+      expect(middle.linear.x, lessThan(0.25));
+    });
+
   });
 }

@@ -1,0 +1,18 @@
+name: orbis_weather
+description: >-
+  What the air is doing, and what is above it. Conditions, transitions, the
+  shapes cloud takes, the day's own cycle, and the exposure any of it needs.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  orbis_light:
+    path: ../orbis_light
+  vector_math: ^2.1.4
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0

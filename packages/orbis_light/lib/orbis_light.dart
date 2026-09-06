@@ -8,4 +8,5 @@ library;
 
 export 'src/light.dart'
     show AreaShape, Light, LightType, RendererLight, RendererLightKind;
+export 'src/tint.dart' show Tint;
 export 'src/units.dart' show Photometry;

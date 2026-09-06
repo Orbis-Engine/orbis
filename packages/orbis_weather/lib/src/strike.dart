@@ -14,15 +14,15 @@ import 'package:vector_math/vector_math_64.dart';
 /// lamp being switched: the sky needs to know where the bolt is to draw it,
 /// and the bolt needs a seed of its own so that one strike is a different
 /// shape from the next.
-class OrbisStrike {
-  const OrbisStrike({
+class Strike {
+  const Strike({
     required this.flash,
     required this.direction,
     required this.seed,
   });
 
   /// Nothing happening.
-  static final OrbisStrike none = OrbisStrike(
+  static final Strike none = Strike(
     flash: 0,
     direction: Vector3(0, 0.35, 1),
     seed: 0,
@@ -34,7 +34,7 @@ class OrbisStrike {
   /// close to continuous. Strikes land at most once in a window and not every
   /// window has one, because a storm that struck on the beat would be a
   /// metronome.
-  factory OrbisStrike.at(double clock, double frequency) {
+  factory Strike.at(double clock, double frequency) {
     if (frequency <= 0 || clock < 0) return none;
 
     final window = 14 / (0.2 + frequency * 3);
@@ -43,7 +43,7 @@ class OrbisStrike {
 
     // Not every window has a strike in it.
     if (_scatter(index) > 0.3 + frequency * 0.65) {
-      return OrbisStrike(flash: 0, direction: _placeOf(index), seed: _seedOf(index));
+      return Strike(flash: 0, direction: _placeOf(index), seed: _seedOf(index));
     }
 
     final at = _scatter(index * 7 + 3) * math.max(window - 0.8, 0.1);
@@ -56,7 +56,7 @@ class OrbisStrike {
         : math.exp(-since * 14) +
             (since > 0.18 ? 0.45 * math.exp(-(since - 0.18) * 10) : 0);
 
-    return OrbisStrike(
+    return Strike(
       flash: (stroke * (0.6 + 0.4 * _scatter(index * 13 + 5))).clamp(0.0, 1.0),
       direction: _placeOf(index),
       seed: _seedOf(index),
