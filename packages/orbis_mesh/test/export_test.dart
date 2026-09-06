@@ -203,6 +203,56 @@ void main() {
     });
   });
 
+  group('reading a size back', () {
+    test('a file says how big it is without being decoded', () {
+      final mesh = Shape.of(ShapeKind.stairs).build();
+      final box = boundsOfGlb(mesh.toGlb())!;
+      final actual = mesh.bounds;
+
+      expect(box.min.x, closeTo(actual.min.x, 1e-5));
+      expect(box.max.y, closeTo(actual.max.y, 1e-5));
+      expect(box.max.z, closeTo(actual.max.z, 1e-5));
+    });
+
+    test('several materials are several primitives, and it takes them all',
+        () {
+      final mesh = cube();
+      for (var i = 0; i < mesh.faces.length; i++) {
+        mesh.faces[i].material = i;
+      }
+      final box = boundsOfGlb(
+        mesh.toGlb(materials: [for (var i = 0; i < 6; i++) const GlbMaterial()]),
+      )!;
+      expect(box.max.x, closeTo(cube().bounds.max.x, 1e-5));
+    });
+
+    test('normals are not mistaken for positions', () {
+      // Every normal is between minus one and one, so folding those in would
+      // swallow anything smaller than a two-metre cube.
+      final small = cube();
+      for (final at in small.positions) {
+        at.scale(0.1);
+      }
+      final box = boundsOfGlb(small.toGlb())!;
+      expect(box.max.x, lessThan(0.2));
+    });
+
+    test('something that is not a glb is nothing, not a guess', () {
+      expect(boundsOfGlb(Uint8List(0)), isNull);
+      expect(boundsOfGlb(Uint8List.fromList([1, 2, 3, 4, 5])), isNull);
+      expect(
+        boundsOfGlb(Uint8List.fromList(List.filled(64, 0))),
+        isNull,
+        reason: 'a file of zeros has no magic number',
+      );
+    });
+
+    test('a truncated file is nothing rather than a crash', () {
+      final whole = cube().toGlb();
+      expect(boundsOfGlb(whole.sublist(0, 30)), isNull);
+    });
+  });
+
   group('choosing a format', () {
     test('each one comes back named after itself', () {
       for (final format in MeshFormat.values) {

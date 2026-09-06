@@ -38,7 +38,8 @@ export 'src/drawn.dart'
         signedAreaOf,
         turnBetween;
 export 'src/edits.dart' show MeshEdits, MeshHandles;
-export 'src/export.dart' show MeshExport, MeshFormat, Written;
+export 'src/export.dart'
+    show MeshExport, MeshFormat, Written, boundsOfGlb;
 export 'src/mesh.dart' show Face, Mesh;
 export 'src/shapes.dart' show Shape, ShapeKind;
 export 'src/uv.dart' show FaceUv, UvFit;

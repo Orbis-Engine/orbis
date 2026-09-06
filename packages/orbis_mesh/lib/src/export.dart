@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:vector_math/vector_math_64.dart';
@@ -371,3 +372,88 @@ String _word(String name) {
 }
 
 Uint8List _bytes(String text) => Uint8List.fromList(utf8.encode(text));
+
+
+/// Reading back only what a file says about its own size.
+///
+/// The box a model occupies, without loading the model. glTF requires every
+/// POSITION accessor to carry its own minimum and maximum — precisely so a
+/// reader can frame, cull or pick against a file it has not decoded — and
+/// this takes it at its word.
+///
+/// Worth having because the editor does not hold the geometry of a model the
+/// renderer loaded: it knows a path and nothing else, and without this every
+/// imported model is picked and outlined as a two-metre cube whatever it
+/// actually is.
+({Vector3 min, Vector3 max})? boundsOfGlb(Uint8List glb) {
+  if (glb.length < 20) return null;
+  final data = ByteData.sublistView(glb);
+  if (data.getUint32(0, Endian.little) != 0x46546C67) return null;
+
+  final jsonLength = data.getUint32(12, Endian.little);
+  if (20 + jsonLength > glb.length) return null;
+
+  Map<String, Object?> document;
+  try {
+    document = jsonDecode(utf8.decode(glb.sublist(20, 20 + jsonLength)))
+        as Map<String, Object?>;
+  } on FormatException {
+    return null;
+  }
+
+  final accessors = document['accessors'];
+  final meshes = document['meshes'];
+  if (accessors is! List || meshes is! List) return null;
+
+  var minX = double.infinity;
+  var minY = double.infinity;
+  var minZ = double.infinity;
+  var maxX = double.negativeInfinity;
+  var maxY = double.negativeInfinity;
+  var maxZ = double.negativeInfinity;
+  var found = false;
+
+  // Only the accessors a primitive actually uses for POSITION. Taking every
+  // accessor with a min and a max would fold in normals, which live between
+  // minus one and one and would swallow anything smaller than that.
+  for (final mesh in meshes) {
+    if (mesh is! Map) continue;
+    final primitives = mesh['primitives'];
+    if (primitives is! List) continue;
+
+    for (final primitive in primitives) {
+      if (primitive is! Map) continue;
+      final attributes = primitive['attributes'];
+      if (attributes is! Map) continue;
+      final at = attributes['POSITION'];
+      if (at is! int || at < 0 || at >= accessors.length) continue;
+
+      final accessor = accessors[at];
+      if (accessor is! Map) continue;
+      final low = accessor['min'];
+      final high = accessor['max'];
+      if (low is! List || high is! List || low.length < 3 || high.length < 3) {
+        continue;
+      }
+      if (low.any((one) => one is! num) || high.any((one) => one is! num)) {
+        continue;
+      }
+
+      found = true;
+      minX = math.min(minX, (low[0]! as num).toDouble());
+      minY = math.min(minY, (low[1]! as num).toDouble());
+      minZ = math.min(minZ, (low[2]! as num).toDouble());
+      maxX = math.max(maxX, (high[0]! as num).toDouble());
+      maxY = math.max(maxY, (high[1]! as num).toDouble());
+      maxZ = math.max(maxZ, (high[2]! as num).toDouble());
+    }
+  }
+
+  // The file's own node transforms are not applied. A model whose root node
+  // moves or scales its mesh would be framed wrong, and that is a real gap —
+  // but it is a much smaller one than treating every model as a cube, and
+  // closing it means walking the node tree, which means decoding the file.
+  return found
+      ? (min: Vector3(minX, minY, minZ), max: Vector3(maxX, maxY, maxZ))
+      : null;
+}
