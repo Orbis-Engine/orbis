@@ -1314,6 +1314,24 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _scene->addEntity(drawn.entity);
 }
 
+- (double)gpuMilliseconds {
+  if (_disposed) return 0;
+
+  const auto history = _renderer->getFrameInfoHistory(16);
+  std::vector<double> costs;
+  costs.reserve(history.size());
+
+  for (const auto &frame : history) {
+    if (frame.gpuFrameDuration > 0) {
+      costs.push_back(double(frame.gpuFrameDuration) / 1.0e6);
+    }
+  }
+
+  if (costs.empty()) return 0;
+  std::sort(costs.begin(), costs.end());
+  return costs[costs.size() / 2];
+}
+
 - (BOOL)hasPopulations {
   return !_populations.empty();
 }

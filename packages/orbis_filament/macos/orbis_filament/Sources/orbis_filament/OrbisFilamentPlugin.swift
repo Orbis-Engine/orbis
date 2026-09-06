@@ -32,6 +32,9 @@ private final class Viewport {
     self.registry = registry
   }
 
+  /// What a frame usually costs this viewport's GPU, in milliseconds.
+  var gpuMilliseconds: Double { renderer.gpuMilliseconds() }
+
   func start() {
     // CVDisplayLink is soft-deprecated on recent macOS in favour of the
     // NSView-attached variant, but that needs a view we do not own — Flutter
@@ -509,6 +512,15 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
       // load, or the light it had to drop, instead of drawing something quietly
       // wrong and leaving somebody guessing.
       result(viewport.notes)
+
+    case "stats":
+      guard let arguments = call.arguments as? [String: Any],
+            let textureId = arguments["textureId"] as? Int64,
+            let viewport = viewports[textureId] else {
+        result(nil)
+        return
+      }
+      result(["gpuMilliseconds": viewport.gpuMilliseconds])
 
     case "dispose":
       guard let args = call.arguments as? [String: Any],

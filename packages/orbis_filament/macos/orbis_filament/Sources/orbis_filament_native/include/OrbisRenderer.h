@@ -81,6 +81,18 @@ NS_ASSUME_NONNULL_BEGIN
 /// of cloud lying in a valley. Disabled skips both.
 - (void)setFogEnabled:(BOOL)enabled params:(const float *)params;
 
+/// What recent frames cost the GPU, in milliseconds, or zero when the backend
+/// has not reported any yet.
+///
+/// The median of what Filament's own frame history holds, because a mean is
+/// dragged about by the one frame in thirty that hit a hitch — and what
+/// anybody wants to know is what a frame usually costs.
+///
+/// This rather than how often a frame is presented: presentation is the
+/// display's business, and a renderer with twice the headroom it needs looks
+/// exactly the same there.
+- (double)gpuMilliseconds;
+
 /// Whether anything is holding population buffers, so a scene that has just
 /// dropped its last one still gets the call that clears them.
 @property(nonatomic, readonly) BOOL hasPopulations;

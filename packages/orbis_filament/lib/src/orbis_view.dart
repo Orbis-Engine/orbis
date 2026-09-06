@@ -12,7 +12,12 @@ import 'scene.dart';
 /// the whole point of routing Filament through the texture registry rather
 /// than a platform view.
 class OrbisView extends StatefulWidget {
-  const OrbisView({super.key, this.scene, this.onSceneNotes});
+  const OrbisView({
+    super.key,
+    this.scene,
+    this.onSceneNotes,
+    this.onViewport,
+  });
 
   /// What to draw. While this is null the renderer shows its own placeholder,
   /// so an unconfigured view is visibly working rather than merely blank.
@@ -23,6 +28,31 @@ class OrbisView extends StatefulWidget {
   /// to reason, so a host can say which rather than that something went
   /// wrong.
   final ValueChanged<Map<String, String>>? onSceneNotes;
+
+  /// Called once with this view's own number, when the renderer has one.
+  ///
+  /// What it is for is asking after the view later — [gpuMilliseconds] wants
+  /// to know which viewport is being asked about, and only the view knows.
+  final ValueChanged<int>? onViewport;
+
+  /// What a frame usually costs the GPU in this viewport, in milliseconds.
+  ///
+  /// Zero until the backend has reported any, which takes a few frames. The
+  /// median of the last handful rather than the mean, because a mean is
+  /// dragged about by the one frame in thirty that hits a hitch, and what
+  /// anybody wants to know is what a frame usually costs.
+  ///
+  /// This rather than a frame rate: how often a frame is presented is the
+  /// display's business, and a renderer with twice the headroom it needs looks
+  /// exactly the same there.
+  static Future<double> gpuMilliseconds(int textureId) async {
+    final stats = await _OrbisViewState._channel.invokeMapMethod<String, Object?>(
+      'stats',
+      {'textureId': textureId},
+    );
+    final cost = stats?['gpuMilliseconds'];
+    return cost is num ? cost.toDouble() : 0;
+  }
 
   @override
   State<OrbisView> createState() => _OrbisViewState();
@@ -140,6 +170,7 @@ class _OrbisViewState extends State<OrbisView> {
           _textureId = id;
           _surfaceSize = pixels;
         });
+        if (id != null) widget.onViewport?.call(id);
         // The surface did not exist when the scene was first set, so it is
         // sent now rather than waiting for the next change — otherwise a
         // static scene would never appear at all.
