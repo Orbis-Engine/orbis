@@ -208,6 +208,72 @@ class UiNode {
     }
   }
 
+  // ---- placing ----
+
+  /// Where this element was put, when it was put anywhere.
+  ///
+  /// Read out of the CSS rather than kept beside it, because the CSS is what
+  /// actually positions it — a second copy of the number would be a second
+  /// thing to keep in step, and the one that got out of step would be the one
+  /// the editor was showing.
+  ({double left, double top})? get placed {
+    final left = _length('left');
+    final top = _length('top');
+    if (left == null && top == null) return null;
+    return (left: left ?? 0, top: top ?? 0);
+  }
+
+  /// This element moved to a place, keeping everything else about its style.
+  ///
+  /// Rounded to whole pixels by default: an interface authored at fractions of
+  /// a pixel is an interface whose file changes every time somebody nudges it,
+  /// and the difference is not visible.
+  ///
+  /// Pass [round] false while something is being dragged. Rounding every frame
+  /// of a drag throws away a fraction of a pixel each time, and a slow drag
+  /// loses ground — the thing ends up behind the pointer by however long
+  /// somebody took over it. Round once, when they let go.
+  UiNode placeAt(double left, double top, {bool round = true}) {
+    final rest = [
+      for (final declaration in css.split(';'))
+        if (declaration.trim().isNotEmpty)
+          if (!_names(declaration, const {'left', 'top'})) declaration.trim(),
+    ];
+
+    return copyWith(
+      css: [
+        ...rest,
+        'left: ${_pixels(left, round)}px',
+        'top: ${_pixels(top, round)}px',
+      ].join('; '),
+    );
+  }
+
+  /// A length as the file writes it: whole when it can be, and at most two
+  /// decimals when it cannot, so a position is readable rather than exact to
+  /// seventeen digits.
+  static String _pixels(double value, bool round) {
+    if (round || value == value.roundToDouble()) return '${value.round()}';
+    return value
+        .toStringAsFixed(2)
+        .replaceAll(RegExp(r'0+$'), '')
+        .replaceAll(RegExp(r'\.$'), '');
+  }
+
+  static bool _names(String declaration, Set<String> wanted) =>
+      wanted.contains(declaration.split(':').first.trim().toLowerCase());
+
+  double? _length(String property) {
+    for (final declaration in css.split(';')) {
+      final parts = declaration.split(':');
+      if (parts.length < 2) continue;
+      if (parts.first.trim().toLowerCase() != property) continue;
+      final value = parts[1].trim().replaceAll(RegExp(r'px$'), '');
+      return double.tryParse(value);
+    }
+    return null;
+  }
+
   /// The name of the callback for an event, if script gave one.
   ///
   /// Callbacks cross as names rather than as functions: a function cannot be

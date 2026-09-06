@@ -217,6 +217,35 @@ void main() {
       expect(seen, hasLength(5));
     });
 
+    testWidgets('a wrapper does not come between a Stack and its Positioned',
+        (tester) async {
+      // Expanded and Positioned are read by the parent that lays them out and
+      // have to be its direct child. A decorator outside them is not a
+      // cosmetic problem: Flutter throws and the element loses its place.
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: UiSurface(
+            description: const UiNode(
+              type: 'stack',
+              children: [
+                UiNode(type: 'text', css: 'left: 10px; top: 20px', text: 'A'),
+                UiNode(type: 'row', children: [
+                  UiNode(type: 'text', css: 'flex: 1', text: 'B'),
+                ]),
+              ],
+            ),
+            decorate: (node, path, built) => ColoredBox(
+              color: const Color(0x11FFFFFF),
+              child: built,
+            ),
+          ),
+        ),
+      ));
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('A'), findsOneWidget);
+    });
+
     testWidgets('without one, nothing is wrapped', (tester) async {
       await tester.pumpWidget(const MaterialApp(
         home: Scaffold(body: UiSurface(description: tree)),
@@ -226,6 +255,79 @@ void main() {
       // out at build time, it was never built.
       expect(find.text('One'), findsOneWidget);
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('placing', () {
+    test('an element with no left or top has not been placed', () {
+      expect(const UiNode(type: 'box').placed, isNull);
+      expect(const UiNode(type: 'box', css: 'padding: 4px').placed, isNull);
+    });
+
+    test('a placed element says where', () {
+      const node = UiNode(type: 'box', css: 'left: 40px; top: 12px');
+      expect(node.placed!.left, 40);
+      expect(node.placed!.top, 12);
+    });
+
+    test('one axis is enough, and the other reads as zero', () {
+      expect(const UiNode(type: 'box', css: 'top: 8px').placed!.left, 0);
+    });
+
+    test('moving it keeps everything else about its style', () {
+      const node = UiNode(
+        type: 'box',
+        css: 'padding: 4px; left: 0px; top: 0px; color: #fff',
+      );
+      final moved = node.placeAt(120, 60);
+
+      expect(moved.placed!.left, 120);
+      expect(moved.placed!.top, 60);
+      expect(moved.css, contains('padding: 4px'));
+      expect(moved.css, contains('color: #fff'));
+      // The old position is replaced rather than added to.
+      expect('left'.allMatches(moved.css).length, 1);
+    });
+
+    test('moving an element that was never placed places it', () {
+      final moved = const UiNode(type: 'box').placeAt(10, 20);
+      expect(moved.placed!.left, 10);
+    });
+
+    test('a drag keeps the fraction, so slow dragging does not lose ground',
+        () {
+      var node = const UiNode(type: 'box').placeAt(0, 0);
+      // Ten steps of a third of a pixel. Rounded each time this would not
+      // move at all.
+      for (var i = 0; i < 10; i++) {
+        final at = node.placed!;
+        node = node.placeAt(at.left + 0.34, at.top, round: false);
+      }
+      expect(node.placed!.left, closeTo(3.4, 0.1));
+    });
+
+    test('letting go lands it on a whole pixel', () {
+      final dragged = const UiNode(type: 'box').placeAt(10.4, 20.6, round: false);
+      expect(dragged.placed!.left, 10.4);
+
+      final dropped = dragged.placeAt(
+        dragged.placed!.left,
+        dragged.placed!.top,
+      );
+      expect(dropped.css, contains('left: 10px'));
+      expect(dropped.css, contains('top: 21px'));
+    });
+
+    test('fractions are rounded, so a nudge does not rewrite the file', () {
+      final moved = const UiNode(type: 'box').placeAt(10.4, 20.6);
+      expect(moved.css, contains('left: 10px'));
+      expect(moved.css, contains('top: 21px'));
+    });
+
+    test('a new canvas is free-positioned', () {
+      final made = UiDocument.blank('menu');
+      expect(made.root.type, 'stack');
+      expect(made.root.children.first.placed, isNotNull);
     });
   });
 }

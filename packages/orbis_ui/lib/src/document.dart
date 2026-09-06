@@ -147,20 +147,30 @@ class UiDocument {
   /// Not empty, for the same reason a new script is not empty — an empty
   /// canvas gives nothing to drag, nothing to select and nothing to learn the
   /// shape of the thing from.
+  /// A new one: a free-positioned root with something visible on it.
+  ///
+  /// The root is a stack, so what goes on it is placed where it was put rather
+  /// than flowed one after another. That is what a canvas is for — an
+  /// interface is anchored to corners and edges, not stacked down the page —
+  /// and it is what makes dragging something mean anything. A column inside it
+  /// is still a column; the choice is per container rather than for the whole
+  /// document.
   factory UiDocument.blank(String name) => UiDocument(
         name: name,
         root: const UiNode(
-          type: 'column',
-          classes: 'w-full h-full p-8 gap-4 items-start',
+          type: 'stack',
+          classes: 'w-full h-full',
           children: [
             UiNode(
               type: 'text',
               classes: 'text-3xl font-bold text-white',
+              css: 'left: 96px; top: 84px',
               text: 'Title',
             ),
             UiNode(
               type: 'text',
               classes: 'text-base text-slate-300',
+              css: 'left: 96px; top: 136px',
               text: 'Say what this screen is for.',
             ),
           ],

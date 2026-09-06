@@ -106,6 +106,12 @@ class UiBuilder {
 
     widget = _decorate(widget, style, node);
 
+    // Wrapped here, before anything that carries parent data. Expanded and
+    // Positioned have to be the direct child of the Flex or Stack that reads
+    // them, and a host's wrapper between the two is not a cosmetic problem —
+    // Flutter throws, and the element loses its size or its place entirely.
+    if (decorate != null) widget = decorate!(node, path, widget);
+
     // Growing is a thing the *parent* does with a child, so it is applied
     // here rather than inside the child's own layout.
     final grow = style.grow;
@@ -123,14 +129,9 @@ class UiBuilder {
       );
     }
 
-    if (node.key != null) {
-      widget = KeyedSubtree(key: ValueKey(node.key), child: widget);
-    }
-
-    // Last, so what the editor wraps is the finished element — its margin,
-    // its size and its position included — rather than the bare content
-    // inside all of that.
-    return decorate == null ? widget : decorate!(node, path, widget);
+    return node.key == null
+        ? widget
+        : KeyedSubtree(key: ValueKey(node.key), child: widget);
   }
 
   /// The box every element sits in: margin, size, background, border, corners,
