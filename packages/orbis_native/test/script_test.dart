@@ -50,6 +50,45 @@ struct Speed { double value; double on; };
 namespace {
 OrbisComponent speed;
 OrbisEntity subject;
+
+// Resolved once. Every read after this is a load from memory and crosses
+// nothing — which is what makes it safe to read inside a loop.
+const double *speedAt;
+const bool *bouncyAt;
+const char *const *labelAt;
+}
+
+ORBIS_SCRIPT {
+  speed = orbis::component<Speed>("Speed");
+  subject = orbis::spawn();
+  orbis::give(subject, speed, Speed{0.0, 0.0});
+  speedAt = orbis::number_at("ball.odata", "speed", -1.0);
+  bouncyAt = orbis::toggle_at("ball.odata", "bouncy", false);
+  labelAt = orbis::text_at("ball.odata", "label");
+}
+
+extern "C" void orbis_step(double delta) {
+  (void)delta;
+  Speed *held = orbis::get<Speed>(subject, speed);
+  held->value = *speedAt;
+  held->on = *bouncyAt ? 1.0 : 0.0;
+  if (*labelAt != nullptr) orbis::log(*labelAt);
+}
+
+extern "C" void orbis_stop(void) {}
+''';
+
+/// The same values read the slow way, for the tests that check the calls
+/// still work — a key that is not known until it is computed has no address
+/// to hold.
+const String caller = '''
+#include "orbis_script.h"
+
+struct Speed { double value; double on; };
+
+namespace {
+OrbisComponent speed;
+OrbisEntity subject;
 }
 
 ORBIS_SCRIPT {
@@ -77,6 +116,13 @@ class _Values implements ScriptValues {
   final Map<String, bool> toggles;
   final Map<String, String> texts;
 
+  /// Bumped by a test that changes something, the way the editor bumps it
+  /// when somebody saves a data object.
+  @override
+  int revision = 0;
+
+  void changed() => revision++;
+
   @override
   double number(String asset, String key, double fallback) =>
       numbers['$asset/$key'] ?? fallback;
@@ -87,6 +133,35 @@ class _Values implements ScriptValues {
 
   @override
   String? text(String asset, String key) => texts['$asset/$key'];
+}
+
+/// Counts how often it is asked, so a test can show that a frame with no
+/// changes costs nothing.
+class _Counting implements ScriptValues {
+  _Counting(this.onAsk);
+
+  final void Function() onAsk;
+
+  @override
+  int revision = 0;
+
+  @override
+  double number(String asset, String key, double fallback) {
+    onAsk();
+    return fallback;
+  }
+
+  @override
+  bool toggle(String asset, String key, bool fallback) {
+    onAsk();
+    return fallback;
+  }
+
+  @override
+  String? text(String asset, String key) {
+    onAsk();
+    return null;
+  }
 }
 
 void main() {
@@ -227,7 +302,8 @@ void main() {
       expect(ticks[3], 10, reason: 'the second counts by ten');
     });
 
-    test('every build goes to a library of its own', () {
+    test('every build goes to a path of its own and takes the last one away',
+        () {
       final host = runner();
       addTearDown(host.dispose);
       final source = write('counter', counter);
@@ -235,12 +311,15 @@ void main() {
       host.add(source);
       host.add(source);
 
-      // dart:ffi cannot close a library, so reusing one path would go on
-      // running the first build's code.
+      // A new path each time, because a loader hands back the image it
+      // already has for a path it has already seen. And only the current one
+      // left on disk, because the others were unloaded — an afternoon of
+      // saving would otherwise leave an afternoon of libraries.
       final built = Directory('${root.path}/build')
           .listSync()
           .where((entry) => entry.path.endsWith(Toolchain.librarySuffix));
-      expect(built, hasLength(3));
+      expect(built, hasLength(1));
+      expect(built.single.path, contains('counter.2'));
       expect(host.scripts.single.revision, 2);
     });
 
@@ -363,19 +442,76 @@ extern "C" void orbis_stop(void) {}
       expect(rows('Speed')[0], -1.0);
     });
 
-    test('changing one reaches the next frame', () {
-      final numbers = {'ball.odata/speed': 1.0};
-      final host = runner(values: _Values(numbers));
+    test('changing one reaches the next frame, through the address', () {
+      final values = _Values({'ball.odata/speed': 1.0});
+      final host = runner(values: values);
       addTearDown(host.dispose);
       host.add(write('reader', reader));
 
       host.step(0.016);
-      numbers['ball.odata/speed'] = 9.0;
+      expect(rows('Speed')[0], 1.0);
+
+      values.numbers['ball.odata/speed'] = 9.0;
+      values.changed();
       host.step(0.016);
 
-      // Read every frame rather than copied at start, which is what makes the
-      // value a shared file rather than a constant in the source.
+      // The script never called in for it: it holds the address and the host
+      // rewrote what is there. That is what makes a value safe to read inside
+      // a loop over a hundred thousand entities.
       expect(rows('Speed')[0], 9.0);
+    });
+
+    test('a value nobody said had changed is not re-read', () {
+      var asked = 0;
+      final values = _Counting(() => asked++);
+      final host = runner(values: values);
+      addTearDown(host.dispose);
+      host.add(write('reader', reader));
+
+      // The first frame fills the addresses the script resolved.
+      host.step(0.016);
+      final settled = asked;
+      expect(settled, greaterThan(0));
+
+      for (var i = 0; i < 100; i++) {
+        host.step(0.016);
+      }
+
+      // A hundred more frames and not one read: refreshing costs nothing when
+      // nothing has moved, which is most frames.
+      expect(asked, settled);
+    });
+
+    test('the calls still work, for a key that is not a constant', () {
+      final host = runner(
+        values: _Values(
+          {'ball.odata/speed': 3.5},
+          {'ball.odata/bouncy': true},
+          {'ball.odata/label': 'Ball'},
+        ),
+      );
+      addTearDown(host.dispose);
+      host.add(write('caller', caller));
+      host.step(0.016);
+
+      expect(rows('Speed')[0], 3.5);
+      expect(said, contains('Ball'));
+    });
+
+    test('a text that changes replaces what the address points at', () {
+      final values = _Values(const {}, const {}, {'ball.odata/label': 'Ball'});
+      final host = runner(values: values);
+      addTearDown(host.dispose);
+      host.add(write('reader', reader));
+
+      host.step(0.016);
+      expect(said, contains('Ball'));
+
+      values.texts['ball.odata/label'] = 'Crate';
+      values.changed();
+      host.step(0.016);
+
+      expect(said, contains('Crate'));
     });
 
     test('a missing text is a null pointer, not an empty string', () {
@@ -386,6 +522,92 @@ extern "C" void orbis_stop(void) {}
 
       // The script only logs when the pointer is non-null.
       expect(said, isEmpty);
+    });
+  });
+
+  group('what it costs', () {
+    /// A script that reads one value a million times a frame, either through
+    /// the address or by calling in for it. The difference between the two is
+    /// the whole reason the addresses exist.
+    String loop({required bool byAddress}) => '''
+#include "orbis_script.h"
+
+struct Total { double sum; double calls; };
+
+namespace {
+OrbisComponent total;
+OrbisEntity subject;
+const double *speedAt;
+}
+
+ORBIS_SCRIPT {
+  total = orbis::component<Total>("Total");
+  subject = orbis::spawn();
+  orbis::give(subject, total, Total{0.0, 0.0});
+  speedAt = orbis::number_at("ball.odata", "speed", 1.0);
+}
+
+extern "C" void orbis_step(double delta) {
+  (void)delta;
+  Total *held = orbis::get<Total>(subject, total);
+  double sum = 0;
+  for (int i = 0; i < 1000000; ++i) {
+    sum += ${byAddress ? '*speedAt' : 'orbis::number("ball.odata", "speed", 1.0)'};
+  }
+  held->sum = sum;
+  held->calls += 1.0;
+}
+
+extern "C" void orbis_stop(void) {}
+''';
+
+    test('reading through the address is far cheaper than calling in', () {
+      final host = runner(values: _Values({'ball.odata/speed': 1.0}));
+      addTearDown(host.dispose);
+
+      Duration time(String name, bool byAddress) {
+        final built = host.add(write(name, loop(byAddress: byAddress)));
+        expect(built.ok, isTrue, reason: built.output);
+        host.step(0.016); // Warm.
+        final watch = Stopwatch()..start();
+        host.step(0.016);
+        watch.stop();
+        host.remove(name);
+        return watch.elapsed;
+      }
+
+      final calling = time('calling', false);
+      final addressed = time('addressed', true);
+
+      // ignore: avoid_print
+      print('  a million reads: ${calling.inMicroseconds}us calling in, '
+          '${addressed.inMicroseconds}us through the address');
+
+      // A crossing into Dart per read against a load from memory. The margin
+      // asserted here is deliberately loose — the point is the order of
+      // magnitude, and a tight bound would be a test that fails on a busy
+      // machine rather than on a regression.
+      expect(addressed.inMicroseconds * 10,
+          lessThan(calling.inMicroseconds),
+          reason: 'addressed reads should be at least ten times cheaper');
+    });
+
+    test('rebuilding does not leak the library it replaced', () {
+      final host = runner();
+      addTearDown(host.dispose);
+      final source = write('counter', counter);
+
+      for (var i = 0; i < 40; i++) {
+        final built = host.add(source);
+        expect(built.ok, isTrue, reason: built.output);
+      }
+
+      // Forty saves, one library. Without a real unload this folder would hold
+      // forty of them and the process would be mapping all forty.
+      final built = Directory('${root.path}/build')
+          .listSync()
+          .where((entry) => entry.path.endsWith(Toolchain.librarySuffix));
+      expect(built, hasLength(1));
     });
   });
 }

@@ -15,6 +15,9 @@ final class OrbisScriptHost extends Struct {
   @Uint32()
   external int abi;
 
+  @Uint32()
+  external int size;
+
   external Pointer<core.OrbisWorldStruct> world;
 
   external Pointer<NativeFunction<Void Function(Pointer<Char>)>> log;
@@ -96,6 +99,19 @@ final class OrbisScriptHost extends Struct {
   external Pointer<
           NativeFunction<Pointer<Char> Function(Pointer<Char>, Pointer<Char>)>>
       dataText;
+
+  external Pointer<
+      NativeFunction<
+          Pointer<Double> Function(Pointer<Char>, Pointer<Char>,
+              Double)>> numberAt;
+  external Pointer<
+      NativeFunction<
+          Pointer<Bool> Function(Pointer<Char>, Pointer<Char>,
+              Bool)>> toggleAt;
+  external Pointer<
+      NativeFunction<
+          Pointer<Pointer<Char>> Function(Pointer<Char>,
+              Pointer<Char>)>> textAt;
 }
 
 /// Where a script's values come from.
@@ -112,11 +128,22 @@ abstract interface class ScriptValues {
   /// Null when there is no such value, which the script sees as a null
   /// pointer.
   String? text(String asset, String key);
+
+  /// Changes whenever any value here changes.
+  ///
+  /// What lets a script read a value through a pointer and still see an edit:
+  /// the host rewrites the resolved values in place when this moves, and does
+  /// nothing at all when it has not. Without it the choice would be between
+  /// re-reading everything every frame and never noticing a change.
+  int get revision;
 }
 
 /// Nothing to read. What a script gets when the embedder supplies no values.
 class NoValues implements ScriptValues {
   const NoValues();
+
+  @override
+  int get revision => 0;
 
   @override
   double number(String asset, String key, double fallback) => fallback;
@@ -142,7 +169,7 @@ class ScriptHost {
 
   /// The version this host was built to. A script reporting anything else is
   /// refused rather than called.
-  static const int abi = 1;
+  static const int abi = 2;
 
   final World world;
   final ScriptValues _values;
@@ -158,6 +185,26 @@ class ScriptHost {
   /// freeing it would leak once a frame.
   Pointer<Char> _lastText = nullptr;
 
+  /// Where each resolved value lives, by asset and key.
+  ///
+  /// One small allocation each, never moved and never freed until the host is,
+  /// because a script holds the address. A single growing block would be
+  /// fewer allocations and would invalidate every pointer the moment a new key
+  /// was resolved.
+  final Map<String, Pointer<Double>> _numbers = {};
+  final Map<String, Pointer<Bool>> _toggles = {};
+  final Map<String, Pointer<Pointer<Char>>> _texts = {};
+
+  /// The fallback each resolved value was asked for with, so a refresh can
+  /// answer the same way the first read did.
+  final Map<String, double> _numberFallbacks = {};
+  final Map<String, bool> _toggleFallbacks = {};
+
+  /// The strings currently pointed at, freed when they are replaced.
+  final Map<String, Pointer<Char>> _held = {};
+
+  int _seen = -1;
+
   late final NativeCallable<Void Function(Pointer<Char>)> _log;
   late final NativeCallable<Double Function(Pointer<Char>, Pointer<Char>, Double)>
       _number;
@@ -165,6 +212,13 @@ class ScriptHost {
       _toggle;
   late final NativeCallable<Pointer<Char> Function(Pointer<Char>, Pointer<Char>)>
       _text;
+  late final NativeCallable<
+      Pointer<Double> Function(Pointer<Char>, Pointer<Char>, Double)> _numberAt;
+  late final NativeCallable<
+      Pointer<Bool> Function(Pointer<Char>, Pointer<Char>, Bool)> _toggleAt;
+  late final NativeCallable<
+          Pointer<Pointer<Char>> Function(Pointer<Char>, Pointer<Char>)>
+      _textAt;
 
   bool _disposed = false;
 
@@ -204,9 +258,43 @@ class ScriptHost {
       },
     );
 
+    _numberAt = NativeCallable<
+        Pointer<Double> Function(Pointer<Char>, Pointer<Char>,
+            Double)>.isolateLocal(
+      (Pointer<Char> asset, Pointer<Char> key, double fallback) {
+        final at = '${_read(asset)}\u0000${_read(key)}';
+        _numberFallbacks[at] = fallback;
+        final slot = _numbers[at] ??= calloc<Double>();
+        slot.value = _values.number(_read(asset), _read(key), fallback);
+        return slot;
+      },
+    );
+    _toggleAt = NativeCallable<
+        Pointer<Bool> Function(Pointer<Char>, Pointer<Char>,
+            Bool)>.isolateLocal(
+      (Pointer<Char> asset, Pointer<Char> key, bool fallback) {
+        final at = '${_read(asset)}\u0000${_read(key)}';
+        _toggleFallbacks[at] = fallback;
+        final slot = _toggles[at] ??= calloc<Bool>();
+        slot.value = _values.toggle(_read(asset), _read(key), fallback);
+        return slot;
+      },
+    );
+    _textAt = NativeCallable<
+        Pointer<Pointer<Char>> Function(Pointer<Char>,
+            Pointer<Char>)>.isolateLocal(
+      (Pointer<Char> asset, Pointer<Char> key) {
+        final at = '${_read(asset)}\u0000${_read(key)}';
+        final slot = _texts[at] ??= calloc<Pointer<Char>>();
+        _writeText(at, slot, _values.text(_read(asset), _read(key)));
+        return slot;
+      },
+    );
+
     final table = _table.ref;
     table
       ..abi = abi
+      ..size = sizeOf<OrbisScriptHost>()
       ..world = world.nativeHandle
       ..log = _log.nativeFunction
       // Taken from the same declarations Dart binds the core with, so there is
@@ -230,7 +318,60 @@ class ScriptHost {
       ..transformRegister = Native.addressOf(core.transformRegister)
       ..dataNumber = _number.nativeFunction
       ..dataToggle = _toggle.nativeFunction
-      ..dataText = _text.nativeFunction;
+      ..dataText = _text.nativeFunction
+      ..numberAt = _numberAt.nativeFunction
+      ..toggleAt = _toggleAt.nativeFunction
+      ..textAt = _textAt.nativeFunction;
+  }
+
+  /// Puts the current values into the slots scripts are reading through.
+  ///
+  /// Costs one read per *resolved key*, not one per read: a script looping
+  /// over a hundred thousand entities and reading the same value each time
+  /// costs this once. Does nothing at all when nothing has changed, which is
+  /// most frames.
+  void refresh() {
+    if (_disposed) return;
+    final revision = _values.revision;
+    if (revision == _seen) return;
+    _seen = revision;
+
+    for (final entry in _numbers.entries) {
+      final split = entry.key.split('\u0000');
+      entry.value.value = _values.number(
+        split.first,
+        split.last,
+        _numberFallbacks[entry.key] ?? 0,
+      );
+    }
+    for (final entry in _toggles.entries) {
+      final split = entry.key.split('\u0000');
+      entry.value.value = _values.toggle(
+        split.first,
+        split.last,
+        _toggleFallbacks[entry.key] ?? false,
+      );
+    }
+    for (final entry in _texts.entries) {
+      final split = entry.key.split('\u0000');
+      _writeText(entry.key, entry.value, _values.text(split.first, split.last));
+    }
+  }
+
+  /// Replaces the string a text slot points at.
+  ///
+  /// The old one is freed here, which is why the header says to read through
+  /// the slot every time rather than keeping what it held.
+  void _writeText(String at, Pointer<Pointer<Char>> slot, String? said) {
+    final previous = _held.remove(at);
+    if (previous != null) calloc.free(previous);
+    if (said == null) {
+      slot.value = nullptr;
+      return;
+    }
+    final fresh = said.toNativeUtf8().cast<Char>();
+    _held[at] = fresh;
+    slot.value = fresh;
   }
 
   static String _read(Pointer<Char> text) =>
@@ -248,7 +389,22 @@ class ScriptHost {
     _number.close();
     _toggle.close();
     _text.close();
+    _numberAt.close();
+    _toggleAt.close();
+    _textAt.close();
     if (_lastText != nullptr) calloc.free(_lastText);
+    for (final slot in _numbers.values) {
+      calloc.free(slot);
+    }
+    for (final slot in _toggles.values) {
+      calloc.free(slot);
+    }
+    for (final slot in _texts.values) {
+      calloc.free(slot);
+    }
+    for (final held in _held.values) {
+      calloc.free(held);
+    }
     calloc.free(_table);
   }
 }

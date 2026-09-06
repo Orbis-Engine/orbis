@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -96,22 +97,85 @@ class ScriptRunner {
   /// package config, which an editor and a test have and a shipped game does
   /// not — a shipped game runs scripts that were compiled before it shipped.
   static List<String> engineIncludes() {
-    String? beside(String package, String file) {
-      final resolved = Isolate.resolvePackageUriSync(
-        Uri.parse('package:$package/$file'),
-      );
-      if (resolved == null) return null;
-      // .../<package>/lib/<file> -> .../<package>/include
-      return resolved.resolve('../include/').toFilePath();
+    final said = Platform.environment['ORBIS_INCLUDE'];
+    if (said != null && said.isNotEmpty) {
+      return said.split(Platform.isWindows ? ';' : ':');
     }
 
-    return [
-      for (final found in [
-        beside('orbis_native', 'orbis_native.dart'),
-        beside('orbis_core', 'orbis_core.dart'),
-      ])
-        if (found != null) found,
-    ];
+    final fromConfig = _fromPackageConfig();
+    if (fromConfig.isNotEmpty) return fromConfig;
+
+    return _fromIsolate();
+  }
+
+  /// The packages whose `include` folders a script is compiled against.
+  static const _packages = ['orbis_native', 'orbis_core'];
+
+  /// Read out of the running build's own package config.
+  ///
+  /// Walked up from the working directory, which is the package root when
+  /// anything is run from source and under test. This is first because it is
+  /// the one that works everywhere the other does not: Flutter's isolate does
+  /// not implement resolvePackageUriSync at all.
+  static List<String> _fromPackageConfig() {
+    File? config;
+    for (var at = Directory.current;; at = at.parent) {
+      final candidate = File(
+        '${at.path}${Platform.pathSeparator}.dart_tool'
+        '${Platform.pathSeparator}package_config.json',
+      );
+      if (candidate.existsSync()) {
+        config = candidate;
+        break;
+      }
+      if (at.parent.path == at.path) break;
+    }
+    if (config == null) return const [];
+
+    final Object? parsed;
+    try {
+      parsed = jsonDecode(config.readAsStringSync());
+    } on Object {
+      return const [];
+    }
+    if (parsed is! Map<String, Object?>) return const [];
+
+    final listed = parsed['packages'];
+    if (listed is! List) return const [];
+
+    final found = <String>[];
+    for (final entry in listed) {
+      if (entry is! Map<String, Object?>) continue;
+      if (!_packages.contains(entry['name'])) continue;
+
+      final root = entry['rootUri'];
+      if (root is! String) continue;
+
+      final resolved =
+          config.uri.resolve(root.endsWith('/') ? root : '$root/');
+      final include = resolved.resolve('include/');
+      if (Directory.fromUri(include).existsSync()) {
+        found.add(include.toFilePath());
+      }
+    }
+    return found;
+  }
+
+  static List<String> _fromIsolate() {
+    try {
+      return [
+        for (final package in _packages)
+          if (Isolate.resolvePackageUriSync(
+                Uri.parse('package:$package/$package.dart'),
+              )
+              case final resolved?)
+            resolved.resolve('../include/').toFilePath(),
+      ];
+    } on Object {
+      // Not supported under Flutter, and a shipped app has no package config
+      // either. ORBIS_INCLUDE is the answer for both.
+      return const [];
+    }
   }
 
   /// Builds a source file, loads what comes out, and starts it.
@@ -171,10 +235,11 @@ class ScriptRunner {
       );
     }
 
-    // The old one stops only once the new one has loaded, so a script that
+    // The old one goes only once the new one has loaded, so a script that
     // fails to load leaves the working version running rather than leaving
-    // nothing running.
-    existing?.script?.stop();
+    // nothing running. Closed rather than stopped: its code is unloaded and
+    // its file deleted, or an afternoon of saving leaks a library a save.
+    existing?.script?.close();
 
     loaded.start(_host);
     _scripts[name] = _Loaded(
@@ -194,14 +259,20 @@ class ScriptRunner {
   /// to the process is the script's own business, and that is the trade for
   /// running native code.
   void step(double delta) {
+    // Once a frame, and only when something has actually changed: a script
+    // reading a value through its address needs the address to hold the
+    // current value, and this is the one place that can be true without a
+    // call per read.
+    _host.refresh();
+
     for (final loaded in _scripts.values) {
       loaded.script?.step(delta);
     }
   }
 
-  /// Stops one and forgets it. Its library stays loaded, because it must.
+  /// Stops one, unloads it and forgets it.
   void remove(String name) {
-    _scripts.remove(name)?.script?.stop();
+    _scripts.remove(name)?.script?.close();
   }
 
   /// Rebuilds a script whenever its source is written.
@@ -237,7 +308,7 @@ class ScriptRunner {
     }
     _watches.clear();
     for (final loaded in _scripts.values) {
-      loaded.script?.stop();
+      loaded.script?.close();
     }
     _scripts.clear();
     // After every script has stopped: the table is what they were holding.

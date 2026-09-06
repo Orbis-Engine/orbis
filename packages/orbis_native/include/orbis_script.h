@@ -32,7 +32,7 @@
 /// A script reports the number it was built against and the host refuses one
 /// it does not know, because the alternative to refusing is calling through a
 /// function pointer that means something else now.
-#define ORBIS_SCRIPT_ABI 1
+#define ORBIS_SCRIPT_ABI 2
 
 #ifdef __cplusplus
 extern "C" {
@@ -48,6 +48,15 @@ typedef struct OrbisScriptHost {
   /// against more than one version of the engine can look at this; one that
   /// does not can ignore it and let the host do the refusing.
   uint32_t abi;
+
+  /// sizeof(OrbisScriptHost) as the host was built.
+  ///
+  /// The version number catches a script built against a different contract.
+  /// This catches the subtler thing: two builds that agree about the version
+  /// and disagree about the struct, because one of them was compiled against a
+  /// header that had been edited. Checked at load, before any member below it
+  /// is read.
+  uint32_t size;
 
   /// The world this script runs against. Never null while the script is
   /// started.
@@ -103,6 +112,29 @@ typedef struct OrbisScriptHost {
   /// Borrowed and valid until the next call to this function. Copy it if it
   /// has to outlive the line that read it.
   const char *(*data_text)(const char *asset, const char *key);
+
+  // --- data objects, without the call ---------------------------------------
+  //
+  // The three above cross into the host every time they are read, which is
+  // fine for a value read once when a script starts and is not fine for one
+  // read inside a loop over a hundred thousand entities. These hand back the
+  // address the value lives at instead: resolve once, then every read is a
+  // load from memory and crosses nothing.
+  //
+  // The address is stable for the life of the host — the value behind it is
+  // not. It is rewritten in place when somebody changes the data object, which
+  // is exactly what a script wants: no call, and still the current value.
+  //
+  // NULL only if the host has been disposed.
+
+  const double *(*number_at)(const char *asset, const char *key,
+                             double fallback);
+  const bool *(*toggle_at)(const char *asset, const char *key, bool fallback);
+
+  /// A pointer to the string pointer, not to the string. Read it every time
+  /// rather than keeping what it held: the string is replaced when the value
+  /// changes, and the old one does not outlive the frame it changed in.
+  const char *const *(*text_at)(const char *asset, const char *key);
 } OrbisScriptHost;
 
 // --- what a script must provide ---------------------------------------------
@@ -113,6 +145,14 @@ typedef struct OrbisScriptHost {
 /// nobody writes by hand: a number somebody has to remember to update is a
 /// number that will be wrong.
 uint32_t orbis_script_abi(void);
+
+/// sizeof(OrbisScriptHost) as this script was built.
+///
+/// Also defined for you by ORBIS_SCRIPT. Two builds can agree about the
+/// version and disagree about the struct — one of them compiled against a
+/// header somebody had edited — and the only way to catch that is to compare
+/// the thing itself rather than the number beside it.
+uint32_t orbis_script_host_size(void);
 
 /// Called once, when the script is loaded. The host outlives the call.
 void orbis_start(const OrbisScriptHost *host);
@@ -170,6 +210,11 @@ inline T *get(OrbisEntity entity, OrbisComponent id) {
   return static_cast<T *>(host_slot()->entity_get(world(), entity, id));
 }
 
+/// Reads a value, crossing into the host to do it.
+///
+/// For a key that is not known until it is computed, and for anything read
+/// once when a script starts. Anything read every frame should hold the
+/// address instead — see number_at below.
 inline double number(const char *asset, const char *key, double fallback = 0) {
   return host_slot()->data_number(asset, key, fallback);
 }
@@ -182,6 +227,31 @@ inline const char *text(const char *asset, const char *key) {
   return host_slot()->data_text(asset, key);
 }
 
+/// Where a value lives, resolved once.
+///
+/// Hold the pointer and read through it. The address does not move; the value
+/// behind it changes when somebody edits the data object. Written as a
+/// function-local static in the headers the editor generates, so resolution
+/// happens on the first read and every read after it is a load:
+///
+///     inline double speed(double fallback = 0) {
+///       static const double *at = ::orbis::number_at(asset, "speed", 0.0);
+///       return at ? *at : fallback;
+///     }
+inline const double *number_at(const char *asset, const char *key,
+                               double fallback = 0) {
+  return host_slot()->number_at(asset, key, fallback);
+}
+
+inline const bool *toggle_at(const char *asset, const char *key,
+                             bool fallback = false) {
+  return host_slot()->toggle_at(asset, key, fallback);
+}
+
+inline const char *const *text_at(const char *asset, const char *key) {
+  return host_slot()->text_at(asset, key);
+}
+
 }  // namespace orbis
 
 /// Writes the boilerplate every script would otherwise write identically.
@@ -192,6 +262,9 @@ inline const char *text(const char *asset, const char *key) {
 #define ORBIS_SCRIPT                                       \
   extern "C" uint32_t orbis_script_abi(void) {             \
     return ORBIS_SCRIPT_ABI;                               \
+  }                                                        \
+  extern "C" uint32_t orbis_script_host_size(void) {       \
+    return (uint32_t)sizeof(OrbisScriptHost);              \
   }                                                        \
   static void orbis_script_started();                      \
   extern "C" void orbis_start(const OrbisScriptHost *h) {  \
