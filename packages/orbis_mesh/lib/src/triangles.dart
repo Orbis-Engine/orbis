@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:vector_math/vector_math_64.dart';
 
 import 'mesh.dart';
+import 'uv.dart';
 
 /// A mesh as a renderer takes it: triangles, with a normal and a texture
 /// coordinate on every corner.
@@ -104,11 +105,8 @@ extension MeshTriangles on Mesh {
         uvsOut.addAll([uv.x, uv.y]);
       }
 
-      // A fan from the first corner. Right for anything convex, and for the
-      // concave faces an editor makes it produces triangles that overlap
-      // rather than gaps — visible, and not a crash.
-      for (var i = 1; i + 1 < face.vertices.length; i++) {
-        indicesOut.addAll([first, first + i, first + i + 1]);
+      for (final corner in cutUp(pointsOf(face), normal)) {
+        indicesOut.add(first + corner);
       }
       final last = groups.removeLast();
       groups.add((
@@ -149,6 +147,124 @@ extension MeshTriangles on Mesh {
     };
   }
 
+}
+
+/// Cuts a face into triangles, whatever shape its outline is.
+///
+/// A fan from the first corner is right only for a convex face, and the faces
+/// an editor makes are routinely not: an L-shaped room is concave the moment
+/// it is drawn, and a fan across one produces triangles that stick out past
+/// the wall — visible as slivers of whatever is behind.
+///
+/// Ear clipping instead. Quadratic in the number of corners, which is nothing
+/// for the ten or twenty a face has, and it handles the keyhole outlines a
+/// cut produces as well as ordinary concave ones.
+///
+/// Returns positions within the face's own corner list, three at a time.
+List<int> cutUp(List<Vector3> points, Vector3 normal) {
+  final count = points.length;
+  if (count < 3) return const [];
+  if (count == 3) return const [0, 1, 2];
+
+  // Flattened onto the face's own plane. The axes are right-handed about the
+  // normal, so a face wound anticlockwise about it is anticlockwise here too
+  // and its area is positive.
+  final axes = FaceUv.axesFor(normal);
+  final flat = [
+    for (final at in points) Vector2(at.dot(axes.u), at.dot(axes.v)),
+  ];
+
+  var area = 0.0;
+  for (var i = 0; i < count; i++) {
+    final a = flat[i];
+    final b = flat[(i + 1) % count];
+    area += a.x * b.y - b.x * a.y;
+  }
+
+  // Worked on anticlockwise whichever way it came in, and the result mapped
+  // back at the end — one direction to reason about rather than two.
+  final order = [for (var i = 0; i < count; i++) i];
+  if (area < 0) {
+    final reversed = order.reversed.toList();
+    order
+      ..clear()
+      ..addAll(reversed);
+  }
+
+  double cross(Vector2 a, Vector2 b, Vector2 c) =>
+      (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+
+  bool same(Vector2 a, Vector2 b) => (a - b).length2 < 1e-18;
+
+  bool inside(Vector2 a, Vector2 b, Vector2 c, Vector2 at) {
+    // A corner standing exactly on one of the ear's own is not in the way of
+    // it. This is what makes a keyhole outline work at all: the slit is two
+    // pairs of coincident corners, and counting each as blocking its own
+    // triangle leaves the whole face with no ear anywhere.
+    if (same(at, a) || same(at, b) || same(at, c)) return false;
+
+    final d1 = cross(a, b, at);
+    final d2 = cross(b, c, at);
+    final d3 = cross(c, a, at);
+    // Otherwise, on an edge counts as in: a corner lying exactly on the far
+    // side of a candidate ear makes that ear unsafe, and clipping it would
+    // cross the outline.
+    return d1 >= 0 && d2 >= 0 && d3 >= 0;
+  }
+
+  final out = <int>[];
+  final left = [...order];
+  // Every pass removes one corner or gives up. Without the bound a
+  // self-intersecting outline — which a cut can leave and a drawing can be
+  // given — would spin here forever.
+  var guard = count * count;
+
+  while (left.length > 3 && guard-- > 0) {
+    var clipped = false;
+
+    for (var i = 0; i < left.length; i++) {
+      final previous = flat[left[(i - 1 + left.length) % left.length]];
+      final here = flat[left[i]];
+      final next = flat[left[(i + 1) % left.length]];
+
+      // A reflex corner is a dent, and the triangle across it is outside the
+      // face rather than part of it.
+      if (cross(previous, here, next) <= 0) continue;
+
+      var clear = true;
+      for (var j = 0; j < left.length; j++) {
+        if (j == i ||
+            j == (i - 1 + left.length) % left.length ||
+            j == (i + 1) % left.length) {
+          continue;
+        }
+        if (inside(previous, here, next, flat[left[j]])) {
+          clear = false;
+          break;
+        }
+      }
+      if (!clear) continue;
+
+      out.addAll([
+        left[(i - 1 + left.length) % left.length],
+        left[i],
+        left[(i + 1) % left.length],
+      ]);
+      left.removeAt(i);
+      clipped = true;
+      break;
+    }
+
+    // No ear anywhere: the outline crosses itself or has no area. A fan over
+    // what is left is wrong, but it is visible and it is not a crash — which
+    // beats leaving a hole where a face should be.
+    if (!clipped) break;
+  }
+
+  for (var i = 1; i + 1 < left.length; i++) {
+    out.addAll([left[0], left[i], left[i + 1]]);
+  }
+  return out;
 }
 
 /// One material, as much of it as a `.glb` can carry.
