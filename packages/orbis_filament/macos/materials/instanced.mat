@@ -18,7 +18,18 @@ material {
         // Which member of the population this renderable's first copy is.
         // Filament hands each copy an index counted from its own draw, and
         // the book is kept for the whole population rather than per draw.
-        { type : int, name : base }
+        { type : int, name : base },
+
+        // How far a member is still drawn from, and how far out it starts
+        // going. Zero draws every one of them at full size.
+        //
+        // A member is not switched off at the edge, it sinks. Switching them
+        // off in groups is what makes a field look like scattered debris:
+        // sixty-four go at once, leaving a clump-shaped hole, and the boundary
+        // is a line anybody can see. Shrinking each one on its own has no line
+        // in it at all.
+        { type : float, name : range },
+        { type : float, name : fadeFrom }
     ],
     variables : [ tint ],
     culling : back
@@ -55,7 +66,27 @@ vertex {
         // inside, looks like the screen going black. A delta is the same
         // whichever origin it is measured from.
         vec3 local = getPosition().xyz;
-        material.worldPosition.xyz += (basis * local + offset) - local;
+
+        // Where the world's origin is, measured from the camera. Filament
+        // renders camera-relative, so this is what everything else here is
+        // measured against.
+        vec3 origin = material.worldPosition.xyz - local;
+        float away = length(origin + offset);
+
+        // How much of this member is left at that distance.
+        float standing = 1.0;
+        if (materialParams.range > 0.0) {
+            standing = 1.0 - smoothstep(materialParams.fadeFrom,
+                                        materialParams.range, away);
+        }
+
+        // Sunk rather than shrunk in place: the mesh runs from minus one to
+        // one, so holding its bottom edge and drawing the rest down to it
+        // takes a member into the ground instead of leaving it hovering.
+        vec3 standingLocal =
+            vec3(local.x, -1.0 + (local.y + 1.0) * standing, local.z);
+
+        material.worldPosition.xyz = origin + basis * standingLocal + offset;
 
         // The normal has to be turned with it, or every instance is lit as
         // though it were facing the way the mesh was modelled. Right for a

@@ -91,6 +91,12 @@ constexpr uint32_t kBookWidth = 2048;
 /// Four texels an instance: three rows of an affine, and a colour.
 constexpr uint32_t kTexelsPerMember = 4;
 
+/// How far through its range a member starts sinking.
+///
+/// Three quarters, so the last quarter is the going. Too late and it is a pop
+/// with extra steps; too early and half the field is short.
+constexpr float kFadeFrom = 0.75f;
+
 /// One population as the renderer holds it between frames.
 ///
 /// The buffers are the expensive part and they are built once. What arrives
@@ -1368,6 +1374,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     MaterialInstance *material = _instancedMaterial->createInstance();
     material->setParameter("book", grown.book, nearest);
     material->setParameter("base", int32_t(at));
+    material->setParameter("range", grown.range);
+    material->setParameter("fadeFrom", grown.range * kFadeFrom);
 
     utils::Entity entity = utils::EntityManager::get().create();
     RenderableManager::Builder(1)
@@ -1544,6 +1552,10 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     for (size_t draw = 0; draw < grown.entities.size(); draw++) {
       // Measured to the nearest part of the draw rather than to its middle,
       // so a large group does not vanish while part of it is still close.
+      // To the nearest part of the draw rather than to its middle, so a
+      // large group does not vanish while part of it is still close — and
+      // only once every member in it has finished sinking, or taking it out
+      // is the pop the sinking exists to avoid.
       const float away =
           std::max(length(grown.middles[draw] - eye) - grown.radii[draw], 0.0f);
       const bool wanted = away <= grown.range;
@@ -1596,13 +1608,20 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     grown.seen = generation;
 
     const uint32_t wanted = uint32_t(std::max(counts[i], 0));
-    grown.range = ranges[i];
 
     // A different size, a different mesh or different flags is a different
     // set of renderables. Anything else is a write into the ones there are.
     if (grown.count != wanted || grown.flags != flags[i] ||
         grown.entities.empty()) {
       [self growPopulation:grown count:wanted bounds:bounds + i * 6 flags:flags[i]];
+    }
+
+    if (grown.range != ranges[i]) {
+      grown.range = ranges[i];
+      for (auto *material : grown.materials) {
+        material->setParameter("range", grown.range);
+        material->setParameter("fadeFrom", grown.range * kFadeFrom);
+      }
     }
 
     auto found = arriving.find(keys[i]);
