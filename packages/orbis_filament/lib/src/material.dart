@@ -17,6 +17,13 @@ enum OrbisShading {
   /// [lit] by every light in the scene, and the right answer for anything
   /// that carries its own brightness — a marker, a sky card, a screen.
   unlit,
+
+  /// Shows a video. Unlit for the same reason: a screen makes its own light,
+  /// and the frame arriving from the decoder is already the picture somebody
+  /// graded. Set [OrbisMaterial.video] to the key of the video to show;
+  /// [OrbisMaterial.baseColour] tints it, so a screen can be dimmed or faded
+  /// without touching the film.
+  video,
 }
 
 /// How a surface's pixels combine with what is already drawn.
@@ -150,6 +157,7 @@ class OrbisMaterial {
     this.depthWrite = true,
     this.wrap = OrbisWrap.repeat,
     this.filter = OrbisFilter.smooth,
+    this.video,
     this.baseColourMap,
     this.normalMap,
     this.metallicRoughnessMap,
@@ -237,6 +245,10 @@ class OrbisMaterial {
 
   final OrbisWrap wrap;
   final OrbisFilter filter;
+
+  /// The key of the video this surface shows, for [OrbisShading.video].
+  /// Ignored by every other shading model.
+  final int? video;
 
   /// Multiplied into [baseColour]. sRGB.
   final OrbisTexture? baseColourMap;
@@ -352,6 +364,7 @@ class OrbisMaterial {
       depthWrite: depthWrite ?? this.depthWrite,
       wrap: wrap ?? this.wrap,
       filter: filter ?? this.filter,
+      video: video,
       baseColourMap: baseColourMap,
       normalMap: normalMap,
       metallicRoughnessMap: metallicRoughnessMap,

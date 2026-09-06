@@ -63,5 +63,6 @@ without a trip through the CPU.
     'EXCLUDED_ARCHS' => 'x86_64',
   }
   s.user_target_xcconfig = { 'EXCLUDED_ARCHS' => 'x86_64' }
-  s.frameworks = 'Metal', 'MetalKit', 'CoreVideo', 'QuartzCore', 'IOSurface', 'OpenGL'
+  s.frameworks = 'Metal', 'MetalKit', 'CoreVideo', 'QuartzCore', 'IOSurface', 'OpenGL',
+                 'AVFoundation', 'CoreMedia', 'AudioToolbox'
 end

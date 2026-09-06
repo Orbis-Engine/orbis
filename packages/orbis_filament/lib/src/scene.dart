@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'material.dart';
+import 'video.dart';
 import 'post.dart';
 
 import 'package:vector_math/vector_math_64.dart';
@@ -791,9 +792,11 @@ class OrbisScene {
     OrbisPrecipitation? precipitation,
     List<OrbisPopulation>? populations,
     List<OrbisMaterial>? materials,
+    List<OrbisVideo>? videos,
     OrbisPostProcess? post,
   }) : lights = lights ?? const [],
        materials = materials ?? const [],
+       videos = videos ?? const [],
        post = post ?? OrbisPostProcess(),
        populations = populations ?? const [],
        sky = sky ?? OrbisSky(),
@@ -823,6 +826,13 @@ class OrbisScene {
   /// means a material can be edited — a slider dragged — without anything
   /// having to say which objects were affected.
   final List<OrbisMaterial> materials;
+
+  /// Every video the scene is playing.
+  ///
+  /// Beside the materials rather than inside them, for the same reason: one
+  /// film can be on four screens, and playing it four times would be four
+  /// decoders doing identical work out of step with each other.
+  final List<OrbisVideo> videos;
 
   final OrbisCamera camera;
   final OrbisSky sky;
@@ -895,6 +905,12 @@ class OrbisScene {
     final materialFlags = Int32List(materialCount);
     final materialParams = Float32List(materialCount * OrbisMaterial.stride);
     final materialMaps = Int32List(materialCount * OrbisMaterial.mapCount);
+    final materialVideos = Int32List(materialCount);
+
+    final videoAt = <int, int>{};
+    for (var i = 0; i < videos.length; i++) {
+      videoAt[videos[i].key] = i;
+    }
 
     // The same trick as mesh paths: an image is usually on several materials
     // and always on several frames, so it travels once and is pointed at.
@@ -907,6 +923,8 @@ class OrbisScene {
       materialKeys[i] = material.key;
       materialFlags[i] = material.flags;
       material.pack(materialParams, i * OrbisMaterial.stride);
+      final video = material.video;
+      materialVideos[i] = video == null ? -1 : (videoAt[video] ?? -1);
       final maps = material.maps;
       for (var m = 0; m < OrbisMaterial.mapCount; m++) {
         final map = maps[m];
@@ -918,6 +936,25 @@ class OrbisScene {
                 return texturePaths.length - 1;
               });
       }
+    }
+
+    final videoCount = videos.length;
+    final videoKeys = Int64List(videoCount);
+    final videoFlags = Int32List(videoCount);
+    final videoParams = Float32List(videoCount * OrbisVideo.stride);
+    final videoPaths = <String>[];
+    for (var i = 0; i < videoCount; i++) {
+      final video = videos[i];
+      videoKeys[i] = video.key;
+      videoFlags[i] = video.flags;
+      videoPaths.add(video.path);
+      final at = i * OrbisVideo.stride;
+      videoParams[at] = video.rate;
+      videoParams[at + 1] = video.volume;
+      // Negative for "no seek asked for", so a token that has moved with no
+      // target is a no-op rather than a jump to the start.
+      videoParams[at + 2] = video.seekTo ?? -1;
+      videoParams[at + 3] = video.seekToken.toDouble();
     }
 
     final lightCount = lights.length;
@@ -947,6 +984,11 @@ class OrbisScene {
       'materialFlags': materialFlags,
       'materialParams': materialParams,
       'materialMaps': materialMaps,
+      'materialVideos': materialVideos,
+      'videoKeys': videoKeys,
+      'videoFlags': videoFlags,
+      'videoParams': videoParams,
+      'videoPaths': videoPaths,
       'texturePaths': texturePaths,
       'textureSrgb': Int32List.fromList(textureSrgb),
       'lightKeys': lightKeys,

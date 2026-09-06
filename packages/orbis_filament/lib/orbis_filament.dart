@@ -16,6 +16,7 @@ export 'src/material.dart'
         OrbisTexture,
         OrbisWrap;
 export 'src/population.dart' show OrbisPopulation;
+export 'src/video.dart' show OrbisVideo;
 export 'src/post.dart'
     show
         AntiAliasing,

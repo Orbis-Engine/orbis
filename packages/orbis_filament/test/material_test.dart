@@ -159,6 +159,66 @@ void main() {
     expect(params[OrbisMaterial.stride + 5], near(0.22));
   });
 
+  test('a screen points at a video by its place in the list', () {
+    final scene = OrbisScene(
+      objects: [
+        OrbisObject(
+          key: 1,
+          material: 10,
+          transform: Matrix4.identity(),
+          colour: Vector3(1, 1, 1),
+        ),
+      ],
+      materials: const [
+        OrbisMaterial(key: 10, shading: OrbisShading.video, video: 7),
+        OrbisMaterial(key: 11, shading: OrbisShading.video, video: 999),
+        OrbisMaterial(key: 12),
+      ],
+      videos: const [
+        OrbisVideo(key: 5, path: '/tmp/a.mp4'),
+        OrbisVideo(key: 7, path: '/tmp/b.mp4'),
+      ],
+      camera: OrbisCamera(position: Vector3(0, 0, 5), target: Vector3.zero()),
+    );
+    final message = scene.toMessage(0);
+
+    expect((message['materialVideos']! as Int32List)[0], 1);
+    expect((message['materialVideos']! as Int32List)[1], -1,
+        reason: 'a video the scene does not list');
+    expect((message['materialVideos']! as Int32List)[2], -1,
+        reason: 'not a screen at all');
+    expect(message['videoPaths'], ['/tmp/a.mp4', '/tmp/b.mp4']);
+  });
+
+  test('a seek only counts when its token moves', () {
+    OrbisScene sceneWith(OrbisVideo video) => OrbisScene(
+          objects: const [],
+          videos: [video],
+          camera: OrbisCamera(
+            position: Vector3(0, 0, 5),
+            target: Vector3.zero(),
+          ),
+        );
+
+    final still = sceneWith(const OrbisVideo(key: 1, path: '/tmp/a.mp4'));
+    final params = still.toMessage(0)['videoParams']! as Float32List;
+    expect(params[2], -1, reason: 'no seek asked for');
+    expect(params[3], 0);
+
+    final jumped = sceneWith(
+      const OrbisVideo(key: 1, path: '/tmp/a.mp4', seekTo: 12, seekToken: 3),
+    );
+    final moved = jumped.toMessage(0)['videoParams']! as Float32List;
+    expect(moved[2], 12);
+    expect(moved[3], 3);
+  });
+
+  test('a paused looping video says so in its flags', () {
+    const video = OrbisVideo(key: 1, path: '/a', playing: false, loop: true);
+    expect(video.flags & 1, 0);
+    expect(video.flags & 2, 2);
+  });
+
   test('copyWith keeps the maps and the key', () {
     const material = OrbisMaterial(
       key: 4,

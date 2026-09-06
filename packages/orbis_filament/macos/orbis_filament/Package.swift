@@ -62,6 +62,13 @@ let package = Package(
         .linkedFramework("Metal"),
         .linkedFramework("MetalKit"),
         .linkedFramework("CoreVideo"),
+        // Video playback. CoreMedia comes with it for the time types, and
+        // AudioToolbox is here because AVFoundation's auto-link asks for
+        // CoreAudioTypes, which is not a framework on this SDK and is not
+        // found — naming the real one stops the linker looking.
+        .linkedFramework("AVFoundation"),
+        .linkedFramework("CoreMedia"),
+        .linkedFramework("AudioToolbox"),
         .linkedFramework("QuartzCore"),
         .linkedFramework("IOSurface"),
         // bluegl's fallback backend; Filament links it whether or not the

@@ -63,7 +63,24 @@ NS_ASSUME_NONNULL_BEGIN
                   maps:(const int32_t *)maps
           texturePaths:(NSArray<NSString *> *)texturePaths
            textureSrgb:(const int32_t *)textureSrgb
+                videos:(const int32_t *)videos
                  count:(uint32_t)count;
+
+/// States what every video in the scene is doing.
+///
+/// A description rather than a command, like everything else: what arrives is
+/// the state a video should be in, and the renderer works out what to do
+/// about it. Saying "playing, at this rate, from this file" sixty times a
+/// second costs one comparison per video. The exception is seeking, which is
+/// an event and not a state, so it is reconciled by a token — the target only
+/// takes effect when the token beside it has moved.
+///
+/// Applied before materials, because a screen points at one of these.
+- (void)applyVideos:(const int64_t *)keys
+              flags:(const int32_t *)flags
+             params:(const float *)params
+              paths:(NSArray<NSString *> *)paths
+              count:(uint32_t)count;
 
 /// States what is lighting the scene.
 ///

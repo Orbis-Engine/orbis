@@ -102,14 +102,31 @@ private final class Viewport {
     let flags = scene.count == 0 ? [Int32(0)] : scene.flags
     let objectMaterials = scene.count == 0 ? [Int32(-1)] : scene.objectMaterials
 
-    // Materials first: an object published in the same breath may name one,
-    // and a material that does not exist yet would leave it on the default
-    // surface for a frame.
+    // Videos before materials before objects, each because the next one may
+    // point at it and a thing that does not exist yet reads as a thing that
+    // was never asked for.
+    let videoCount = scene.videoKeys.count
+    let videoKeys = videoCount == 0 ? [Int64(0)] : scene.videoKeys
+    let videoFlags = videoCount == 0 ? [Int32(0)] : scene.videoFlags
+    let videoParams = videoCount == 0 ? [Float(0)] : scene.videoParams
+    videoKeys.withUnsafeBufferPointer { keyPointer in
+      videoFlags.withUnsafeBufferPointer { flagPointer in
+        videoParams.withUnsafeBufferPointer { paramPointer in
+          renderer.applyVideos(keyPointer.baseAddress!,
+                               flags: flagPointer.baseAddress!,
+                               params: paramPointer.baseAddress!,
+                               paths: scene.videoPaths,
+                               count: UInt32(videoCount))
+        }
+      }
+    }
+
     let materialCount = scene.materialKeys.count
     let materialKeys = materialCount == 0 ? [Int64(0)] : scene.materialKeys
     let materialFlags = materialCount == 0 ? [Int32(0)] : scene.materialFlags
     let materialParams = materialCount == 0 ? [Float(0)] : scene.materialParams
     let materialMaps = materialCount == 0 ? [Int32(-1)] : scene.materialMaps
+    let materialVideos = materialCount == 0 ? [Int32(-1)] : scene.materialVideos
     let textureSrgb = scene.textureSrgb.isEmpty ? [Int32(0)] : scene.textureSrgb
 
     materialKeys.withUnsafeBufferPointer { keyPointer in
@@ -117,13 +134,16 @@ private final class Viewport {
         materialParams.withUnsafeBufferPointer { paramPointer in
           materialMaps.withUnsafeBufferPointer { mapPointer in
             textureSrgb.withUnsafeBufferPointer { srgbPointer in
-              renderer.applyMaterials(keyPointer.baseAddress!,
-                                      flags: flagPointer.baseAddress!,
-                                      params: paramPointer.baseAddress!,
-                                      maps: mapPointer.baseAddress!,
-                                      texturePaths: scene.texturePaths,
-                                      textureSrgb: srgbPointer.baseAddress!,
-                                      count: UInt32(materialCount))
+              materialVideos.withUnsafeBufferPointer { videoPointer in
+                renderer.applyMaterials(keyPointer.baseAddress!,
+                                        flags: flagPointer.baseAddress!,
+                                        params: paramPointer.baseAddress!,
+                                        maps: mapPointer.baseAddress!,
+                                        texturePaths: scene.texturePaths,
+                                        textureSrgb: srgbPointer.baseAddress!,
+                                        videos: videoPointer.baseAddress!,
+                                        count: UInt32(materialCount))
+              }
             }
           }
         }
@@ -276,6 +296,11 @@ private struct Scene {
   let materialMaps: [Int32]
   let texturePaths: [String]
   let textureSrgb: [Int32]
+  let materialVideos: [Int32]
+  let videoKeys: [Int64]
+  let videoFlags: [Int32]
+  let videoParams: [Float]
+  let videoPaths: [String]
   let lightCount: Int
   let lightKeys: [Int64]
   let lightKinds: [Int32]
@@ -329,6 +354,7 @@ private struct Scene {
   private static let lightStride = 18
   private static let materialStride = 18
   private static let materialMaps = 5
+  private static let videoStride = 4
   private static let fogStride = 16
   private static let precipitationStride = 12
   private static let skyStride = 34
@@ -419,6 +445,30 @@ private struct Scene {
           objectMaterials.count == count,
           objectMaterials.allSatisfy({ $0 < Int32(materialCount) })
     else { return nil }
+
+    let videoKeys =
+      (arguments["videoKeys"] as? FlutterStandardTypedData)?.int64s ?? []
+    let videoFlags =
+      (arguments["videoFlags"] as? FlutterStandardTypedData)?.int32s ?? []
+    let videoParams =
+      (arguments["videoParams"] as? FlutterStandardTypedData)?.floats ?? []
+    let videoPaths = arguments["videoPaths"] as? [String] ?? []
+    let materialVideos =
+      (arguments["materialVideos"] as? FlutterStandardTypedData)?.int32s
+        ?? [Int32](repeating: -1, count: materialCount)
+
+    guard videoFlags.count == videoKeys.count,
+          videoPaths.count == videoKeys.count,
+          videoParams.count == videoKeys.count * Scene.videoStride,
+          materialVideos.count == materialCount,
+          materialVideos.allSatisfy({ $0 < Int32(videoKeys.count) })
+    else { return nil }
+
+    self.materialVideos = materialVideos
+    self.videoKeys = videoKeys
+    self.videoFlags = videoFlags
+    self.videoParams = videoParams
+    self.videoPaths = videoPaths
 
     self.objectMaterials = objectMaterials
     self.materialKeys = materialKeys

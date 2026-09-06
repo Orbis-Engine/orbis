@@ -1,5 +1,6 @@
 #import "OrbisRenderer.h"
 
+#import <AVFoundation/AVFoundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 
@@ -54,6 +55,11 @@
 #include "generated/unlit_fade_material.h"
 #include "generated/unlit_masked_material.h"
 #include "generated/unlit_add_material.h"
+#include "generated/video_opaque_material.h"
+#include "generated/video_transparent_material.h"
+#include "generated/video_fade_material.h"
+#include "generated/video_masked_material.h"
+#include "generated/video_add_material.h"
 #include "generated/mist_material.h"
 #include "generated/instanced_material.h"
 #include "generated/sky_material.h"
@@ -291,6 +297,34 @@ struct Surfaced {
   uint64_t seen = 0;
 };
 
+/// How many floats one video contributes to the message.
+constexpr size_t kVideoParams = 4;
+
+/// One video as the renderer holds it between frames.
+///
+/// The frame never becomes an ordinary texture. It stays the buffer the
+/// decoder wrote and is handed to the GPU where it lies, which is the whole
+/// reason a screen in the scene costs about as much as a flat colour.
+struct Movie {
+  AVPlayer *player = nil;
+  AVPlayerItemVideoOutput *output = nil;
+  filament::Texture *texture = nullptr;
+
+  /// The buffer currently on the GPU. Held until the next one replaces it:
+  /// releasing it at the end of the frame that showed it would pull the
+  /// picture out from under a draw that has not happened yet.
+  CVPixelBufferRef showing = nullptr;
+
+  std::string path;
+  int32_t flags = -1;
+  float rate = 1.0f;
+  float volume = 1.0f;
+  int32_t seekToken = -1;
+  bool looping = false;
+  id endObserver = nil;
+  uint64_t seen = 0;
+};
+
 /// One light as the renderer holds it between frames.
 ///
 /// The whole parameter block is kept rather than the fields that matter,
@@ -502,7 +536,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// The compiled surfaces, indexed by shading and blend mode. Built on
   /// first use: a scene of opaque lit objects should not compile the four
   /// blending variants it never draws.
-  filament::Material *_surfaces[10];
+  filament::Material *_surfaces[15];
 
   /// Every material the host has named, by its key.
   std::unordered_map<int64_t, Surfaced> _materials;
@@ -522,6 +556,20 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   /// One white pixel, standing in for every map a material does not set.
   filament::Texture *_blankTexture;
+
+  /// An external image that never gets one, for a screen with no video on it
+  /// yet. Filament wants every sampler bound whether the shader reads it or
+  /// not, and a screen showing nothing is a legitimate state to be in.
+  filament::Texture *_blankExternal;
+
+  /// Every video the host has named, by its key.
+  std::unordered_map<int64_t, Movie> _movies;
+
+  /// This frame's videos in the order they arrived, which is what a material
+  /// points into.
+  std::vector<Movie *> _movieOrder;
+
+  uint64_t _videoGeneration;
 
   uint64_t _materialGeneration;
   gltfio::TextureProvider *_ktxTextures;
@@ -1791,7 +1839,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
 - (int)surfaceIndexFor:(int32_t)flags {
   const int shading = flags & 3;
   const int blend = (flags >> 2) & 15;
-  if (shading < 0 || shading > 1 || blend < 0 || blend > 4) return 0;
+  if (shading < 0 || shading > 2 || blend < 0 || blend > 4) return 0;
   return shading * 5 + blend;
 }
 
@@ -1802,21 +1850,27 @@ static constexpr NSUInteger kMaxPostParams = 128;
 /// scene of opaque lit objects should not compile the four blending variants
 /// it never draws.
 - (Material *)surfaceAt:(int)index {
-  static const uint8_t *packages[10] = {
+  static const uint8_t *packages[15] = {
       klit_opaqueMaterial,        klit_transparentMaterial,
       klit_fadeMaterial,          klit_maskedMaterial,
       klit_addMaterial,           kunlit_opaqueMaterial,
       kunlit_transparentMaterial, kunlit_fadeMaterial,
       kunlit_maskedMaterial,      kunlit_addMaterial,
+      kvideo_opaqueMaterial,      kvideo_transparentMaterial,
+      kvideo_fadeMaterial,        kvideo_maskedMaterial,
+      kvideo_addMaterial,
   };
-  static const size_t sizes[10] = {
+  static const size_t sizes[15] = {
       klit_opaqueMaterial_len,        klit_transparentMaterial_len,
       klit_fadeMaterial_len,          klit_maskedMaterial_len,
       klit_addMaterial_len,           kunlit_opaqueMaterial_len,
       kunlit_transparentMaterial_len, kunlit_fadeMaterial_len,
       kunlit_maskedMaterial_len,      kunlit_addMaterial_len,
+      kvideo_opaqueMaterial_len,      kvideo_transparentMaterial_len,
+      kvideo_fadeMaterial_len,        kvideo_maskedMaterial_len,
+      kvideo_addMaterial_len,
   };
-  if (index < 0 || index >= 10) index = 0;
+  if (index < 0 || index >= 15) index = 0;
   if (_surfaces[index] == nullptr) {
     _surfaces[index] =
         Material::Builder().package(packages[index], sizes[index]).build(*_engine);
@@ -1953,10 +2007,41 @@ static constexpr NSUInteger kMaxPostParams = 128;
     withParams:(const float *)params
           maps:(const int32_t *)maps
    texturePaths:(NSArray<NSString *> *)texturePaths
-     textureSrgb:(const int32_t *)textureSrgb {
+     textureSrgb:(const int32_t *)textureSrgb
+          video:(int32_t)video {
   MaterialInstance *instance = surface.instance;
-  const bool unlit = (surface.flags & 3) == 1;
+  const int shading = surface.flags & 3;
+  const bool unlit = shading == 1;
   const TextureSampler sampler = [self samplerFor:surface.flags];
+
+  // A screen has its own short list: a tint, a transform, and the frame.
+  if (shading == 2) {
+    instance->setParameter("baseColor",
+                           float4{params[0], params[1], params[2], params[3]});
+    instance->setParameter(
+        "uvTransform", float4{params[13], params[14], params[15], params[16]});
+    Movie *movie = (video >= 0 && video < static_cast<int32_t>(_movieOrder.size()))
+                       ? _movieOrder[video]
+                       : nullptr;
+    Texture *frame = movie != nullptr ? movie->texture : nullptr;
+    // An external image only ever clamps, and only ever filters linearly.
+    // Asking for anything else is not refused, it is ignored.
+    const TextureSampler screen(TextureSampler::MinFilter::LINEAR,
+                                TextureSampler::MagFilter::LINEAR,
+                                TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    if (frame == nullptr) {
+      if (_blankExternal == nullptr) {
+        _blankExternal = Texture::Builder()
+                             .sampler(Texture::Sampler::SAMPLER_EXTERNAL)
+                             .format(Texture::InternalFormat::RGBA8)
+                             .build(*_engine);
+      }
+      frame = _blankExternal;
+    }
+    instance->setParameter("videoTexture", frame, screen);
+    instance->setParameter("hasVideo", movie != nullptr && movie->texture != nullptr);
+    return;
+  }
 
   instance->setParameter("baseColor",
                          float4{params[0], params[1], params[2], params[3]});
@@ -2019,12 +2104,196 @@ static constexpr NSUInteger kMaxPostParams = 128;
   if (((surface.flags >> 2) & 15) == 3) instance->setMaskThreshold(threshold);
 }
 
+
+/// Opens a file and starts a decoder for it.
+///
+/// The pixel format is asked for explicitly: Filament's external images take
+/// 32-bit BGRA or biplanar YUV and nothing else, and a decoder left to choose
+/// will happily hand back something neither of them.
+- (void)open:(Movie &)movie atPath:(const std::string &)path {
+  [self close:movie];
+  movie.path = path;
+  if (path.empty()) return;
+
+  NSString *text = [NSString stringWithUTF8String:path.c_str()];
+  NSURL *url = [text hasPrefix:@"http"] ? [NSURL URLWithString:text]
+                                        : [NSURL fileURLWithPath:text];
+  if (url == nil) return;
+
+  AVPlayerItem *item = [AVPlayerItem playerItemWithURL:url];
+  movie.output = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:@{
+    (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+    (id)kCVPixelBufferMetalCompatibilityKey : @YES,
+    (id)kCVPixelBufferIOSurfacePropertiesKey : @{},
+  }];
+  [item addOutput:movie.output];
+
+  movie.player = [AVPlayer playerWithPlayerItem:item];
+  // Without this the player pauses itself the moment a buffer runs short,
+  // and a file on the local disk stutters for no reason a viewer can see.
+  movie.player.automaticallyWaitsToMinimizeStalling = NO;
+
+  // The external image is the decoder's own buffer, so the texture is a
+  // handle rather than storage: no width, no height, no format, and nothing
+  // uploaded when the picture changes.
+  movie.texture = Texture::Builder()
+                      .sampler(Texture::Sampler::SAMPLER_EXTERNAL)
+                      .format(Texture::InternalFormat::RGBA8)
+                      .build(*_engine);
+
+  __weak AVPlayer *player = movie.player;
+  movie.endObserver = [[NSNotificationCenter defaultCenter]
+      addObserverForName:AVPlayerItemDidPlayToEndTimeNotification
+                  object:item
+                   queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification *note) {
+                // Looping is done here rather than with a queue player,
+                // because a queue restarts by loading the file again and the
+                // gap that leaves is exactly what a loop is meant to hide.
+                OrbisRenderer *renderer = self;
+                if (renderer == nil || player == nil) return;
+                [renderer restartIfLooping:player];
+              }];
+}
+
+/// Sends a finished video back to the start, if it was asked to loop.
+- (void)restartIfLooping:(AVPlayer *)player {
+  for (auto &entry : _movies) {
+    Movie &movie = entry.second;
+    if (movie.player != player) continue;
+    if (!movie.looping) return;
+    [movie.player seekToTime:kCMTimeZero
+             toleranceBefore:kCMTimeZero
+              toleranceAfter:kCMTimeZero];
+    if ((movie.flags & 1) != 0) [movie.player playImmediatelyAtRate:movie.rate];
+    return;
+  }
+}
+
+/// Stops a video and gives back everything it was holding.
+- (void)close:(Movie &)movie {
+  if (movie.endObserver != nil) {
+    [[NSNotificationCenter defaultCenter] removeObserver:movie.endObserver];
+    movie.endObserver = nil;
+  }
+  if (movie.player != nil) {
+    [movie.player pause];
+    movie.player = nil;
+  }
+  movie.output = nil;
+  if (movie.texture != nullptr) {
+    _engine->destroy(movie.texture);
+    movie.texture = nullptr;
+  }
+  if (movie.showing != nullptr) {
+    CVPixelBufferRelease(movie.showing);
+    movie.showing = nullptr;
+  }
+  movie.flags = -1;
+  movie.seekToken = -1;
+}
+
+- (void)applyVideos:(const int64_t *)keys
+              flags:(const int32_t *)flags
+             params:(const float *)params
+              paths:(NSArray<NSString *> *)paths
+              count:(uint32_t)count {
+  if (_disposed) return;
+
+  const uint64_t generation = ++_videoGeneration;
+  _movieOrder.clear();
+  _movieOrder.reserve(count);
+
+  for (uint32_t i = 0; i < count; i++) {
+    Movie &movie = _movies[keys[i]];
+    movie.seen = generation;
+    const float *values = params + i * kVideoParams;
+    const std::string path =
+        i < paths.count ? std::string(paths[i].UTF8String) : std::string();
+
+    // A different file is a different video, whatever the key says. Anything
+    // else — rate, volume, playing — is a change to this one.
+    if (movie.player == nil || movie.path != path) [self open:movie atPath:path];
+    if (movie.player == nil) {
+      _movieOrder.push_back(&movie);
+      continue;
+    }
+
+    movie.looping = (flags[i] & 2) != 0;
+
+    // The seek is reconciled by its token rather than by its target, so
+    // saying the same seek sixty times a second is one seek and not sixty.
+    const int32_t token = static_cast<int32_t>(values[3]);
+    if (token != movie.seekToken) {
+      movie.seekToken = token;
+      if (values[2] >= 0) {
+        [movie.player seekToTime:CMTimeMakeWithSeconds(values[2], 600)
+                 toleranceBefore:kCMTimeZero
+                  toleranceAfter:kCMTimeZero];
+      }
+    }
+
+    if (values[1] != movie.volume) {
+      movie.volume = values[1];
+      movie.player.volume = values[1];
+    }
+
+    const bool playing = (flags[i] & 1) != 0;
+    if (flags[i] != movie.flags || values[0] != movie.rate) {
+      movie.flags = flags[i];
+      movie.rate = values[0];
+      if (playing) {
+        [movie.player playImmediatelyAtRate:movie.rate];
+      } else {
+        [movie.player pause];
+      }
+    }
+
+    _movieOrder.push_back(&movie);
+  }
+
+  for (auto it = _movies.begin(); it != _movies.end();) {
+    if (it->second.seen == generation) {
+      ++it;
+      continue;
+    }
+    [self close:it->second];
+    it = _movies.erase(it);
+  }
+}
+
+/// Takes whatever frame each decoder has ready and puts it on the GPU.
+///
+/// Called once a frame. A video that has not advanced hands back nothing and
+/// costs a single comparison; the picture already on the texture stays.
+- (void)pumpVideos {
+  if (_movies.empty()) return;
+  for (auto &entry : _movies) {
+    Movie &movie = entry.second;
+    if (movie.output == nil || movie.texture == nullptr) continue;
+
+    const CMTime at = [movie.output itemTimeForHostTime:CACurrentMediaTime()];
+    if (![movie.output hasNewPixelBufferForItemTime:at]) continue;
+    CVPixelBufferRef buffer =
+        [movie.output copyPixelBufferForItemTime:at itemTimeForDisplay:nullptr];
+    if (buffer == nullptr) continue;
+
+    movie.texture->setExternalImage(*_engine, buffer);
+    // The one just replaced, not the one just set: the new buffer is what the
+    // next draw reads, and releasing it here would pull the picture out from
+    // under a frame that has not happened yet.
+    if (movie.showing != nullptr) CVPixelBufferRelease(movie.showing);
+    movie.showing = buffer;
+  }
+}
+
 - (void)applyMaterials:(const int64_t *)keys
                  flags:(const int32_t *)flags
                 params:(const float *)params
                   maps:(const int32_t *)maps
           texturePaths:(NSArray<NSString *> *)texturePaths
            textureSrgb:(const int32_t *)textureSrgb
+                videos:(const int32_t *)videos
                  count:(uint32_t)count {
   if (_disposed) return;
 
@@ -2062,7 +2331,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
     }
 
     const bool sameParams =
-        surface.written &&
+        (surface.flags & 3) != 2 && surface.written &&
         std::memcmp(surface.params, values, sizeof(float) * kMaterialParams) == 0 &&
         std::memcmp(surface.maps, entries, sizeof(int32_t) * kMaterialMaps) == 0;
     if (!sameParams) {
@@ -2073,7 +2342,8 @@ static constexpr NSUInteger kMaxPostParams = 128;
             withParams:values
                   maps:entries
           texturePaths:texturePaths
-           textureSrgb:textureSrgb];
+           textureSrgb:textureSrgb
+                 video:videos[i]];
       if (((surface.flags >> 2) & 15) == 3) {
         surface.instance->setMaskThreshold(values[17]);
       }
@@ -3034,6 +3304,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
   [self updateMistAtTime:time];
   [self updateRainAtTime:time];
   [self pollTextures];
+  [self pumpVideos];
 
   if (!_renderer->beginFrame(target)) return;
   _renderer->render(_view);
@@ -3232,7 +3503,11 @@ static constexpr NSUInteger kMaxPostParams = 128;
   _ownTextures.clear();
   delete _ownStbTextures;
   delete _ownKtxTextures;
+  for (auto &entry : _movies) [self close:entry.second];
+  _movies.clear();
+  _movieOrder.clear();
   if (_blankTexture != nullptr) _engine->destroy(_blankTexture);
+  if (_blankExternal != nullptr) _engine->destroy(_blankExternal);
   for (Material *surface : _surfaces) {
     if (surface != nullptr) _engine->destroy(surface);
   }
