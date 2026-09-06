@@ -233,10 +233,10 @@ void main() {
 
     test('a face naming a point that is not there is left out', () {
       final mesh = Mesh.fromJson({
-        'positions': [0, 0, 0, 1, 0, 0, 0, 1, 0],
-        'faces': [
-          {'v': [0, 1, 2]},
-          {'v': [0, 1, 99]},
+        'positions': <num>[0, 0, 0, 1, 0, 0, 0, 1, 0],
+        'faces': <Map<String, Object?>>[
+          {'v': <int>[0, 1, 2]},
+          {'v': <int>[0, 1, 99]},
         ],
       })!;
 
