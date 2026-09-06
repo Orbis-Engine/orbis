@@ -245,7 +245,7 @@ void main() {
 
     test('is not read from something that is not one', () {
       expect(Mesh.fromJson('nonsense'), isNull);
-      expect(Mesh.fromJson({'faces': []}), isNull);
+      expect(Mesh.fromJson(<String, Object?>{'faces': <Object?>[]}), isNull);
     });
 
     test('a shape survives a round trip too', () {
