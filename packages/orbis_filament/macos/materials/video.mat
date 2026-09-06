@@ -1,0 +1,40 @@
+// A surface showing a moving picture.
+//
+// Unlit, because a screen makes its own light rather than catching anybody
+// else's — and because the frame arriving from the decoder is already the
+// picture somebody graded, which lighting it again would only spoil.
+//
+// The sampler is external: the frame never becomes a Filament texture in the
+// ordinary sense. It stays the buffer the video decoder wrote, handed to the
+// GPU where it lies, which is the difference between a video that costs a
+// texture upload every frame and one that costs nothing.
+material {
+    name : orbisVideo,
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    requires : [ uv0 ],
+    parameters : [
+        { type : float4,          name : baseColor },
+        { type : float4,          name : uvTransform },
+        { type : samplerExternal, name : videoTexture },
+        { type : bool,            name : hasVideo }
+    ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 uv = getUV0() * materialParams.uvTransform.xy
+                + materialParams.uvTransform.zw;
+
+        vec4 frame = vec4(1.0);
+        if (materialParams.hasVideo) {
+            frame = texture(materialParams_videoTexture, uv);
+        }
+        // Tinted rather than replaced, so the base colour can dim a screen,
+        // fade it out, or wash it a colour without touching the video.
+        material.baseColor = materialParams.baseColor * frame;
+    }
+}
