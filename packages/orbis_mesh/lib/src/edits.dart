@@ -303,3 +303,85 @@ extension MeshEdits on Mesh {
     ];
   }
 }
+
+
+/// Moving the parts of a mesh, rather than the mesh.
+///
+/// Separate from the operations above because these change nothing about the
+/// shape's structure — the same vertices in the same faces, standing
+/// somewhere else. That is what makes them safe to run on every frame of a
+/// drag: no face is created, none is dropped, and a selection made before the
+/// drag still means the same thing after it.
+extension MeshHandles on Mesh {
+  /// Where a set of corners sits, on average. Null when none of them exist.
+  ///
+  /// Named for corners rather than overloading `centreOf`, which takes a face:
+  /// a handle sits at the middle of *what is selected*, which may be two
+  /// vertices of one face or every vertex of eight.
+  Vector3? centreOfPoints(Iterable<int> which) {
+    final sum = Vector3.zero();
+    var count = 0;
+    for (final index in which) {
+      if (index < 0 || index >= positions.length) continue;
+      sum.add(positions[index]);
+      count++;
+    }
+    if (count == 0) return null;
+    return sum..scale(1 / count);
+  }
+
+  /// Moves corners by [by].
+  void movePoints(Iterable<int> which, Vector3 by) {
+    for (final index in which) {
+      if (index < 0 || index >= positions.length) continue;
+      positions[index].add(by);
+    }
+  }
+
+  /// Turns corners about [about].
+  ///
+  /// A matrix rather than a quaternion, deliberately. `Quaternion.rotate` and
+  /// `rotated` in vector_math turn a vector the *opposite* way from the same
+  /// quaternion's `asRotationMatrix`, and everything else in this engine goes
+  /// through the matrix — so taking a quaternion here would leave a caller one
+  /// honest-looking line away from elements turning the other way from the
+  /// object they belong to. Hand it `q.asRotationMatrix()`.
+  void turnPoints(Iterable<int> which, Matrix3 turn, Vector3 about) {
+    for (final index in which) {
+      if (index < 0 || index >= positions.length) continue;
+      final turned = turn.transformed(positions[index] - about);
+      positions[index] = turned + about;
+    }
+  }
+
+  /// Scales corners about [about].
+  void scalePoints(Iterable<int> which, Vector3 by, Vector3 about) {
+    for (final index in which) {
+      if (index < 0 || index >= positions.length) continue;
+      final at = positions[index] - about;
+      positions[index] = Vector3(
+        about.x + at.x * by.x,
+        about.y + at.y * by.y,
+        about.z + at.z * by.z,
+      );
+    }
+  }
+
+  /// The direction a set of faces collectively points.
+  ///
+  /// Averaged and normalised, so pulling two faces of a corner moves them
+  /// along the corner rather than each along its own wall. Null when the
+  /// faces cancel each other out — the two sides of a flat sheet, say, where
+  /// there is no "out" to move along and asking for one is a question with no
+  /// answer.
+  Vector3? normalAcross(Iterable<Face> which) {
+    final sum = Vector3.zero();
+    var count = 0;
+    for (final face in which) {
+      sum.add(normalOf(face));
+      count++;
+    }
+    if (count == 0 || sum.length2 < 1e-12) return null;
+    return sum.normalized();
+  }
+}

@@ -18,7 +18,7 @@
 library;
 
 export 'src/actions.dart' show MeshActions, MeshEdge, edgeOf;
-export 'src/edits.dart' show MeshEdits;
+export 'src/edits.dart' show MeshEdits, MeshHandles;
 export 'src/mesh.dart' show Face, Mesh;
 export 'src/shapes.dart' show Shape, ShapeKind;
 export 'src/triangles.dart'
