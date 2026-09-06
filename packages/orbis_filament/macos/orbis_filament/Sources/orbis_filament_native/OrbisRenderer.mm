@@ -1291,6 +1291,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
   NSString *native = [NSString stringWithUTF8String:path.c_str()];
   NSData *data = [NSData dataWithContentsOfFile:native];
   if (data == nil) {
+    NSLog(@"[orbis] mesh unreadable: %@", native);
     _assetNotes[native] = @"The file could not be read.";
     return nullptr;
   }
@@ -1301,6 +1302,8 @@ static constexpr NSUInteger kMaxPostParams = 128;
       static_cast<uint32_t>(data.length), &first, 1);
 
   if (entry.asset == nullptr) {
+    NSLog(@"[orbis] mesh not glTF: %@ (%lu bytes)", native,
+          (unsigned long)data.length);
     _assetNotes[native] = @"This is not a glTF file that Filament can read.";
     return nullptr;
   }
@@ -1315,6 +1318,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
   });
 
   if (!_resourceLoader->loadResources(entry.asset)) {
+    NSLog(@"[orbis] mesh resources failed: %@", native);
     _assetNotes[native] = @"Its geometry or textures could not be loaded.";
   }
 

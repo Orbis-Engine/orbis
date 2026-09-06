@@ -18,6 +18,7 @@ class Triangles {
     required this.normals,
     required this.uvs,
     required this.indices,
+    this.groups = const [],
   });
 
   /// Three floats a vertex.
@@ -30,6 +31,20 @@ class Triangles {
   final Float32List uvs;
 
   final Uint16List indices;
+
+  /// Which stretch of [indices] wears which material.
+  ///
+  /// A run rather than a material per triangle: faces are sorted by material
+  /// when they are triangulated, so every material's triangles end up
+  /// together and one number a group says everything. That is also the shape
+  /// a graphics card wants — one draw a material, not one draw a triangle.
+  final List<({int material, int start, int count})> groups;
+
+  /// The groups as something to walk. A mesh nobody gave materials to is one
+  /// run of everything, so there is no second case to write anywhere else.
+  List<({int material, int start, int count})> get runs => groups.isEmpty
+      ? [(material: 0, start: 0, count: indices.length)]
+      : groups;
 
   int get vertexCount => positions.length ~/ 3;
   int get triangleCount => indices.length ~/ 3;
@@ -48,13 +63,27 @@ extension MeshTriangles on Mesh {
     final normalsOut = <double>[];
     final uvsOut = <double>[];
     final indicesOut = <int>[];
+    final groups = <({int material, int start, int count})>[];
 
     // Smooth faces average their normals per shared corner, so a cylinder's
     // sides look round while its ends stay flat.
     final smoothed = _smoothNormals();
 
-    for (final face in faces) {
+    // In material order, so each material's triangles are one run. Sorted
+    // here rather than asked of the caller: the order faces are listed in is
+    // the order somebody made them, and that is worth keeping for everything
+    // else.
+    final ordered = [...faces]
+      ..sort((a, b) => a.material.compareTo(b.material));
+    var group = -1;
+
+    for (final face in ordered) {
       if (face.vertices.length < 3) continue;
+
+      if (face.material != group) {
+        group = face.material;
+        groups.add((material: group, start: indicesOut.length, count: 0));
+      }
 
       final normal = normalOf(face);
       final axes = _uvAxes(normal);
@@ -79,6 +108,12 @@ extension MeshTriangles on Mesh {
       for (var i = 1; i + 1 < face.vertices.length; i++) {
         indicesOut.addAll([first, first + i, first + i + 1]);
       }
+      final last = groups.removeLast();
+      groups.add((
+        material: last.material,
+        start: last.start,
+        count: indicesOut.length - last.start,
+      ));
     }
 
     return Triangles(
@@ -86,6 +121,7 @@ extension MeshTriangles on Mesh {
       normals: Float32List.fromList(normalsOut),
       uvs: Float32List.fromList(uvsOut),
       indices: Uint16List.fromList(indicesOut),
+      groups: groups,
     );
   }
 
@@ -121,6 +157,53 @@ extension MeshTriangles on Mesh {
   }
 }
 
+/// One material, as much of it as a `.glb` can carry.
+///
+/// Deliberately glTF's own set and no more. A material in the editor may
+/// describe things this cannot — a texture's tiling, an alpha cut-off, which
+/// way it faces — and those belong on the object, because they are the
+/// renderer's business rather than the file's. What travels in the file is
+/// what any loader would understand: the colour, how metal it is, how rough,
+/// and what it gives off.
+class GlbMaterial {
+  const GlbMaterial({
+    this.name = 'material',
+    this.colour = const [0.8, 0.8, 0.8, 1.0],
+    this.metallic = 0.0,
+    this.roughness = 0.5,
+    this.emissive = const [0.0, 0.0, 0.0],
+    this.doubleSided = false,
+    this.cutout = false,
+  });
+
+  final String name;
+
+  /// Linear red, green, blue and alpha.
+  final List<double> colour;
+  final double metallic;
+  final double roughness;
+  final List<double> emissive;
+  final bool doubleSided;
+
+  /// Whether it is punched out by its alpha rather than blended. The two
+  /// glTF answers that need no extra state; anything softer is a renderer
+  /// setting and not a property of the file.
+  final bool cutout;
+
+  Map<String, Object?> toGltf() => {
+        'name': name,
+        'pbrMetallicRoughness': {
+          'baseColorFactor': colour,
+          'metallicFactor': metallic,
+          'roughnessFactor': roughness,
+        },
+        if (emissive.any((one) => one > 0)) 'emissiveFactor': emissive,
+        if (doubleSided) 'doubleSided': true,
+        if (cutout) 'alphaMode': 'MASK',
+        if (cutout) 'alphaCutoff': 0.5,
+      };
+}
+
 /// Writing a mesh as a `.glb`, which the renderer already knows how to load.
 ///
 /// A shape made in the editor becomes a file, and everything downstream — the
@@ -130,8 +213,30 @@ extension MeshTriangles on Mesh {
 /// things to keep working.
 extension MeshGlb on Mesh {
   /// This mesh as a binary glTF file.
-  Uint8List toGlb({String name = 'mesh'}) {
+  Uint8List toGlb({String name = 'mesh', List<GlbMaterial> materials = const []}) {
     final tris = triangulate();
+
+    // One primitive a material, which is what a glTF loader turns into one
+    // draw call each. A face pointing at a material nobody listed falls back
+    // to the file's default rather than to nothing: a wrong colour is
+    // recoverable and a missing surface is not.
+    final found = [
+      for (final group in tris.runs)
+        if (group.count > 0) group,
+    ];
+    // An empty mesh still has to be a valid file, and a file with no
+    // primitives is not one.
+    final used = found.isEmpty
+        ? [(material: 0, start: 0, count: tris.indices.length)]
+        : found;
+    final wanted = <int>{for (final group in used) group.material};
+    final listed = [
+      for (var i = 0; i < materials.length; i++)
+        if (wanted.contains(i)) i,
+    ];
+    final slotOf = {
+      for (var i = 0; i < listed.length; i++) listed[i]: i,
+    };
 
     // glTF wants the buffer's parts aligned to four bytes, and the index
     // buffer's own component size. Laid out indices first so the alignment
@@ -177,21 +282,38 @@ extension MeshGlb on Mesh {
         {
           'name': name,
           'primitives': [
-            {
-              'attributes': {'POSITION': 1, 'NORMAL': 2, 'TEXCOORD_0': 3},
-              'indices': 0,
-              'mode': 4,
-            },
+            for (var i = 0; i < used.length; i++)
+              {
+                // The attribute accessors come after every index accessor,
+                // so where they are depends on how many materials the mesh
+                // ended up with.
+                'attributes': {
+                  'POSITION': used.length,
+                  'NORMAL': used.length + 1,
+                  'TEXCOORD_0': used.length + 2,
+                },
+                'indices': i,
+                'mode': 4,
+                if (slotOf.containsKey(used[i].material))
+                  'material': slotOf[used[i].material],
+              },
           ],
         },
       ],
+      if (listed.isNotEmpty)
+        'materials': [for (final at in listed) materials[at].toGltf()],
       'accessors': [
-        {
-          'bufferView': 0,
-          'componentType': 5123, // unsigned short
-          'count': tris.indices.length,
-          'type': 'SCALAR',
-        },
+        // One accessor a group, all over the same buffer view: the indices
+        // are already sorted so each material's are a contiguous run, and a
+        // byte offset is cheaper than a second copy of them.
+        for (final group in used)
+          {
+            'bufferView': 0,
+            'byteOffset': group.start * 2,
+            'componentType': 5123, // unsigned short
+            'count': group.count,
+            'type': 'SCALAR',
+          },
         {
           'bufferView': 1,
           'componentType': 5126, // float
