@@ -194,7 +194,8 @@ private final class Viewport {
     renderer.setSkyEnabled(scene.skyEnabled, params: scene.skyParams)
     renderer.setCameraPosition(scene.cameraPosition,
                                target: scene.cameraTarget,
-                               fieldOfView: scene.fieldOfView)
+                               fieldOfView: scene.fieldOfView,
+                               at: scene.at)
     renderer.setExposure(scene.aperture,
                          shutter: scene.shutterSpeed,
                          sensitivity: scene.sensitivity)
@@ -243,6 +244,9 @@ private struct Scene {
   let precipitationEnabled: Bool
   let precipitationParams: [Float]
   let skyEnabled: Bool
+
+  /// The application's own clock, in seconds, when this scene was worked out.
+  let at: Double
 
   /// Populations travel as parallel arrays, one entry each, plus the buffers
   /// for whichever of them have actually changed.
@@ -293,7 +297,8 @@ private struct Scene {
           let aperture = arguments["aperture"] as? Double,
           let shutterSpeed = arguments["shutterSpeed"] as? Double,
           let sensitivity = arguments["sensitivity"] as? Double,
-          let fieldOfView = arguments["fieldOfView"] as? Double else { return nil }
+          let fieldOfView = arguments["fieldOfView"] as? Double,
+          let at = arguments["at"] as? Double else { return nil }
 
     // Every one of these lengths is a pointer the renderer will walk. A short
     // array here is a read past the end there, so they are checked rather than
@@ -342,6 +347,7 @@ private struct Scene {
     self.precipitationEnabled = precipitationEnabled
     self.precipitationParams = precipitationParams
     self.skyEnabled = skyEnabled
+    self.at = at
     self.skyParams = skyParams
 
     // Absent when a scene has none, which is every scene that never uses

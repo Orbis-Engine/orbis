@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import 'scene.dart';
@@ -50,6 +51,27 @@ class _OrbisViewState extends State<OrbisView> {
   /// different things sent to them.
   final Map<int, int> _sentRevisions = {};
 
+  Duration _stamp = Duration.zero;
+
+  /// This frame's moment, in seconds, on Flutter's own clock.
+  ///
+  /// The same clock a ticker hands out, which is the one anything animating —
+  /// including the camera — was worked out on.
+  ///
+  /// Only asked for during a frame. Outside one there is no current frame and
+  /// asking throws, which is worth being careful about: this is inside the
+  /// send, the send is inside a try, and a throw here would quietly stop the
+  /// scene being sent at all rather than showing up as anything. The last
+  /// frame's answer is the right fallback — it means no motion was seen
+  /// between two sends, which is true.
+  double _frameSeconds() {
+    final binding = SchedulerBinding.instance;
+    if (binding.schedulerPhase != SchedulerPhase.idle) {
+      _stamp = binding.currentFrameTimeStamp;
+    }
+    return _stamp.inMicroseconds / 1e6;
+  }
+
   Future<void> _sendScene() async {
     final id = _textureId;
     final scene = widget.scene;
@@ -58,7 +80,14 @@ class _OrbisViewState extends State<OrbisView> {
     try {
       final notes = await _channel.invokeMapMethod<String, String>(
         'setScene',
-        scene.toMessage(id, sentRevisions: _sentRevisions),
+        scene.toMessage(
+          id,
+          sentRevisions: _sentRevisions,
+          // The frame's own timestamp, which is the clock everything in the
+          // frame was worked out on — including wherever the camera decided
+          // to be.
+          at: _frameSeconds(),
+        ),
       );
 
       // Only after it has landed. A send that threw left the renderer with

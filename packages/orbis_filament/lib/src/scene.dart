@@ -734,7 +734,11 @@ class OrbisScene {
   /// [sentRevisions] is what the renderer already holds for each population,
   /// so that buffers it already has are left out. Passing null sends
   /// everything, which is what a fresh renderer needs.
-  Map<String, Object> toMessage(int textureId, {Map<int, int>? sentRevisions}) {
+  Map<String, Object> toMessage(
+    int textureId, {
+    Map<int, int>? sentRevisions,
+    double? at,
+  }) {
     final count = objects.length;
     final keys = Int64List(count);
     final transforms = Float32List(count * 16);
@@ -808,6 +812,14 @@ class OrbisScene {
       'precipitationEnabled': precipitation.isVisible,
       'precipitationParams': precipitation._packed,
       'skyEnabled': sky.drawn,
+      // When the application reckons this is, in its own seconds.
+      //
+      // The renderer draws far more often than it is told anything, and works
+      // out where the camera is in between. Doing that from when the messages
+      // *arrived* uses a clock with jitter in it, and dividing by a jittery
+      // gap turns a small timing wobble into a large wrong speed. This is the
+      // clock the camera was actually solved on.
+      'at': at ?? 0.0,
       ...?_populationMessage(sentRevisions),
     };
   }

@@ -156,9 +156,18 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Places the camera, looking at a point, with a vertical field of view in
 /// degrees.
+/// States where the camera is, and when the application reckons that was.
+///
+/// Recorded rather than applied. The picture is drawn on the display's clock
+/// and told things on the application's, and the two are neither the same rate
+/// nor in step — so where the camera is at the moment of drawing is worked out
+/// then, from the last two things it was told. `at` is what makes that
+/// possible: the speed comes from the application's own seconds rather than
+/// from when the messages happened to arrive.
 - (void)setCameraPosition:(const float *)position
                    target:(const float *)target
-              fieldOfView:(float)fieldOfView;
+              fieldOfView:(float)fieldOfView
+                       at:(double)at;
 
 /// Sets how much light reaches the camera: the f-number, the shutter speed in
 /// seconds, and the sensitivity in ISO.

@@ -112,6 +112,58 @@ struct Grown {
   uint64_t seen = 0;
 };
 
+/// Where the camera was told to be, and when it was told.
+///
+/// Two of these are kept, because one is a position and two are a motion —
+/// and a motion is what lets the picture ask where the camera is *now* rather
+/// than where it was when the message arrived.
+struct Aimed {
+  filament::math::float3 position{0.0f, 0.0f, 0.0f};
+  filament::math::float3 target{0.0f, 0.0f, -1.0f};
+  float fieldOfView = 50.0f;
+
+  /// The application's own seconds, which is the clock the camera was solved
+  /// on and therefore the only one its speed can honestly be measured against.
+  double at = 0.0;
+
+  /// When this arrived here, on the clock the picture is drawn against.
+  double arrived = 0.0;
+
+  bool valid = false;
+};
+
+/// How far behind the latest word the camera is drawn, as a multiple of the
+/// usual gap between words.
+///
+/// Slightly behind on purpose. The application's own motion is smooth — a
+/// tenth of a percent of unevenness, measured — so the best thing that can be
+/// done with it is to read it rather than to guess at it. Sampling a little
+/// behind means the moment being drawn almost always falls *between* two
+/// things the application has said, where the answer is exact, instead of
+/// past the last one, where it is a prediction that has to be corrected when
+/// the next arrives.
+///
+/// The cost is about a sixtieth of a second of delay, which is far below
+/// noticing. What it buys is the difference between a camera that judders and
+/// one that does not.
+constexpr double kDrawBehind = 1.15;
+
+/// How far past the last word it will still carry on when one is late, as a
+/// multiple of that same gap. Beyond this it holds still rather than
+/// inventing a position, because by then it has no idea.
+constexpr double kCarryOn = 2.5;
+
+/// How quickly a correction is absorbed, in seconds.
+///
+/// Predicting where the camera is between words means being a little wrong,
+/// and being put right the moment the next word arrives. Snapping to it is a
+/// small jump every message, which is most of what is left of a judder once
+/// the prediction is doing its job. Carrying the difference and letting it
+/// decay spreads each correction over a few frames — and because it is the
+/// *difference* being decayed rather than the position, the camera still ends
+/// up exactly where it was told, with no trailing behind.
+constexpr double kAbsorb = 0.05;
+
 /// One object as the renderer holds it between frames.
 ///
 /// What is kept here is exactly what has to be compared to decide whether a
@@ -392,11 +444,57 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   uint32_t _pendingHeight;
   float _fieldOfView;
 
+  /// The last two things the camera was told, and the lock between the thread
+  /// that says them and the thread that draws.
+  Aimed _aimedNow;
+  Aimed _aimedWas;
+  NSLock *_aimLock;
+  double _clockOffset;
+  bool _clocksAligned;
+
+  /// How fast the camera is going, followed rather than measured fresh.
+  float3 _aimVelocity;
+  float3 _lookVelocity;
+  float _lensVelocity;
+  bool _movingKnown;
+
+  /// The word this is currently predicting from, and how wrong the last
+  /// prediction turned out to be — carried, and decaying.
+  double _spokeAt;
+  float3 _spokePosition;
+  float3 _spokeTarget;
+  float3 _carriedPosition;
+  float3 _carriedTarget;
+  double _placedAt;
+  double _placedWas;
+
+  /// The usual gap between words, followed. A single gap is far too noisy to
+  /// decide anything with.
+  double _spanUsual;
+  float3 _toldFrom;
+  double _toldAt;
+  float _toldSpeedWas;
+  float _toldSpeedTotal;
+  float _toldJerkTotal;
+  int _toldCount;
+  double _reachedTotal;
+  int _reachedCount;
+  int _saturated;
+  bool _pacing;
+
   NSLock *_presentLock;
   BOOL _disposed;
   int _frameCount;
   double _startedAt;
   float _skyFlash;
+  int _cameraUpdates;
+  double _pacedAt;
+  float3 _pacedFrom;
+  double _pacedFrameAt;
+  float _stepWas;
+  float _stepTotal;
+  float _jerkTotal;
+  int _stepCount;
   bool _dumped;
 }
 
@@ -426,6 +524,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   _pendingHeight = _height;
   _presentedIndex = -1;
   _presentLock = [[NSLock alloc] init];
+  _aimLock = [[NSLock alloc] init];
+  _pacing = getenv("ORBIS_PACE") != nullptr;
 
   _engine = Engine::create(Engine::Backend::METAL);
   ASSERT_PRECONDITION(_engine != nullptr, "Metal is unavailable.");
@@ -1696,14 +1796,196 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 
 - (void)setCameraPosition:(const float *)position
                    target:(const float *)target
-              fieldOfView:(float)fieldOfView {
+              fieldOfView:(float)fieldOfView
+                       at:(double)at {
   if (_disposed) return;
 
-  _camera->lookAt({position[0], position[1], position[2]},
-                  {target[0], target[1], target[2]}, {0, 1, 0});
-  _camera->setProjection(fieldOfView, double(_width) / double(_height), 0.1,
-                         1000.0);
+  // Recorded, not applied.
+  //
+  // Two reasons, and the second one is a bug rather than a preference. The
+  // first: this arrives on whatever clock the application runs on, and the
+  // picture is drawn on the display's — two loops at similar but unequal
+  // rates, so some frames were drawn twice with the same camera and some
+  // skipped a whole word. Measured on a camera following a moving subject,
+  // that is frames where the camera did not move at all next to frames where
+  // it moved eight times as far, which is exactly what a judder is. The
+  // picture now works out where the camera is at the moment it is drawn.
+  //
+  // The second: Filament's camera is not safe to touch from two threads, and
+  // this is the platform thread while the engine's own thread is reading it.
+  Aimed aimed;
+  aimed.position = {position[0], position[1], position[2]};
+  aimed.target = {target[0], target[1], target[2]};
+  aimed.fieldOfView = fieldOfView;
+  aimed.at = at;
+  aimed.arrived = CFAbsoluteTimeGetCurrent();
+  aimed.valid = true;
+
+  [_aimLock lock];
+  _aimedWas = _aimedNow;
+  _aimedNow = aimed;
+  [_aimLock unlock];
+
+  // What the application itself is producing, before anything here touches
+  // it. If its own motion is uneven then no amount of sampling will be even,
+  // and the fault is on the other side of the message.
+  if (_pacing && _toldAt > 0) {
+    const double over = at - _toldAt;
+    if (over > 1e-5 && over < 0.25) {
+      const float speed = float(length(aimed.position - _toldFrom) / over);
+      if (_toldCount > 0) _toldJerkTotal += std::abs(speed - _toldSpeedWas);
+      _toldSpeedTotal += speed;
+      _toldSpeedWas = speed;
+      _toldCount++;
+    }
+  }
+  _toldFrom = aimed.position;
+  _toldAt = at;
+
+  _cameraUpdates++;
+}
+
+/// Puts the camera where it should be at this instant.
+///
+/// Called once a frame, on the thread that draws. Between two words the
+/// camera carries on at the speed those two implied, which turns a set of
+/// steps arriving on somebody else's clock into a continuous motion sampled
+/// on this one.
+- (void)placeCamera {
+  [_aimLock lock];
+  const Aimed now = _aimedNow;
+  const Aimed was = _aimedWas;
+  [_aimLock unlock];
+
+  if (!now.valid) return;
+
+  const double span = now.at - was.at;
+
+  // A gap that long is not a rate, it is a pause — the application was busy,
+  // or has only just started. Starting from it would fling the camera.
+  if (!was.valid || span <= 1e-5 || span >= 0.25) {
+    _movingKnown = false;
+    _spanUsual = 0;
+    _carriedPosition = {0.0f, 0.0f, 0.0f};
+    _carriedTarget = {0.0f, 0.0f, 0.0f};
+    _spokeAt = now.at;
+    _spokePosition = now.position;
+    _spokeTarget = now.target;
+    _fieldOfView = now.fieldOfView;
+    _camera->lookAt(now.position, now.target, {0, 1, 0});
+    _camera->setProjection(now.fieldOfView > 0 ? now.fieldOfView : 50.0,
+                           double(_width) / double(_height), 0.1, 1000.0);
+    return;
+  }
+
+  // The usual gap between words, followed. Everything below is measured in
+  // these rather than in the last gap, which is far too noisy to steer by.
+  _spanUsual = _spanUsual <= 0 ? span : _spanUsual + (span - _spanUsual) * 0.1;
+
+  // Where the two clocks stand relative to each other, followed slowly.
+  //
+  // Each word carries the application's own time and arrives at some moment
+  // here, and the difference is how far apart the clocks read. That difference
+  // is steady; no single measurement of it is, because messages do not arrive
+  // evenly. Following it slowly gives a reading that moves smoothly, which is
+  // the whole point — a jumpy answer here would put the judder straight back.
+  const double reading = now.at - now.arrived;
+  if (!_clocksAligned || std::abs(reading - _clockOffset) > 0.25) {
+    _clockOffset = reading;
+    _clocksAligned = true;
+  } else {
+    _clockOffset += (reading - _clockOffset) * 0.05;
+  }
+
+  const double appNow = CFAbsoluteTimeGetCurrent() + _clockOffset;
+
+  // How far from a given word the moment being drawn is.
+  //
+  // One expression, used both to draw and to work out how wrong the last
+  // prediction was. Two nearly-identical versions of this is how a correction
+  // ends up adding error instead of removing it.
+  const double behind = -std::max(span, _spanUsual);
+  const double reach = kCarryOn * _spanUsual;
+  const auto leadFrom = [&](double word) {
+    return float(std::clamp(
+        appNow - word - kDrawBehind * _spanUsual, behind, reach));
+  };
+
+  if (now.at != _spokeAt) {
+    // What would have been drawn this instant on the strength of the last
+    // word, so the difference can be carried rather than appearing as a jump.
+    const float wasLead = leadFrom(_spokeAt);
+    const float3 wouldBe = _spokePosition + _aimVelocity * wasLead;
+    const float3 wouldLook = _spokeTarget + _lookVelocity * wasLead;
+
+    // How fast it is going, followed rather than taken fresh each time.
+    //
+    // Two positions and the time between them is a speed, and a noisy one:
+    // the application's frames are not evenly spaced either, so a gap that
+    // happens to be half the usual makes the speed twice the truth. Following
+    // the estimate settles in about three words — fast enough to keep up with
+    // a camera that is genuinely accelerating, slow enough to ignore the
+    // timing noise underneath it.
+    const float over = float(span);
+    const float3 aimStep = (now.position - was.position) / over;
+    const float3 lookStep = (now.target - was.target) / over;
+    const float lensStep = (now.fieldOfView - was.fieldOfView) / over;
+
+    if (!_movingKnown) {
+      _aimVelocity = aimStep;
+      _lookVelocity = lookStep;
+      _lensVelocity = lensStep;
+      _movingKnown = true;
+    } else {
+      constexpr float follow = 0.35f;
+      _aimVelocity += (aimStep - _aimVelocity) * follow;
+      _lookVelocity += (lookStep - _lookVelocity) * follow;
+      _lensVelocity += (lensStep - _lensVelocity) * follow;
+    }
+
+    const float nowLead = leadFrom(now.at);
+    _carriedPosition += wouldBe - (now.position + _aimVelocity * nowLead);
+    _carriedTarget += wouldLook - (now.target + _lookVelocity * nowLead);
+
+    _spokeAt = now.at;
+    _spokePosition = now.position;
+    _spokeTarget = now.target;
+  }
+
+  // The carried difference fades over a few frames rather than all at once.
+  // It is the difference that decays, not the position, so the camera still
+  // arrives exactly where it was told rather than trailing behind.
+  const double drawnAt = CFAbsoluteTimeGetCurrent();
+  const double gap = _placedAt > 0 ? drawnAt - _placedAt : 0;
+  _placedWas = _placedAt;
+  _placedAt = drawnAt;
+  const float keep = float(std::exp(-std::max(gap, 0.0) / kAbsorb));
+  _carriedPosition *= keep;
+  _carriedTarget *= keep;
+
+  const float by = leadFrom(now.at);
+
+  if (_pacing) {
+    _reachedCount++;
+    if (appNow - now.at - kDrawBehind * _spanUsual >= reach) _saturated++;
+  }
+
+  // Read from the latest word at the speed the last few implied, rather than
+  // by interpolating between the last two.
+  //
+  // Interpolating is the obvious thing and it is worse — measurably, by three
+  // times. The two words either side are irregularly spaced, so dividing by
+  // the gap between them turns their timing noise straight into speed, which
+  // is the thing being got rid of. A followed speed has that noise taken out
+  // of it already.
+  const float3 position = now.position + _aimVelocity * by + _carriedPosition;
+  const float3 target = now.target + _lookVelocity * by + _carriedTarget;
+  const float fieldOfView = now.fieldOfView + _lensVelocity * by;
+
   _fieldOfView = fieldOfView;
+  _camera->lookAt(position, target, {0, 1, 0});
+  _camera->setProjection(fieldOfView > 0 ? fieldOfView : 50.0,
+                         double(_width) / double(_height), 0.1, 1000.0);
 }
 
 - (void)setExposure:(float)aperture
@@ -1788,6 +2070,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     [self applyViewportSize];
   }
 
+  [self placeCamera];
+
   SwapChain *target = _swapChains[_backIndex];
   if (!target) return;
 
@@ -1826,6 +2110,67 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   // rendering fault from a handoff fault. Enabled by an environment variable
   // so it costs nothing when unset.
   if (_frameCount == 0) _startedAt = CFAbsoluteTimeGetCurrent();
+
+  // How often the picture is drawn against how often it is told what to
+  // draw. A camera that arrives at a different rate from the one it is drawn
+  // at judders however smooth its own solution is.
+  if (_pacing) {
+    const double now = CFAbsoluteTimeGetCurrent();
+    if (_pacedAt == 0) _pacedAt = now;
+    // How far the camera moved between this frame and the last. Even motion
+    // drawn evenly gives steps that are all the same size; a camera arriving
+    // at a different rate from the one it is drawn at gives some frames two
+    // steps and some none, which is what a judder is.
+    // Not how big the steps are — a camera really does speed up and slow
+    // down, and a figure of eight does it constantly. What judder is, is the
+    // step changing from one frame to the next: real acceleration is smooth,
+    // so consecutive steps differ by very little, while a camera arriving on
+    // somebody else's clock gives one long step then a short one.
+    // Per second, not per frame. Frames are not evenly spaced — the display
+    // link wanders between sixty and eighty — so a camera moving perfectly
+    // smoothly still covers different distances between them. Dividing by the
+    // gap asks the only question that matters: was it going at an even speed.
+    // Measured against when the camera was *sampled*, not when the frame was
+    // presented. Those differ by however long the frame took to draw, and
+    // dividing by the wrong one reports the renderer's own variation as if it
+    // were the camera's.
+    const float3 where = _camera->getPosition();
+    const double gap = _placedAt - _placedWas;
+    const float step = gap > 1e-6 ? float(length(where - _pacedFrom) / gap) : 0;
+    _pacedFrom = where;
+    if (_frameCount > 3 && gap > 1e-6) {
+      _stepTotal += step;
+      _jerkTotal += std::abs(step - _stepWas);
+      _stepCount++;
+    }
+    _stepWas = step;
+
+    if (_frameCount > 0 && _frameCount % 120 == 0) {
+      const double over = now - _pacedAt;
+      const float mean = _stepCount > 0 ? _stepTotal / _stepCount : 0;
+      const float jerk = _stepCount > 0 ? _jerkTotal / _stepCount : 0;
+      const float told =
+          _toldCount > 1 ? _toldJerkTotal / (_toldCount - 1) : 0;
+      const float toldMean = _toldCount > 0 ? _toldSpeedTotal / _toldCount : 0;
+      NSLog(@"[orbis] %.1f drawn/s, %.1f camera/s; drawn unevenness %.0f%%, "
+            @"told unevenness %.0f%%, prediction saturated %.0f%% of frames",
+            120.0 / over, _cameraUpdates / over,
+            mean > 0 ? 100.0 * jerk / mean : 0,
+            toldMean > 0 ? 100.0 * told / toldMean : 0,
+            _reachedCount > 0 ? 100.0 * _saturated / _reachedCount : 0);
+      _toldSpeedTotal = 0;
+      _toldJerkTotal = 0;
+      _toldCount = 0;
+      _reachedTotal = 0;
+      _reachedCount = 0;
+      _saturated = 0;
+      _pacedAt = now;
+      _cameraUpdates = 0;
+      _stepTotal = 0;
+      _jerkTotal = 0;
+      _stepCount = 0;
+    }
+  }
 
   // Which frame to catch. Sixty by default, because that is a second in and
   // everything has settled. A number picks that frame instead; the word
