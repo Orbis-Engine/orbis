@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'post.dart';
+
 import 'package:vector_math/vector_math_64.dart';
 
 import 'population.dart';
@@ -772,7 +774,9 @@ class OrbisScene {
     OrbisFog? fog,
     OrbisPrecipitation? precipitation,
     List<OrbisPopulation>? populations,
+    OrbisPostProcess? post,
   }) : lights = lights ?? const [],
+       post = post ?? OrbisPostProcess(),
        populations = populations ?? const [],
        sky = sky ?? OrbisSky(),
        fog = fog ?? OrbisFog.none,
@@ -796,6 +800,13 @@ class OrbisScene {
   final OrbisSky sky;
   final OrbisFog fog;
   final OrbisPrecipitation precipitation;
+
+  /// Everything done to the image after the scene is drawn.
+  ///
+  /// On the scene rather than on the camera, because a look belongs to the
+  /// place rather than to where somebody is standing in it: four views of one
+  /// world should not each grade it differently.
+  final OrbisPostProcess post;
 
   /// Packs the scene into the flat arrays the channel carries.
   /// The whole scene, as the renderer takes it.
@@ -883,6 +894,7 @@ class OrbisScene {
       'precipitationEnabled': precipitation.isVisible,
       'precipitationParams': precipitation._packed,
       'skyEnabled': sky.drawn,
+      'postParams': post.packed,
       // When the application reckons this is, in its own seconds.
       //
       // The renderer draws far more often than it is told anything, and works

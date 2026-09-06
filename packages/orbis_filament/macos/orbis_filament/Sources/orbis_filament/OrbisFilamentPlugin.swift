@@ -196,6 +196,9 @@ private final class Viewport {
                           ambient: scene.ambient,
                           showBody: scene.showBody)
     renderer.setFogEnabled(scene.fogEnabled, params: scene.fogParams)
+    if !scene.postParams.isEmpty {
+      renderer.setPostProcess(scene.postParams, count: UInt(scene.postParams.count))
+    }
     renderer.setPrecipitationEnabled(scene.precipitationEnabled,
                                      params: scene.precipitationParams)
     renderer.setSkyEnabled(scene.skyEnabled, params: scene.skyParams)
@@ -253,6 +256,13 @@ private struct Scene {
   let precipitationEnabled: Bool
   let precipitationParams: [Float]
   let skyEnabled: Bool
+
+  /// Everything done to the image after the scene is drawn.
+  ///
+  /// Optional, and empty when a host has not sent any: an older application
+  /// against a newer renderer should keep working with the defaults rather
+  /// than failing to decode a scene.
+  let postParams: [Float]
 
   /// The application's own clock, in seconds, when this scene was worked out.
   let at: Double
@@ -334,6 +344,11 @@ private struct Scene {
           skyParams.count == Scene.skyStride,
           skyColour.count == 3,
           cameraPosition.count == 3, cameraTarget.count == 3 else { return nil }
+
+    // Not in the guard above: a scene without it is a scene with the
+    // defaults, not a scene that fails to arrive.
+    self.postParams =
+      (arguments["postParams"] as? FlutterStandardTypedData)?.floats ?? []
 
     self.count = count
     self.keys = keys

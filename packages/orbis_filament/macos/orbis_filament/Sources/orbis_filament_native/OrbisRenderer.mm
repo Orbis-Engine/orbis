@@ -3,6 +3,8 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 
+#include <filament/ColorGrading.h>
+#include <filament/Options.h>
 #include <filament/Camera.h>
 #include <filament/Engine.h>
 #include <filament/IndexBuffer.h>
@@ -395,8 +397,31 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 - (void)drawAtTime:(double)time;
 @end
 
+/// How many post-processing numbers the renderer will read.
+///
+/// Larger than the description needs, so a host built against a newer version
+/// sending more of them is ignored from here on rather than reading past the
+/// end of the array.
+static constexpr NSUInteger kMaxPostParams = 128;
+
+
 @implementation OrbisRenderer {
   Engine *_engine;
+
+  /// The colour grading currently on the view.
+  ///
+  /// A resource with a baked lookup table rather than a struct, so it is kept
+  /// and rebuilt only when the numbers move.
+  ColorGrading *_colorGrading;
+
+  /// The post-processing numbers as last applied, so a frame that changes
+  /// nothing costs a memcmp rather than a dozen option rebuilds.
+  float _postParams[kMaxPostParams];
+  NSUInteger _postCount;
+
+  /// Just the grading numbers, compared separately: the rest of the options
+  /// are cheap to set and this one bakes a lookup table.
+  float _gradingParams[17];
   Renderer *_renderer;
   Scene *_scene;
   View *_view;
@@ -1888,6 +1913,195 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   }
 
   _lightNotes = notes;
+}
+
+- (void)setPostProcess:(const float *)params count:(NSUInteger)count {
+  if (_disposed || params == nullptr) return;
+
+  // The same numbers as last frame mean the same view, and setting an option
+  // struct makes Filament rebuild internal state. Comparing forty floats is
+  // cheaper than doing that sixty times a second to say nothing changed.
+  if (count == _postCount &&
+      memcmp(params, _postParams, count * sizeof(float)) == 0) {
+    return;
+  }
+  if (count > kMaxPostParams) count = kMaxPostParams;
+  memcpy(_postParams, params, count * sizeof(float));
+  _postCount = count;
+
+  NSUInteger at = 0;
+  auto next = [&]() -> float { return at < count ? params[at++] : 0.0f; };
+  auto flag = [&]() -> bool { return next() > 0.5f; };
+
+  const bool on = flag();
+  const int antiAliasing = (int)next();
+  const bool dither = flag();
+
+  _view->setPostProcessingEnabled(on);
+  // Everything below still runs when post-processing is off; Filament simply
+  // ignores it. Reading the whole array either way keeps the offsets in one
+  // place rather than in two.
+
+  BloomOptions bloom;
+  bloom.enabled = flag() && on;
+  bloom.strength = next();
+  bloom.levels = (uint8_t)std::clamp((int)next(), 1, 11);
+  bloom.threshold = flag();
+  bloom.lensFlare = flag();
+  const float flareStrength = next();
+  // Filament folds the flare into the bloom chain, so its own strength is the
+  // ghost spacing and chromatic split rather than a separate amount. A flare
+  // asked for at nothing is a flare turned off.
+  if (flareStrength <= 0.0f) bloom.lensFlare = false;
+  _view->setBloomOptions(bloom);
+
+  DepthOfFieldOptions dof;
+  dof.enabled = flag() && on;
+  const float focus = next();
+  dof.cocScale = next();
+  dof.maxForegroundCOC = next();
+  dof.maxBackgroundCOC = next();
+  _view->setDepthOfFieldOptions(dof);
+  // Where the sharp plane is belongs to the camera rather than to the effect:
+  // it is the lens focusing, and the same distance means the same shot
+  // whether or not the blur is switched on.
+  if (dof.enabled && focus > 0.0f) {
+    _camera->setFocusDistance(focus);
+  }
+
+  VignetteOptions vignette;
+  vignette.enabled = flag() && on;
+  vignette.midPoint = next();
+  vignette.roundness = next();
+  vignette.feather = next();
+  const float vr = next();
+  const float vg = next();
+  const float vb = next();
+  vignette.color = LinearColorA{vr, vg, vb, 1.0f};
+  _view->setVignetteOptions(vignette);
+
+  AmbientOcclusionOptions occlusion;
+  occlusion.enabled = flag() && on;
+  occlusion.radius = next();
+  occlusion.intensity = next();
+  occlusion.bias = next();
+  const int aoQuality = std::clamp((int)next(), 0, 3);
+  occlusion.quality = (QualityLevel)aoQuality;
+  occlusion.bentNormals = flag();
+  _view->setAmbientOcclusionOptions(occlusion);
+
+  ScreenSpaceReflectionsOptions reflections;
+  reflections.enabled = flag() && on;
+  reflections.thickness = next();
+  reflections.bias = next();
+  reflections.maxDistance = next();
+  reflections.stride = std::max(1.0f, next());
+  _view->setScreenSpaceReflectionsOptions(reflections);
+
+  const bool grading = flag();
+  const int toneMapping = (int)next();
+  const float exposure = next();
+  const float contrast = next();
+  const float saturation = next();
+  const float vibrance = next();
+  const float temperature = next();
+  const float tint = next();
+  float shadows[3], midtones[3], highlights[3];
+  for (int i = 0; i < 3; ++i) shadows[i] = next();
+  for (int i = 0; i < 3; ++i) midtones[i] = next();
+  for (int i = 0; i < 3; ++i) highlights[i] = next();
+
+  // Only when the grading numbers themselves have moved. A ColorGrading is a
+  // baked lookup table rather than a struct of numbers, so rebuilding one
+  // because somebody nudged the bloom would be a 32-cubed texture built to say
+  // the colour did not change.
+  const NSUInteger gradingFrom = at - 8 - 9;
+  const bool gradingMoved =
+      _colorGrading == nullptr ||
+      memcmp(params + gradingFrom, _gradingParams,
+             (8 + 9) * sizeof(float)) != 0;
+  if (gradingMoved) {
+    memcpy(_gradingParams, params + gradingFrom, (8 + 9) * sizeof(float));
+  }
+
+  if (gradingMoved)
+    [self applyGrading:grading
+          toneMapper:toneMapping
+            exposure:exposure
+            contrast:contrast
+          saturation:saturation
+            vibrance:vibrance
+         temperature:temperature
+                tint:tint
+             shadows:shadows
+            midtones:midtones
+          highlights:highlights];
+
+  // Temporal sampling needs the history buffer that only its own option turns
+  // on, so the two settings have to agree.
+  TemporalAntiAliasingOptions taa;
+  taa.enabled = on && antiAliasing == 2;
+  _view->setTemporalAntiAliasingOptions(taa);
+  _view->setAntiAliasing(on && antiAliasing == 1 ? AntiAliasing::FXAA
+                                                 : AntiAliasing::NONE);
+  _view->setDithering(dither ? Dithering::TEMPORAL : Dithering::NONE);
+}
+
+/// Builds the colour grading, and keeps the one it built.
+///
+/// A ColorGrading is an engine resource with a lookup table baked into it, not
+/// a struct of numbers — building one per frame would be a 32-cubed texture
+/// per frame. This makes a new one only when the numbers have moved.
+- (void)applyGrading:(BOOL)enabled
+          toneMapper:(int)toneMapper
+            exposure:(float)exposure
+            contrast:(float)contrast
+          saturation:(float)saturation
+            vibrance:(float)vibrance
+         temperature:(float)temperature
+                tint:(float)tint
+             shadows:(const float *)shadows
+            midtones:(const float *)midtones
+          highlights:(const float *)highlights {
+  ColorGrading::Builder builder;
+
+  // Tone mapping happens whether or not the rest of the grading is on:
+  // something has to decide how light becomes pixels, and a clip at one is a
+  // worse answer than a curve.
+  switch (toneMapper) {
+    case 1: builder.toneMapping(ColorGrading::ToneMapping::ACES); break;
+    case 2: builder.toneMapping(ColorGrading::ToneMapping::ACES_LEGACY); break;
+    case 3: builder.toneMapping(ColorGrading::ToneMapping::LINEAR); break;
+    case 4: builder.toneMapping(ColorGrading::ToneMapping::LINEAR); break;
+    default: builder.toneMapping(ColorGrading::ToneMapping::FILMIC); break;
+  }
+
+  if (enabled) {
+    builder.exposure(exposure)
+        .contrast(contrast)
+        .saturation(saturation)
+        .vibrance(vibrance)
+        .whiteBalance(temperature, tint)
+        // One call for all three, which is how Filament has it: the three
+        // ranges overlap and the fourth argument is where they meet, so
+        // setting one without the others would be setting half a decision.
+        .shadowsMidtonesHighlights(
+            {shadows[0], shadows[1], shadows[2], 0.0f},
+            {midtones[0], midtones[1], midtones[2], 0.0f},
+            {highlights[0], highlights[1], highlights[2], 0.0f},
+            // The defaults: shadows fade out by a fifth of the range and
+            // highlights come in at two thirds.
+            {0.0f, 0.333f, 0.550f, 1.0f});
+  }
+
+  ColorGrading *built = builder.build(*_engine);
+  if (built == nullptr) return;
+
+  _view->setColorGrading(built);
+  // Destroyed after the new one is in place, since the view was still holding
+  // it a line ago and Filament reads it on the driver thread.
+  if (_colorGrading != nullptr) _engine->destroy(_colorGrading);
+  _colorGrading = built;
 }
 
 - (void)setFogEnabled:(BOOL)enabled params:(const float *)params {

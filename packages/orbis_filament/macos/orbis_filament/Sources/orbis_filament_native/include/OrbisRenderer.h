@@ -81,6 +81,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// of cloud lying in a valley. Disabled skips both.
 - (void)setFogEnabled:(BOOL)enabled params:(const float *)params;
 
+/// Everything done to the image after the scene is drawn.
+///
+/// One flat array of numbers rather than forty named calls: this arrives on
+/// every frame, and the renderer only touches the view when something in it
+/// has actually changed — Filament rebuilds internal state when an option
+/// struct is set, and setting the same bloom sixty times a second is sixty
+/// rebuilds to say nothing happened.
+- (void)setPostProcess:(const float *)params count:(NSUInteger)count;
+
 /// What recent frames cost the GPU, in milliseconds, or zero when the backend
 /// has not reported any yet.
 ///

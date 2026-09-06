@@ -7,6 +7,17 @@ library;
 
 export 'src/orbis_view.dart' show OrbisView;
 export 'src/population.dart' show OrbisPopulation;
+export 'src/post.dart'
+    show
+        AntiAliasing,
+        OrbisBloom,
+        OrbisDepthOfField,
+        OrbisGrading,
+        OrbisOcclusion,
+        OrbisPostProcess,
+        OrbisReflections,
+        OrbisVignette,
+        ToneMapping;
 export 'src/scene.dart'
     show
         OrbisCamera,
