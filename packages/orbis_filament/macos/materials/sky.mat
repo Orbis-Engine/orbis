@@ -48,6 +48,17 @@ material {
         // the same cloud either way.
         { type : float,  name : extinction },
 
+        // What the sky is allowed to cost.
+        //
+        // A phone, a browser and a desktop are not the same machine, and the
+        // honest way to span them is to say how much work the sky may do
+        // rather than to draw a different sky. Steps first, because the march
+        // is nearly all of it; the fine detail second, because it is what is
+        // least missed at a distance.
+        { type : int,    name : marchSteps },
+        { type : int,    name : lightSteps },
+        { type : float,  name : erosion },
+
         // How much the noise is folded. Nothing is a smooth sheet of
         // stratus; all of it is the cauliflower of a cumulus.
         { type : float,  name : billow },
@@ -191,7 +202,8 @@ fragment {
         // cloud. Taking a high-frequency bite out of the *edge* only — where
         // the cloud is already thinning — is what puts the florets on it,
         // and it costs nothing in the middle where it would not show.
-        if (fine > 0.5 && detail > 0.35 && d > 0.001 && d < 0.85) {
+        if (fine > 0.5 && detail > materialParams.erosion &&
+            d > 0.001 && d < 0.85) {
             float bite = lightNoise(p * materialParams.scale * 6.5,
                                     materialParams.billow);
             d -= (1.0 - smoothstep(0.0, 0.85, d)) * bite * 0.55 * detail;
@@ -333,7 +345,7 @@ fragment {
                 // cloud is what forces the steps to be coarse enough to alias.
                 // Striding through nothing and slowing down inside something
                 // buys the resolution where it is looked at, for free.
-                float stride = span / float(MARCH_STEPS) * 2.2;
+                float stride = span / float(materialParams.marchSteps) * 2.2;
                 float creep = stride * 0.30;
                 float lightStep = materialParams.thickness * 0.42;
 
@@ -358,6 +370,9 @@ fragment {
                 float end = base + span;
 
                 for (int i = 0; i < MARCH_STEPS; i++) {
+                    // A uniform bound, so every pixel leaves the loop at the
+                    // same point and the branch costs nothing.
+                    if (i >= materialParams.marchSteps) break;
                     if (along > end) break;
                     vec3 p = materialParams.eye + direction * along;
 
@@ -373,6 +388,7 @@ fragment {
                         // cloud reads as a solid a mile wide.
                         float blocked = 0.0;
                         for (int j = 1; j <= LIGHT_STEPS; j++) {
+                            if (j > materialParams.lightSteps) break;
                             blocked += cloudAt(
                                 p + bodyDirection * (float(j) * lightStep), 0.0, detail);
                         }

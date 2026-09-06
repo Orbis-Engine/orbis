@@ -239,6 +239,47 @@ class OrbisCamera {
 /// a photograph behind the scene rather than the sky the scene stands under.
 /// Without it, every shadow and every surface facing away from the sun renders
 /// pure black.
+/// How much work the sky is allowed to do.
+///
+/// A phone, a browser and a desktop are not the same machine, and the honest
+/// way to span them is to say what the sky may cost rather than to draw a
+/// different sky. Every tier draws the same thing; what changes is how finely
+/// it is sampled, which shows as softer edges at a distance and nothing else.
+///
+/// Measured on an M4 Pro at 1656x1400, on a fair-weather sky filling most of
+/// the frame — the worst case, since a scene with ground in it pays for the
+/// ground's pixels instead.
+enum SkyQuality {
+  /// Eight steps through the cloud and two towards the light, with no
+  /// erosion. For a phone, a browser, or anything sharing a frame with a lot
+  /// else.
+  lean(marchSteps: 8, lightSteps: 2, erosion: 2),
+
+  /// Twelve and three, with erosion on what is near.
+  fair(marchSteps: 12, lightSteps: 3, erosion: 0.6),
+
+  /// Eighteen and three, with erosion wherever the detail would show.
+  full(marchSteps: 18, lightSteps: 3, erosion: 0.35);
+
+  const SkyQuality({
+    required this.marchSteps,
+    required this.lightSteps,
+    required this.erosion,
+  });
+
+  /// How many samples are taken along a ray through the cloud. Nearly all of
+  /// the cost is here.
+  final int marchSteps;
+
+  /// How many are taken towards the light at each of those, which is what
+  /// puts a shadow on the underside of a cloud.
+  final int lightSteps;
+
+  /// How near a cloud has to be before it is bitten at the edges by finer
+  /// noise. Above one is never.
+  final double erosion;
+}
+
 class OrbisSky {
   OrbisSky({
     Vector3? colour,
@@ -247,6 +288,7 @@ class OrbisSky {
     this.ambient = 28000,
     this.showBody = true,
     this.drawn = true,
+    this.quality = SkyQuality.full,
     Vector3? bodyDirection,
     Vector3? bodyColour,
     this.bodySize = 0.0047,
@@ -279,6 +321,9 @@ class OrbisSky {
   /// How much light the sky casts, in lux. Roughly a tenth of the sun on a
   /// clear day, which is about the ratio outdoors.
   final double ambient;
+
+  /// What the sky is allowed to cost.
+  final SkyQuality quality;
 
   /// Whether there is a sky to draw at all.
   ///
@@ -349,6 +394,9 @@ class OrbisSky {
       clouds.density,
       clouds.billow,
       clouds.extinction,
+      quality.marchSteps.toDouble(),
+      quality.lightSteps.toDouble(),
+      quality.erosion,
       clouds.wind.x, clouds.wind.y,
       flash,
       strike.x, strike.y, strike.z,
@@ -357,7 +405,7 @@ class OrbisSky {
   }
 
   /// How many floats the sky occupies.
-  static const int stride = 31;
+  static const int stride = 34;
 }
 
 /// Air with something in it.

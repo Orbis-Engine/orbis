@@ -17,4 +17,5 @@ export 'src/scene.dart'
         OrbisObject,
         OrbisPrecipitation,
         OrbisScene,
-        OrbisSky;
+        OrbisSky,
+        SkyQuality;

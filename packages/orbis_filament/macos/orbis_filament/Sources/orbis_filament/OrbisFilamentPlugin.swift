@@ -268,7 +268,7 @@ private struct Scene {
   private static let lightStride = 18
   private static let fogStride = 16
   private static let precipitationStride = 12
-  private static let skyStride = 31
+  private static let skyStride = 34
 
   init?(arguments: [String: Any]) {
     guard let keys = (arguments["objectKeys"] as? FlutterStandardTypedData)?.int64s,

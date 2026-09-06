@@ -481,6 +481,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   int _reachedCount;
   int _saturated;
   bool _pacing;
+  double _gpuTotal;
+  int _gpuCount;
 
   NSLock *_presentLock;
   BOOL _disposed;
@@ -758,6 +760,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 - (void)buildClouds {
   if (_cloudMaterial != nullptr) return;
 
+
   _cloudMaterial = Material::Builder()
                        .package(kskyMaterial, kskyMaterial_len)
                        .build(*_engine);
@@ -841,6 +844,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 
   _cloudInstance = _cloudMaterial->createInstance();
 
+
   _cloudEntity = utils::EntityManager::get().create();
   RenderableManager::Builder(1)
       .boundingBox({{-kSkyRadius, -kSkyRadius, -kSkyRadius},
@@ -904,13 +908,24 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     _cloudInstance->setParameter("density", params[21]);
     _cloudInstance->setParameter("billow", params[22]);
     _cloudInstance->setParameter("extinction", params[23]);
-    _cloudInstance->setParameter("wind", float2{params[24], params[25]});
 
-    _skyFlash = params[26];
-    _cloudInstance->setParameter("flash", params[26]);
+    // What the sky may cost. Clamped to what the shader was built to loop to:
+    // a bound past that is quietly ignored, and one of zero draws no cloud at
+    // all while costing almost nothing — which reads as a fast frame rather
+    // than as a fault.
+    _cloudInstance->setParameter(
+        "marchSteps", int32_t(std::clamp(params[24], 1.0f, 18.0f)));
+    _cloudInstance->setParameter(
+        "lightSteps", int32_t(std::clamp(params[25], 1.0f, 3.0f)));
+    _cloudInstance->setParameter("erosion", params[26]);
+
+    _cloudInstance->setParameter("wind", float2{params[27], params[28]});
+
+    _skyFlash = params[29];
+    _cloudInstance->setParameter("flash", params[29]);
     _cloudInstance->setParameter("flashDirection",
-                                 float3{params[27], params[28], params[29]});
-    _cloudInstance->setParameter("flashSeed", params[30]);
+                                 float3{params[30], params[31], params[32]});
+    _cloudInstance->setParameter("flashSeed", params[33]);
 
     if (!_cloudsShowing) _scene->addEntity(_cloudEntity);
   } else if (_cloudsShowing) {
@@ -1760,11 +1775,7 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   if (!_skyBuilt || showBody != _skyShowsBody) {
     if (_skybox) {
       _scene->setSkybox(nullptr);
-      for (auto &entry : _populations) [self clearPopulation:entry.second];
-  _populations.clear();
-  if (_instancedMaterial != nullptr) _engine->destroy(_instancedMaterial);
-
-  _engine->destroy(_skybox);
+      _engine->destroy(_skybox);
     }
     _skybox = Skybox::Builder()
                   .color({sky.x, sky.y, sky.z, 1.0f})
@@ -2115,6 +2126,16 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   // draw. A camera that arrives at a different rate from the one it is drawn
   // at judders however smooth its own solution is.
   if (_pacing) {
+    // What the frame actually cost the GPU, which is the number that matters:
+    // how often it is presented is the display's business, and no amount of
+    // headroom shows up there.
+    const auto history = _renderer->getFrameInfoHistory(1);
+    if (!history.empty() &&
+        history[0].gpuFrameDuration > 0) {
+      _gpuTotal += history[0].gpuFrameDuration / 1.0e6;
+      _gpuCount++;
+    }
+
     const double now = CFAbsoluteTimeGetCurrent();
     if (_pacedAt == 0) _pacedAt = now;
     // How far the camera moved between this frame and the last. Even motion
@@ -2152,12 +2173,17 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
       const float told =
           _toldCount > 1 ? _toldJerkTotal / (_toldCount - 1) : 0;
       const float toldMean = _toldCount > 0 ? _toldSpeedTotal / _toldCount : 0;
-      NSLog(@"[orbis] %.1f drawn/s, %.1f camera/s; drawn unevenness %.0f%%, "
+      NSLog(@"[orbis] gpu %.2f ms (%.0f/s if unbound); %.1f drawn/s, "
+            @"%.1f camera/s; drawn unevenness %.0f%%, "
             @"told unevenness %.0f%%, prediction saturated %.0f%% of frames",
+            _gpuCount > 0 ? _gpuTotal / _gpuCount : 0,
+            _gpuCount > 0 && _gpuTotal > 0 ? 1000.0 * _gpuCount / _gpuTotal : 0,
             120.0 / over, _cameraUpdates / over,
             mean > 0 ? 100.0 * jerk / mean : 0,
             toldMean > 0 ? 100.0 * told / toldMean : 0,
             _reachedCount > 0 ? 100.0 * _saturated / _reachedCount : 0);
+      _gpuTotal = 0;
+      _gpuCount = 0;
       _toldSpeedTotal = 0;
       _toldJerkTotal = 0;
       _toldCount = 0;
