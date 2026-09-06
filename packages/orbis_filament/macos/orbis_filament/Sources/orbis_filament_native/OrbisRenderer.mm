@@ -162,6 +162,11 @@ struct Aimed {
   filament::math::float3 target{0.0f, 0.0f, -1.0f};
   float fieldOfView = 50.0f;
 
+  /// Whether parallel lines stay parallel, and how much of the world fits in
+  /// the frame from top to bottom when they do.
+  bool orthographic = false;
+  float viewHeight = 10.0f;
+
   /// The application's own seconds, which is the clock the camera was solved
   /// on and therefore the only one its speed can honestly be measured against.
   double at = 0.0;
@@ -483,6 +488,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   uint32_t _pendingWidth;
   uint32_t _pendingHeight;
   float _fieldOfView;
+  bool _orthographic;
+  float _viewHeight;
 
   /// The last two things the camera was told, and the lock between the thread
   /// that says them and the thread that draws.
@@ -1969,6 +1976,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 - (void)setCameraPosition:(const float *)position
                    target:(const float *)target
               fieldOfView:(float)fieldOfView
+             orthographic:(BOOL)orthographic
+               viewHeight:(float)viewHeight
                        at:(double)at {
   if (_disposed) return;
 
@@ -1989,6 +1998,8 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   aimed.position = {position[0], position[1], position[2]};
   aimed.target = {target[0], target[1], target[2]};
   aimed.fieldOfView = fieldOfView;
+  aimed.orthographic = orthographic;
+  aimed.viewHeight = viewHeight;
   aimed.at = at;
   aimed.arrived = CFAbsoluteTimeGetCurrent();
   aimed.valid = true;
@@ -2045,8 +2056,9 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
     _spokeTarget = now.target;
     _fieldOfView = now.fieldOfView;
     _camera->lookAt(now.position, now.target, {0, 1, 0});
-    _camera->setProjection(now.fieldOfView > 0 ? now.fieldOfView : 50.0,
-                           double(_width) / double(_height), 0.1, 1000.0);
+    [self projectWith:now.fieldOfView
+         orthographic:now.orthographic
+                 tall:now.viewHeight];
     return;
   }
 
@@ -2155,9 +2167,39 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   const float fieldOfView = now.fieldOfView + _lensVelocity * by;
 
   _fieldOfView = fieldOfView;
+  _orthographic = now.orthographic;
+  _viewHeight = now.viewHeight;
   _camera->lookAt(position, target, {0, 1, 0});
-  _camera->setProjection(fieldOfView > 0 ? fieldOfView : 50.0,
-                         double(_width) / double(_height), 0.1, 1000.0);
+  [self projectWith:fieldOfView
+       orthographic:now.orthographic
+               tall:now.viewHeight];
+}
+
+/// Sets how the camera turns the world into a picture.
+///
+/// The two kinds do not blend into one another — halfway between a flat view
+/// and one with perspective is not a view of anything — so a camera that
+/// changes kind changes it outright, and only the numbers move.
+- (void)projectWith:(float)fieldOfView
+       orthographic:(bool)orthographic
+               tall:(float)tall {
+  const double aspect = double(_width) / double(_height);
+
+  if (orthographic) {
+    const double half = std::max(tall, 0.001f) * 0.5;
+    const double wide = half * aspect;
+    // The near plane still has to be in front of the camera. It is tempting to
+    // put it behind — nothing gets larger as it approaches a flat view, so a
+    // negative near is geometrically fine — but the depth buffer is not
+    // geometry: a range spanning zero maps depths onto each other, and then
+    // the sky wins against the ground and the whole frame is sky.
+    _camera->setProjection(Camera::Projection::ORTHO, -wide, wide, -half, half,
+                           0.1, 4000.0);
+    return;
+  }
+
+  _camera->setProjection(fieldOfView > 0 ? fieldOfView : 50.0, aspect, 0.1,
+                         1000.0);
 }
 
 - (void)setExposure:(float)aperture
@@ -2197,8 +2239,9 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
 
 - (void)applyViewportSize {
   _view->setViewport({0, 0, _width, _height});
-  _camera->setProjection(_fieldOfView > 0 ? _fieldOfView : 50.0,
-                         double(_width) / double(_height), 0.1, 1000.0);
+  [self projectWith:_fieldOfView
+       orthographic:_orthographic
+               tall:_viewHeight];
 }
 
 - (void)resizeToWidth:(uint32_t)width height:(uint32_t)height {

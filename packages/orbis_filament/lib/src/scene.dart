@@ -193,6 +193,8 @@ class OrbisCamera {
     required this.position,
     required this.target,
     this.fieldOfView = 50,
+    this.orthographic = false,
+    this.viewHeight = 10,
     this.aperture = 16,
     this.shutterSpeed = 1 / 125,
     this.sensitivity = 100,
@@ -200,6 +202,21 @@ class OrbisCamera {
 
   final Vector3 position;
   final Vector3 target;
+
+  /// Whether parallel lines stay parallel.
+  ///
+  /// What a game seen flat on needs, and not the same as a very long lens:
+  /// perspective at a narrow angle still converges, so a sprite at the edge of
+  /// the frame is still seen slightly from the side — which is exactly what
+  /// art drawn face on must not do.
+  final bool orthographic;
+
+  /// How much of the world fits in the frame from top to bottom, in metres.
+  ///
+  /// The flat lens's answer to a field of view, and a separate number because
+  /// an angle means nothing without a distance and a flat lens has none.
+  /// Ignored when the camera has perspective.
+  final double viewHeight;
 
   /// Vertical field of view in degrees.
   final double fieldOfView;
@@ -220,6 +237,8 @@ class OrbisCamera {
     Vector3? position,
     Vector3? target,
     double? fieldOfView,
+    bool? orthographic,
+    double? viewHeight,
     double? aperture,
     double? shutterSpeed,
     double? sensitivity,
@@ -227,6 +246,8 @@ class OrbisCamera {
     position: position ?? this.position,
     target: target ?? this.target,
     fieldOfView: fieldOfView ?? this.fieldOfView,
+    orthographic: orthographic ?? this.orthographic,
+    viewHeight: viewHeight ?? this.viewHeight,
     aperture: aperture ?? this.aperture,
     shutterSpeed: shutterSpeed ?? this.shutterSpeed,
     sensitivity: sensitivity ?? this.sensitivity,
@@ -848,6 +869,8 @@ class OrbisScene {
       'cameraPosition': _vector(camera.position),
       'cameraTarget': _vector(camera.target),
       'fieldOfView': camera.fieldOfView,
+      'orthographic': camera.orthographic,
+      'viewHeight': camera.viewHeight,
       'aperture': camera.aperture,
       'shutterSpeed': camera.shutterSpeed,
       'sensitivity': camera.sensitivity,

@@ -3,8 +3,8 @@ import 'dart:math' as math;
 import 'package:vector_math/vector_math_64.dart';
 
 import 'camera_state.dart';
-import 'guides.dart';
 import 'damping.dart';
+import 'guides.dart';
 import 'lens.dart';
 
 /// Where a point lands on screen.
@@ -39,6 +39,19 @@ ScreenPoint project(
   // z here and the depth used for the divide is its negation.
   final depth = -local.z;
   if (depth <= 1e-6) return const ScreenPoint(0, 0, inFront: false);
+
+  if (lens.orthographic) {
+    // No divide by depth: that is what orthographic means. How far away
+    // something is changes nothing about where it sits in the frame, which is
+    // exactly why a camera over a flat game has to move rather than turn to
+    // bring anything into shot.
+    final half = lens.height / 2;
+    return ScreenPoint(
+      local.x / (half * aspect),
+      local.y / half,
+      inFront: true,
+    );
+  }
 
   final tanHalf = math.tan(lens.fieldOfView * math.pi / 360);
   return ScreenPoint(
@@ -354,6 +367,51 @@ class ComposerAim implements CameraAim {
     }
 
     return result;
+  }
+}
+
+/// Looks wherever the target is looking.
+///
+/// First person, and nothing else is. A camera that follows a character's eyes
+/// must not compose, must not damp and must not frame: any of those put the
+/// view somewhere other than where the character is looking, and the whole
+/// contract of a first-person camera is that it does not.
+///
+/// The damping is here for the one case that wants it — a vehicle, where the
+/// driver's head does not snap to the chassis — and defaults to none.
+class HeadAim implements CameraAim {
+  HeadAim({this.damping = 0, this.tilt = 0});
+
+  /// Seconds of lag behind the target's own rotation. Zero for a person.
+  double damping;
+
+  /// Degrees to look up or down from wherever the target faces, for a camera
+  /// that is a head on a body rather than the body itself.
+  double tilt;
+
+  /// Nothing is composed, so there is nothing to draw.
+  @override
+  CameraGuides? get guides => null;
+
+  @override
+  Quaternion solve(
+    Quaternion current,
+    Vector3 cameraPosition,
+    CameraTarget? lookAt, {
+    required Lens lens,
+    required double aspect,
+    required double delta,
+  }) {
+    if (lookAt == null) return current;
+
+    var wanted = Quaternion.copy(lookAt.rotation)..normalize();
+    if (tilt != 0) {
+      wanted = wanted *
+          Quaternion.axisAngle(Vector3(1, 0, 0), tilt * math.pi / 180);
+    }
+
+    if (damping <= 0) return wanted..normalize();
+    return slerpShortest(current, wanted, dampingFactor(damping, delta));
   }
 }
 

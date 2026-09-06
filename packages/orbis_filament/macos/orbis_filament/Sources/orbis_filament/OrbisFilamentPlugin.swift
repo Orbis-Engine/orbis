@@ -199,6 +199,8 @@ private final class Viewport {
     renderer.setCameraPosition(scene.cameraPosition,
                                target: scene.cameraTarget,
                                fieldOfView: scene.fieldOfView,
+                               orthographic: scene.orthographic,
+                               viewHeight: scene.viewHeight,
                                at: scene.at)
     renderer.setExposure(scene.aperture,
                          shutter: scene.shutterSpeed,
@@ -251,6 +253,8 @@ private struct Scene {
 
   /// The application's own clock, in seconds, when this scene was worked out.
   let at: Double
+  let orthographic: Bool
+  let viewHeight: Float
 
   /// Populations travel as parallel arrays, one entry each, plus the buffers
   /// for whichever of them have actually changed.
@@ -303,7 +307,9 @@ private struct Scene {
           let shutterSpeed = arguments["shutterSpeed"] as? Double,
           let sensitivity = arguments["sensitivity"] as? Double,
           let fieldOfView = arguments["fieldOfView"] as? Double,
-          let at = arguments["at"] as? Double else { return nil }
+          let at = arguments["at"] as? Double,
+          let orthographic = arguments["orthographic"] as? Bool,
+          let viewHeight = arguments["viewHeight"] as? Double else { return nil }
 
     // Every one of these lengths is a pointer the renderer will walk. A short
     // array here is a read past the end there, so they are checked rather than
@@ -353,6 +359,8 @@ private struct Scene {
     self.precipitationParams = precipitationParams
     self.skyEnabled = skyEnabled
     self.at = at
+    self.orthographic = orthographic
+    self.viewHeight = Float(viewHeight)
     self.skyParams = skyParams
 
     // Absent when a scene has none, which is every scene that never uses

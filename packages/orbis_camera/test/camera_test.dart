@@ -12,6 +12,8 @@ Matcher near(double value, [double tolerance = 1e-6]) =>
 
 void main() {
   _guideTests();
+  _flatTests();
+  _headTests();
   _robustnessTests();
 
   group('rotation maths', () {
@@ -166,7 +168,11 @@ void main() {
         damping: Vector3.zero(),
       );
       final target = FixedTarget(Vector3(10, 0, 0));
-      final position = body.solve(Vector3.zero(), target, 1 / 60);
+      final position = body.solve(Vector3.zero(), target,
+          rotation: Quaternion.identity(),
+          lens: const Lens(),
+          aspect: 16 / 9,
+          delta: 1 / 60);
       expect(position.x, near(10, 1e-6));
       expect(position.y, near(2, 1e-6));
       expect(position.z, near(6, 1e-6));
@@ -180,7 +186,11 @@ void main() {
       final target = FixedTarget(Vector3(100, 0, 0));
 
       var position = Vector3.zero();
-      position = body.solve(position, target, 1 / 60);
+      position = body.solve(position, target,
+          rotation: Quaternion.identity(),
+          lens: const Lens(),
+          aspect: 16 / 9,
+          delta: 1 / 60);
       expect(position.x, greaterThan(0));
       expect(
         position.x,
@@ -189,7 +199,11 @@ void main() {
       );
 
       for (var i = 0; i < 600; i++) {
-        position = body.solve(position, target, 1 / 60);
+        position = body.solve(position, target,
+          rotation: Quaternion.identity(),
+          lens: const Lens(),
+          aspect: 16 / 9,
+          delta: 1 / 60);
       }
       expect(position.x, closeTo(100, 0.01), reason: 'and then get there');
     });
@@ -205,7 +219,11 @@ void main() {
         Vector3.zero(),
         Quaternion.axisAngle(Vector3(1, 0, 0), 0.6),
       );
-      final position = body.solve(Vector3.zero(), target, 1 / 60);
+      final position = body.solve(Vector3.zero(), target,
+          rotation: Quaternion.identity(),
+          lens: const Lens(),
+          aspect: 16 / 9,
+          delta: 1 / 60);
       expect(
         position.y,
         near(0, 1e-6),
@@ -218,7 +236,11 @@ void main() {
     test('an orbit holds its radius', () {
       final body = OrbitBody(radius: 7, elevation: 30, damping: 0);
       final target = FixedTarget(Vector3(1, 2, 3));
-      final position = body.solve(Vector3.zero(), target, 1 / 60);
+      final position = body.solve(Vector3.zero(), target,
+          rotation: Quaternion.identity(),
+          lens: const Lens(),
+          aspect: 16 / 9,
+          delta: 1 / 60);
       expect((position - target.position).length, closeTo(7, 1e-6));
     });
   });
@@ -635,6 +657,154 @@ void _robustnessTests() {
         brain.update(1 / 60);
         expect(brain.state.forward.length, closeTo(1, 1e-6), reason: 'frame $i');
       }
+    });
+  });
+}
+
+void _headTests() {
+  group('first person', () {
+    test('looks exactly where the target looks, with no lag by default', () {
+      // The whole contract. A camera on a character's eyes that composes, or
+      // damps, or frames, puts the view somewhere other than where they are
+      // looking — and then the player is aiming at one thing and shooting at
+      // another.
+      final facing = lookRotation(Vector3(1, 0, -1));
+      final target = FixedTarget(Vector3.zero(), facing);
+      final aim = HeadAim();
+
+      final got = aim.solve(
+        Quaternion.identity(),
+        Vector3.zero(),
+        target,
+        lens: const Lens(),
+        aspect: 16 / 9,
+        delta: 1 / 60,
+      );
+
+      final wanted = rotateVector(facing, Vector3(0, 0, -1));
+      final looking = rotateVector(got, Vector3(0, 0, -1));
+      expect((looking - wanted).length, lessThan(1e-6));
+    });
+
+    test('a vehicle can lag behind its own chassis', () {
+      final target = FixedTarget(Vector3.zero(), lookRotation(Vector3(1, 0, 0)));
+      final aim = HeadAim(damping: 0.5);
+
+      final got = aim.solve(
+        Quaternion.identity(),
+        Vector3.zero(),
+        target,
+        lens: const Lens(),
+        aspect: 16 / 9,
+        delta: 1 / 60,
+      );
+
+      // Started to turn, but nowhere near arrived.
+      final looking = rotateVector(got, Vector3(0, 0, -1));
+      expect(looking.x, greaterThan(0.0));
+      expect(looking.x, lessThan(0.5));
+    });
+  });
+}
+
+void _flatTests() {
+  group('a game seen flat on', () {
+    Vector3 solveOnce(ScreenFollowBody body, Vector3 at, Vector3 subject,
+        {Lens lens = const Lens.flat(height: 10), double delta = 1e6}) {
+      return body.solve(
+        at,
+        FixedTarget(subject),
+        // Looking down -Z, level, which is what a flat game is seen from.
+        rotation: Quaternion.identity(),
+        lens: lens,
+        aspect: 16 / 9,
+        delta: delta,
+      );
+    }
+
+    test('a flat lens does not care how far away a thing is', () {
+      // The whole of what orthographic means, and the reason a camera over a
+      // flat game has to move rather than turn: turning sweeps a perspective
+      // view across the world and does nothing at all to a flat one.
+      const lens = Lens.flat(height: 10);
+      final near = project(Vector3.zero(), Quaternion.identity(),
+          Vector3(2, 0, -5), lens: lens, aspect: 1);
+      final far = project(Vector3.zero(), Quaternion.identity(),
+          Vector3(2, 0, -50), lens: lens, aspect: 1);
+
+      expect(near.x, closeTo(far.x, 1e-9));
+      expect(near.x, closeTo(2 / 5, 1e-9));
+    });
+
+    test('a subject inside the dead zone is left alone', () {
+      // The point of a dead zone. A camera that corrects for every step of a
+      // walking character reads as a nervous operator rather than a steady
+      // one, and in two dimensions it makes the whole background jitter.
+      final body = ScreenFollowBody(deadZoneWidth: 0.2, deadZoneHeight: 0.2);
+      final at = Vector3(0, 0, 10);
+
+      // A tenth of the frame across is well inside a fifth.
+      final after = solveOnce(body, at, Vector3(0.4, 0, 0));
+      expect((after - at).length, lessThan(1e-6));
+    });
+
+    test('a subject past the dead zone is followed, by moving', () {
+      final body = ScreenFollowBody(deadZoneWidth: 0.1, deadZoneHeight: 0.1);
+      final at = Vector3(0, 0, 10);
+      final after = solveOnce(body, at, Vector3(6, 0, 0));
+
+      // Moved towards it along the frame's own right, and not turned: the
+      // rotation is not this body's to change.
+      expect(after.x, greaterThan(0.5));
+      expect(after.y, closeTo(0, 1e-6));
+    });
+
+    test('the shot distance is held however far the framing moves it', () {
+      final body = ScreenFollowBody(distance: 10, deadZoneWidth: 0);
+      final after = solveOnce(body, Vector3(0, 0, 10), Vector3(7, 3, 0));
+
+      // Still ten in front of the subject along the view direction, so
+      // framing sideways never drifts the camera in or out.
+      expect(after.z - 0.0, closeTo(10, 1e-5));
+    });
+
+    test('bounds are a wall, not a preference', () {
+      // What stops a camera following a character to the edge of a level and
+      // showing whatever is past it.
+      final body = ScreenFollowBody(
+        deadZoneWidth: 0,
+        bounds: (minimum: Vector3(-2, -2, -100), maximum: Vector3(2, 2, 100)),
+      );
+      final after = solveOnce(body, Vector3(0, 0, 10), Vector3(40, 0, 0));
+      expect(after.x, lessThanOrEqualTo(2.0000001));
+    });
+
+    test('it hands out the zones it frames by', () {
+      final body = ScreenFollowBody(screenX: 0.5, deadZoneWidth: 0.15);
+      expect(body.guides.dead.width, closeTo(0.3, 1e-9));
+
+      // And a camera using it reports them, since the framing is the body's
+      // here rather than the aim's.
+      final camera = VirtualCamera(
+        name: 'Flat',
+        lookAt: FixedTarget(Vector3.zero()),
+        body: body,
+        aim: StaticAim(Quaternion.identity()),
+        lens: const Lens.flat(height: 10),
+      );
+      expect(camera.guides, isNotNull);
+      expect(camera.guides!.dead.width, closeTo(0.3, 1e-9));
+    });
+
+    test('a flat lens blends its height, not its angle', () {
+      const near = Lens.flat(height: 5);
+      const far = Lens.flat(height: 20);
+      final middle = Lens.lerp(near, far, 0.5);
+
+      expect(middle.orthographic, isTrue);
+      // Through the logarithm, so a zoom looks even: halfway between five and
+      // twenty is ten, not twelve and a half.
+      expect(middle.height, closeTo(10, 1e-6));
     });
   });
 }

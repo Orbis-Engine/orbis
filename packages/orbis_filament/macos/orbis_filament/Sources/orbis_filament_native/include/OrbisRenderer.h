@@ -168,6 +168,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setCameraPosition:(const float *)position
                    target:(const float *)target
               fieldOfView:(float)fieldOfView
+             orthographic:(BOOL)orthographic
+               viewHeight:(float)viewHeight
                        at:(double)at;
 
 /// Sets how much light reaches the camera: the f-number, the shutter speed in

@@ -3,6 +3,7 @@ import 'package:vector_math/vector_math_64.dart';
 import 'aim.dart';
 import 'body.dart';
 import 'camera_state.dart';
+import 'guides.dart';
 import 'lens.dart';
 import 'noise.dart';
 
@@ -67,7 +68,17 @@ class VirtualCamera {
   /// Advances this camera's own solution by [delta] seconds.
   void solve(double delta, {required double aspect}) {
     state.lens = lens;
-    state.position = body.solve(state.position, follow, delta);
+    state.position = body.solve(
+      state.position,
+      follow,
+      // Last frame's rotation, which is what the body has to work with: the
+      // aim has not run yet, and it cannot, because what it does depends on
+      // where the body puts the camera.
+      rotation: state.rotation,
+      lens: lens,
+      aspect: aspect,
+      delta: delta,
+    );
     state.rotation = aim.solve(
       state.rotation,
       state.position,
@@ -77,6 +88,13 @@ class VirtualCamera {
       delta: delta,
     );
   }
+
+  /// The framing rules in force, for something to draw over the frame.
+  ///
+  /// From whichever of the two is doing the framing. A camera frames either by
+  /// turning or by moving, never by both — two sets of zones fighting over the
+  /// same subject is a camera that never settles.
+  CameraGuides? get guides => aim.guides ?? body.guides;
 
   /// Puts the camera exactly where it wants to be, with no lag.
   ///

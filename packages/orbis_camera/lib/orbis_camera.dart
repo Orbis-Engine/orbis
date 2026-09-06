@@ -12,6 +12,7 @@ export 'src/aim.dart'
         CameraAim,
         ComposerAim,
         HardLookAt,
+        HeadAim,
         PovAim,
         ScreenPoint,
         StaticAim,
@@ -25,6 +26,7 @@ export 'src/body.dart'
         FollowBody,
         FramingBody,
         OrbitBody,
+        ScreenFollowBody,
         StaticBody;
 export 'src/brain.dart' show CameraBrain;
 export 'src/camera_state.dart'
