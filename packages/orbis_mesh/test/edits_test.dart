@@ -265,7 +265,9 @@ void main() {
     });
 
     test('a plane is all border', () {
-      expect(Shape(kind: ShapeKind.plane).build().openFaces, hasLength(1));
+      final mesh =
+          Shape(kind: ShapeKind.plane, widthCuts: 0, heightCuts: 0).build();
+      expect(mesh.openFaces, hasLength(1));
     });
   });
 

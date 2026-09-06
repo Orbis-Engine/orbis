@@ -8,7 +8,9 @@ import 'package:vector_math/vector_math_64.dart';
 void main() {
   group('triangulating', () {
     test('a quad becomes two triangles', () {
-      final tris = Shape(kind: ShapeKind.plane).build().triangulate();
+      final tris = Shape(kind: ShapeKind.plane, widthCuts: 0, heightCuts: 0)
+          .build()
+          .triangulate();
 
       expect(tris.triangleCount, 2);
       expect(tris.vertexCount, 4);
