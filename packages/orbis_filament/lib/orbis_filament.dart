@@ -15,6 +15,13 @@ export 'src/material.dart'
         OrbisShading,
         OrbisTexture,
         OrbisWrap;
+export 'src/pipeline.dart'
+    show
+        OrbisDetail,
+        OrbisPipeline,
+        OrbisResolution,
+        OrbisShadowKind,
+        OrbisShadows;
 export 'src/population.dart' show OrbisPopulation;
 export 'src/video.dart' show OrbisVideo;
 export 'src/post.dart'

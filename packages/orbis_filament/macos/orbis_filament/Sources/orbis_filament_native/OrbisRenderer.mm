@@ -562,6 +562,11 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// not, and a screen showing nothing is a legitimate state to be in.
   filament::Texture *_blankExternal;
 
+  /// The last pipeline settings applied, so a scene republished sixty times
+  /// a second only reconfigures the view when something actually moved.
+  float _pipelineParams[32];
+  NSUInteger _pipelineCount;
+
   /// Every video the host has named, by its key.
   std::unordered_map<int64_t, Movie> _movies;
 
@@ -2193,6 +2198,121 @@ static constexpr NSUInteger kMaxPostParams = 128;
   movie.seekToken = -1;
 }
 
+
+/// States how much of the frame's work actually happens.
+///
+/// One pipeline with dials, not a choice of pipelines. Everything here either
+/// configures the view or is remembered for the lights, which read it when
+/// they set their own shadow options — a cascade count is a property of the
+/// light that casts, but nobody wants to set it per light.
+- (void)setPipeline:(const float *)params count:(NSUInteger)count {
+  if (_disposed || _view == nullptr) return;
+  if (count > 32) count = 32;
+
+  // Nothing moved. Worth checking first: half of what follows dirties a
+  // render target or a shadow map, and a scene republished on every frame of
+  // a drag changes none of it.
+  if (count == _pipelineCount &&
+      std::memcmp(_pipelineParams, params, sizeof(float) * count) == 0) {
+    return;
+  }
+  const bool shadowsChanged =
+      _pipelineCount != count ||
+      std::memcmp(_pipelineParams, params, sizeof(float) * 10) != 0;
+  std::memcpy(_pipelineParams, params, sizeof(float) * count);
+  _pipelineCount = count;
+
+  const bool shadowing = params[0] != 0.0f;
+  _view->setShadowingEnabled(shadowing);
+
+  switch (static_cast<int>(params[1])) {
+    case 1:
+      _view->setShadowType(ShadowType::DPCF);
+      break;
+    case 2:
+      _view->setShadowType(ShadowType::PCSS);
+      break;
+    case 3:
+      _view->setShadowType(ShadowType::VSM);
+      break;
+    default:
+      _view->setShadowType(ShadowType::PCF);
+      break;
+  }
+
+  SoftShadowOptions soft;
+  soft.penumbraScale = params[9];
+  soft.penumbraRatioScale = 1.0f;
+  _view->setSoftShadowOptions(soft);
+
+  // The multisample count is the one setting here that reallocates every
+  // buffer in the view, so it is set through the same comparison as the rest
+  // rather than every frame.
+  MultiSampleAntiAliasingOptions msaa;
+  msaa.enabled = params[14] > 1.0f;
+  msaa.sampleCount = static_cast<uint8_t>(params[14] < 1 ? 1 : params[14]);
+  _view->setMultiSampleAntiAliasingOptions(msaa);
+
+  DynamicResolutionOptions resolution;
+  resolution.enabled = true;
+  resolution.homogeneousScaling = true;
+  resolution.minScale = filament::math::float2{params[11], params[11]};
+  resolution.maxScale = filament::math::float2{params[12], params[12]};
+  resolution.sharpness = params[13];
+  resolution.quality = View::QualityLevel::HIGH;
+  _view->setDynamicResolutionOptions(resolution);
+
+  const int flags = static_cast<int>(params[15]);
+  View::RenderQuality quality;
+  quality.hdrColorBuffer =
+      (flags & 1) != 0 ? View::QualityLevel::ULTRA : View::QualityLevel::HIGH;
+  _view->setRenderQuality(quality);
+  _view->setFrustumCullingEnabled((flags & 2) != 0);
+  _view->setScreenSpaceRefractionEnabled((flags & 4) != 0);
+
+  // Shadow options live on the light, not on the view, so every light that
+  // already exists has to be told again. Only when something about shadows
+  // actually changed: this walks every light in the scene.
+  if (shadowsChanged) [self refreshShadowOptions];
+}
+
+/// Writes the pipeline's shadow settings onto one light.
+- (void)shadowOptionsFor:(utils::Entity)entity {
+  auto &lights = _engine->getLightManager();
+  auto instance = lights.getInstance(entity);
+  if (!instance) return;
+  if (_pipelineCount == 0) return;
+
+  LightManager::ShadowOptions options = lights.getShadowOptions(instance);
+  options.mapSize = static_cast<uint32_t>(_pipelineParams[2]);
+  const int cascades = static_cast<int>(_pipelineParams[3]);
+  options.shadowCascades = static_cast<uint8_t>(cascades < 1   ? 1
+                                                : cascades > 4 ? 4
+                                                               : cascades);
+  options.shadowFar = _pipelineParams[4];
+  options.constantBias = _pipelineParams[6];
+  options.normalBias = _pipelineParams[7];
+  const int shadowFlags = static_cast<int>(_pipelineParams[8]);
+  options.stable = (shadowFlags & 1) != 0;
+  options.screenSpaceContactShadows = (shadowFlags & 2) != 0;
+
+  // Where each cascade hands over to the next. Practical splits are the
+  // usual compromise: evenly spaced wastes the near cascades on ground the
+  // camera is standing on, and logarithmic wastes the far ones on sky.
+  if (options.shadowCascades > 1) {
+    const float far = options.shadowFar > 0 ? options.shadowFar : 100.0f;
+    LightManager::ShadowCascades::computePracticalSplits(
+        options.cascadeSplitPositions, options.shadowCascades, 0.1f, far,
+        _pipelineParams[5]);
+  }
+  lights.setShadowOptions(instance, options);
+}
+
+/// Tells every light in the scene about a change to the shadow settings.
+- (void)refreshShadowOptions {
+  for (auto &entry : _lit) [self shadowOptionsFor:entry.second.entity];
+}
+
 - (void)applyVideos:(const int64_t *)keys
               flags:(const int32_t *)flags
              params:(const float *)params
@@ -2565,8 +2685,14 @@ static constexpr NSUInteger kMaxPostParams = 128;
   // carried faithfully rather than one that shows. It is what the penumbra
   // will be made of when the shadow type becomes somebody's to choose.
   LightManager::ShadowOptions options = lights.getShadowOptions(instance);
+  // How big the light actually is, which is what area shadows work their
+  // penumbra out from. Carried faithfully whatever the shadow kind, because
+  // switching to area shadows should not need every light touched again.
   options.shadowBulbRadius = p[14];
   lights.setShadowOptions(instance, options);
+  // And the pipeline's own settings, which a light that has just been built
+  // has never been told.
+  [self shadowOptionsFor:lit.entity];
 }
 
 - (void)applyLights:(const int64_t *)keys

@@ -251,6 +251,10 @@ private final class Viewport {
     if !scene.postParams.isEmpty {
       renderer.setPostProcess(scene.postParams, count: UInt(scene.postParams.count))
     }
+    if !scene.pipelineParams.isEmpty {
+      renderer.setPipeline(scene.pipelineParams,
+                           count: UInt(scene.pipelineParams.count))
+    }
     renderer.setPrecipitationEnabled(scene.precipitationEnabled,
                                      params: scene.precipitationParams)
     renderer.setSkyEnabled(scene.skyEnabled, params: scene.skyParams)
@@ -327,6 +331,7 @@ private struct Scene {
   /// against a newer renderer should keep working with the defaults rather
   /// than failing to decode a scene.
   let postParams: [Float]
+  let pipelineParams: [Float]
 
   /// The application's own clock, in seconds, when this scene was worked out.
   let at: Double
@@ -416,6 +421,8 @@ private struct Scene {
     // defaults, not a scene that fails to arrive.
     self.postParams =
       (arguments["postParams"] as? FlutterStandardTypedData)?.floats ?? []
+    self.pipelineParams =
+      (arguments["pipelineParams"] as? FlutterStandardTypedData)?.floats ?? []
 
     // Materials are optional the same way, so a host that never names one
     // sends nothing rather than an empty array of everything. What arrives

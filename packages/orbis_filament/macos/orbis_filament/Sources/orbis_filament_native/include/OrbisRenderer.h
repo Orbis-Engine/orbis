@@ -66,6 +66,14 @@ NS_ASSUME_NONNULL_BEGIN
                 videos:(const int32_t *)videos
                  count:(uint32_t)count;
 
+/// States how much of the frame's work actually happens.
+///
+/// One pipeline with dials rather than a choice of pipelines: the order of
+/// the passes is fixed, and what this changes is how much of each of them
+/// there is. Compared before anything is applied, because half of it
+/// reallocates a render target or a shadow map.
+- (void)setPipeline:(const float *)params count:(NSUInteger)count;
+
 /// States what every video in the scene is doing.
 ///
 /// A description rather than a command, like everything else: what arrives is

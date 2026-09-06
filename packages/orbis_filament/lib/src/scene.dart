@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'material.dart';
+import 'pipeline.dart';
 import 'video.dart';
 import 'post.dart';
 
@@ -794,7 +795,9 @@ class OrbisScene {
     List<OrbisMaterial>? materials,
     List<OrbisVideo>? videos,
     OrbisPostProcess? post,
+    OrbisPipeline? pipeline,
   }) : lights = lights ?? const [],
+       pipeline = pipeline ?? OrbisPipeline(),
        materials = materials ?? const [],
        videos = videos ?? const [],
        post = post ?? OrbisPostProcess(),
@@ -838,6 +841,13 @@ class OrbisScene {
   final OrbisSky sky;
   final OrbisFog fog;
   final OrbisPrecipitation precipitation;
+
+  /// How much of the frame's work actually happens.
+  ///
+  /// On the scene rather than on the view, for the same reason the post
+  /// settings are: four views of one world should be drawn to one standard.
+  /// It is the tier a machine has been set to, not a property of a window.
+  final OrbisPipeline pipeline;
 
   /// Everything done to the image after the scene is drawn.
   ///
@@ -1013,6 +1023,7 @@ class OrbisScene {
       'precipitationParams': precipitation._packed,
       'skyEnabled': sky.drawn,
       'postParams': post.packed,
+      'pipelineParams': pipeline.packed,
       // When the application reckons this is, in its own seconds.
       //
       // The renderer draws far more often than it is told anything, and works
