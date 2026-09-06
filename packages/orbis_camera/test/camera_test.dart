@@ -11,6 +11,9 @@ Matcher near(double value, [double tolerance = 1e-6]) =>
     closeTo(value, tolerance);
 
 void main() {
+  _guideTests();
+  _robustnessTests();
+
   group('rotation maths', () {
     test('a camera looking down -Z has that as its forward', () {
       final rotation = lookRotation(Vector3(0, 0, -1));
@@ -518,6 +521,173 @@ void main() {
       final a = CameraNoise(seed: 1).positionAt(2.0);
       final b = CameraNoise(seed: 2).positionAt(2.0);
       expect((a - b).length, greaterThan(1e-6));
+    });
+  });
+}
+
+void _robustnessTests() {
+  group('a camera that has to survive a frame', () {
+    test('a surface with no size yet does not poison the camera', () {
+      // A host reads the aspect off its own surface, and a surface before
+      // layout is zero by zero — which is a NaN, not a small number. One of
+      // those through the projection comes back as a NaN rotation, and the
+      // next frame damps towards it from a value that is already NaN. Nothing
+      // recovers: one frame during startup points the camera nowhere for the
+      // rest of the run.
+      final subject = FixedTarget(Vector3(0, 0, -10));
+      final brain = CameraBrain()
+        ..add(VirtualCamera(
+          name: 'Chase',
+          lookAt: subject,
+          body: StaticBody(Vector3.zero()),
+          aim: ComposerAim(),
+        ))
+        ..snap();
+
+      brain.aspect = 0 / 0;
+      brain.aspect = 1 / 0;
+      brain.aspect = 0;
+      brain.aspect = -2;
+
+      for (var i = 0; i < 5; i++) {
+        subject.position = Vector3(i * 0.4, 0, -10);
+        brain.update(1 / 60);
+      }
+
+      final forward = brain.state.forward;
+      expect(forward.x.isNaN, isFalse);
+      expect(forward.y.isNaN, isFalse);
+      expect(forward.z.isNaN, isFalse);
+      expect(brain.aspect, 16 / 9);
+    });
+
+    test('a real ratio is still taken', () {
+      final brain = CameraBrain()..aspect = 4 / 3;
+      expect(brain.aspect, closeTo(4 / 3, 1e-9));
+    });
+
+    test('a composed camera stays level', () {
+      // The shortest rotation from the centre of the frame to where the
+      // subject should sit is the obvious construction, and it rolls: an
+      // offset that is both sideways and vertical turns about an oblique
+      // axis, and the part of that along the view direction is roll. It then
+      // accumulates, because the next frame damps towards a rotation that is
+      // already leaning. This subject wanders diagonally on purpose.
+      final subject = FixedTarget(Vector3.zero());
+      Vector3 pathAt(double s) =>
+          Vector3(math.sin(s * 0.45) * 9, 0, math.sin(s * 0.9) * 5.5);
+
+      final brain = CameraBrain()
+        ..add(VirtualCamera(
+          name: 'Chase',
+          follow: subject,
+          lookAt: subject,
+          body: FollowBody(
+            offset: Vector3(0, 2.4, 7),
+            damping: Vector3(0.35, 0.18, 0.5),
+          ),
+          // Off centre both ways, which is what makes the offset oblique.
+          aim: ComposerAim(screenX: 0.42, screenY: 0.45, damping: 0.4),
+        ))
+        ..snap();
+
+      var worst = 0.0;
+      var seconds = 0.0;
+      for (var i = 0; i < 600; i++) {
+        seconds += 1 / 60;
+        final at = pathAt(seconds);
+        subject
+          ..position = at
+          ..rotation = lookRotation(pathAt(seconds + 0.12) - at);
+        brain.update(1 / 60);
+        worst = math.max(worst, brain.state.right.y.abs());
+      }
+
+      // A tenth of this is a degree. It used to reach nineteen.
+      expect(worst, lessThan(0.02));
+    });
+
+    test('following a subject on a path never produces a NaN', () {
+      final subject = FixedTarget(Vector3.zero());
+      Vector3 pathAt(double s) =>
+          Vector3(math.sin(s * 0.45) * 9, 0, math.sin(s * 0.9) * 5.5);
+
+      final brain = CameraBrain()
+        ..add(VirtualCamera(
+          name: 'Chase',
+          follow: subject,
+          lookAt: subject,
+          body: FollowBody(
+            offset: Vector3(0, 2.4, 7),
+            damping: Vector3(0.35, 0.18, 0.5),
+          ),
+          aim: ComposerAim(screenY: 0.45, damping: 0.4),
+        ))
+        ..snap();
+
+      var seconds = 0.0;
+      for (var i = 0; i < 400; i++) {
+        seconds += 1 / 60;
+        final at = pathAt(seconds);
+        subject
+          ..position = at
+          ..rotation = lookRotation(pathAt(seconds + 0.12) - at);
+        brain.update(1 / 60);
+        expect(brain.state.forward.length, closeTo(1, 1e-6), reason: 'frame $i');
+      }
+    });
+  });
+}
+
+void _guideTests() {
+  group('the guides', () {
+    test('a composer hands out the zones it is actually using', () {
+      final aim = ComposerAim(
+        screenX: 0.5,
+        screenY: 0.4,
+        deadZoneWidth: 0.1,
+        deadZoneHeight: 0.15,
+        softZoneWidth: 0.4,
+        softZoneHeight: 0.3,
+      );
+
+      final guides = aim.guides;
+
+      // The widths are half-extents in normalised coordinates, where the
+      // frame runs from minus one to one. A half-extent of a tenth is
+      // therefore a fifth of the frame across — get that factor wrong and
+      // the box drawn is half the one the camera is using, which is worse
+      // than drawing none.
+      expect(guides.dead.width, closeTo(0.2, 1e-9));
+      expect(guides.dead.height, closeTo(0.3, 1e-9));
+      expect(guides.soft.width, closeTo(0.8, 1e-9));
+
+      // Centred on where the subject is meant to sit, not on the frame.
+      expect(guides.dead.left + guides.dead.width / 2, closeTo(0.5, 1e-9));
+      expect(guides.dead.top + guides.dead.height / 2, closeTo(0.4, 1e-9));
+      expect(guides.screenY, 0.4);
+    });
+
+    test('the dead zone sits inside the soft zone', () {
+      final guides = ComposerAim().guides;
+      expect(guides.soft.contains(guides.dead.left, guides.dead.top), isTrue);
+      expect(
+        guides.soft.contains(guides.dead.right, guides.dead.bottom),
+        isTrue,
+      );
+    });
+
+    test('an aim with nothing to compose says so rather than drawing a dot', () {
+      expect(HardLookAt().guides, isNull);
+      expect(StaticAim(Quaternion.identity()).guides, isNull);
+      expect(PovAim().guides, isNull);
+    });
+
+    test('the zones move with the screen position', () {
+      final left = ComposerAim(screenX: 0.25).guides;
+      final right = ComposerAim(screenX: 0.75).guides;
+      expect(right.dead.left - left.dead.left, closeTo(0.5, 1e-9));
+      expect(right.dead.width, closeTo(left.dead.width, 1e-9));
     });
   });
 }

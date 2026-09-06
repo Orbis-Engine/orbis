@@ -11,12 +11,30 @@ import 'virtual_camera.dart';
 /// systems fighting over the camera — the failure that makes cameras the
 /// worst part of most codebases.
 class CameraBrain {
-  CameraBrain({this.aspect = 16 / 9, BlendTable? blends})
-    : blends = blends ?? BlendTable();
+  CameraBrain({double aspect = 16 / 9, BlendTable? blends})
+    : _aspect = aspect,
+      blends = blends ?? BlendTable();
+
+  double _aspect;
 
   /// Frame width over height. Affects composition, since a dead zone is a
   /// fraction of the frame and the frame is not square.
-  double aspect;
+  double get aspect => _aspect;
+
+  /// Anything that is not a real ratio is ignored rather than stored.
+  ///
+  /// A host reads this off its own surface, and a surface that has not been
+  /// laid out yet is zero by zero — which is not a small number, it is a NaN.
+  /// One of those reaches the projection, comes back out as a rotation, and
+  /// is then damped towards on the next frame from a value that is already
+  /// NaN. Nothing recovers: the camera is pointed nowhere for the rest of the
+  /// run, from one frame during startup.
+  ///
+  /// Refusing it here rather than asking every host to check is the only
+  /// version of this that stays fixed.
+  set aspect(double value) {
+    if (value.isFinite && value > 0) _aspect = value;
+  }
 
   final BlendTable blends;
 

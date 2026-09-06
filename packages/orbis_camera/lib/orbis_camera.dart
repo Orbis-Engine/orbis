@@ -36,6 +36,7 @@ export 'src/camera_state.dart'
         rotateVector,
         slerpShortest;
 export 'src/damping.dart' show damp, dampingFactor;
+export 'src/guides.dart' show CameraGuides, ScreenRect;
 export 'src/lens.dart' show Lens;
 export 'src/noise.dart' show CameraNoise;
 export 'src/virtual_camera.dart' show VirtualCamera;

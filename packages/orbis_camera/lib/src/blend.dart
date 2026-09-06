@@ -52,7 +52,13 @@ class Blend {
 class BlendTable {
   BlendTable({this.defaultBlend = const Blend(BlendStyle.easeInOut, 0.7)});
 
-  final Blend defaultBlend;
+  /// What any transition without a rule of its own uses.
+  ///
+  /// Not final, because a game changes it: the same cut that should be
+  /// instant in a fight wants three quarters of a second in a cutscene, and
+  /// rebuilding the table to say so would throw away every specific rule
+  /// alongside it.
+  Blend defaultBlend;
   final Map<String, Blend> _specific = {};
 
   /// Sets the blend for one transition. A null name means "any".
