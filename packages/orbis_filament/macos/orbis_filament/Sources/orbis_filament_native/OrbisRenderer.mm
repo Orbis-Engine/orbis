@@ -44,7 +44,16 @@
 #include <cmath>
 #include <exception>
 
-#include "generated/lit_material.h"
+#include "generated/lit_opaque_material.h"
+#include "generated/lit_transparent_material.h"
+#include "generated/lit_fade_material.h"
+#include "generated/lit_masked_material.h"
+#include "generated/lit_add_material.h"
+#include "generated/unlit_opaque_material.h"
+#include "generated/unlit_transparent_material.h"
+#include "generated/unlit_fade_material.h"
+#include "generated/unlit_masked_material.h"
+#include "generated/unlit_add_material.h"
 #include "generated/mist_material.h"
 #include "generated/instanced_material.h"
 #include "generated/sky_material.h"
@@ -246,8 +255,39 @@ struct Drawn {
   filament::math::float3 colour = {-1, -1, -1};
   int32_t flags = -1;
 
+  /// Which of this frame's materials the object is made of, or -1 for the
+  /// default surface tinted by [colour]. Starts at an index no publish can
+  /// name, so the first one always dresses.
+  int32_t surface = -2;
+
+  /// A mesh's own materials, kept from the moment one is overridden so that
+  /// clearing the override puts the model back the way the file had it.
+  /// Empty while nothing has been overridden, which is the usual case.
+  std::vector<filament::MaterialInstance *> ownMaterials;
+
   /// The publish that last mentioned this object. Anything not stamped by the
   /// current one has left the scene.
+  uint64_t seen = 0;
+};
+
+/// How many floats one material's numbers occupy, and how many maps it has
+/// room for. Both agree with the Dart side by hand; a mismatch is caught in
+/// the plugin, which checks the array lengths before any of this is reached.
+constexpr size_t kMaterialParams = 18;
+constexpr size_t kMaterialMaps = 5;
+
+/// One material as the renderer holds it between frames.
+///
+/// The instance is the expensive part and the flags decide which compiled
+/// material it has to come from, so a change of flags is a rebuild and a
+/// change of numbers is a handful of uniform writes. Keeping both here is
+/// what lets those be told apart without asking Filament anything.
+struct Surfaced {
+  filament::MaterialInstance *instance = nullptr;
+  int32_t flags = -1;
+  float params[kMaterialParams] = {};
+  int32_t maps[kMaterialMaps] = {-1, -1, -1, -1, -1};
+  bool written = false;
   uint64_t seen = 0;
 };
 
@@ -301,6 +341,12 @@ constexpr int64_t kPlaceholderKey = INT64_MIN;
 struct Vertex {
   float3 position;
   quatf tangents;
+
+  /// Where the corner sits on its face. The standard surface asks for texture
+  /// coordinates whether the material has a map or not — a shader either
+  /// declares an attribute or it does not — so even the placeholder cube
+  /// carries them, and a texture put on one lands square on each face.
+  float2 uv;
 };
 
 /// A corner of one sheet of mist: where it is, and where it sits across the
@@ -443,6 +489,41 @@ static constexpr NSUInteger kMaxPostParams = 128;
   gltfio::ResourceLoader *_resourceLoader;
   gltfio::MaterialProvider *_materialProvider;
   gltfio::TextureProvider *_stbTextures;
+
+  /// A second decoder, for the images materials name directly.
+  ///
+  /// Separate from the one the glTF loader uses because a provider is a
+  /// queue: popping from it takes ownership of whatever comes out, and
+  /// popping a texture the resource loader was waiting for would leave a
+  /// model with a missing map and no way to find out why.
+  gltfio::TextureProvider *_ownStbTextures;
+  gltfio::TextureProvider *_ownKtxTextures;
+
+  /// The compiled surfaces, indexed by shading and blend mode. Built on
+  /// first use: a scene of opaque lit objects should not compile the four
+  /// blending variants it never draws.
+  filament::Material *_surfaces[10];
+
+  /// Every material the host has named, by its key.
+  std::unordered_map<int64_t, Surfaced> _materials;
+
+  /// This frame's materials in the order they arrived, which is what an
+  /// object's index points into. Rebuilt each publish; never outlives one.
+  std::vector<filament::MaterialInstance *> _materialOrder;
+
+  /// Images loaded for materials, by path and colour space — the same file
+  /// read as sRGB and as linear is two textures, and asking for one when the
+  /// other is loaded would be a silent wrong answer.
+  std::unordered_map<std::string, filament::Texture *> _ownTextures;
+
+  /// Whether any of those are still decoding, so the queue is only polled
+  /// while there is something in it.
+  int _texturesPending;
+
+  /// One white pixel, standing in for every map a material does not set.
+  filament::Texture *_blankTexture;
+
+  uint64_t _materialGeneration;
   gltfio::TextureProvider *_ktxTextures;
 
   /// Loaded glTF files, by path. Kept for the life of the renderer: a scene
@@ -470,7 +551,6 @@ static constexpr NSUInteger kMaxPostParams = 128;
   float _skyAmbient;
   bool _skyShowsBody;
   bool _skyBuilt;
-  Material *_material;
 
   /// Drawn many times over from one submission. Built the first time a scene
   /// has a population in it, because most have none.
@@ -649,11 +729,13 @@ static constexpr NSUInteger kMaxPostParams = 128;
   const float colour[3] = {0.85f, 0.28f, 0.18f};
   const int32_t noMesh[1] = {-1};
   const int32_t flags[1] = {kCastsShadows | kReceivesShadows | kVisible};
+  const int32_t noMaterial[1] = {-1};
   [self applyObjects:key
           transforms:identity
              colours:colour
               meshes:noMesh
                flags:flags
+           materials:noMaterial
                paths:@[]
                count:1];
   _sceneIsOwnedByHost = false;
@@ -685,7 +767,22 @@ static constexpr NSUInteger kMaxPostParams = 128;
   // with garbage positions and garbage tangent frames, so it renders as an
   // unlit wedge rather than a lit cube.
   auto *vertices = new Vertex[24];
-  for (int i = 0; i < 24; i++) vertices[i] = {kPositions[i], quats[i]};
+  for (int i = 0; i < 24; i++) {
+    // Box mapping, taken from the face's own normal: whichever axis the face
+    // points along is the one left out, and the other two become the corner's
+    // place on it. Six faces, each covering the whole image once.
+    const float3 at = kPositions[i];
+    const float3 normal = kNormals[i];
+    float2 uv;
+    if (std::fabs(normal.y) > 0.5f) {
+      uv = {at.x, at.z};
+    } else if (std::fabs(normal.x) > 0.5f) {
+      uv = {at.z, at.y};
+    } else {
+      uv = {at.x, at.y};
+    }
+    vertices[i] = {at, quats[i], {uv.x * 0.5f + 0.5f, uv.y * 0.5f + 0.5f}};
+  }
 
   _vertexBuffer =
       VertexBuffer::Builder()
@@ -697,6 +794,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
           .attribute(VertexAttribute::TANGENTS, 0,
                      VertexBuffer::AttributeType::FLOAT4,
                      offsetof(Vertex, tangents), sizeof(Vertex))
+          .attribute(VertexAttribute::UV0, 0,
+                     VertexBuffer::AttributeType::FLOAT2,
+                     offsetof(Vertex, uv), sizeof(Vertex))
           .build(*_engine);
   _vertexBuffer->setBufferAt(
       *_engine, 0,
@@ -716,9 +816,6 @@ static constexpr NSUInteger kMaxPostParams = 128;
       *_engine,
       IndexBuffer::BufferDescriptor(kIndices, sizeof(kIndices), nullptr));
 
-  _material = Material::Builder()
-                  .package(klitMaterial, klitMaterial_len)
-                  .build(*_engine);
 }
 
 /// Builds the sheets, once, the first time a scene asks for weather.
@@ -1170,6 +1267,8 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   _stbTextures = gltfio::createStbProvider(_engine);
   _ktxTextures = gltfio::createKtx2Provider(_engine);
+  _ownStbTextures = gltfio::createStbProvider(_engine);
+  _ownKtxTextures = gltfio::createKtx2Provider(_engine);
   _resourceLoader->addTextureProvider("image/png", _stbTextures);
   _resourceLoader->addTextureProvider("image/jpeg", _stbTextures);
   _resourceLoader->addTextureProvider("image/ktx2", _ktxTextures);
@@ -1323,9 +1422,8 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   // One material instance per object, because the colour is a parameter on it
   // and sharing would make every object the last one's colour.
-  drawn.material = _material->createInstance();
-  drawn.material->setParameter("roughness", 0.4f);
-  drawn.material->setParameter("metallic", 0.0f);
+  drawn.material = [self surfaceAt:0]->createInstance();
+  [self setDefaultsOn:drawn.material];
 
   drawn.entity = utils::EntityManager::get().create();
   RenderableManager::Builder(1)
@@ -1687,11 +1785,377 @@ static constexpr NSUInteger kMaxPostParams = 128;
   }
 }
 
+
+/// Which of the ten compiled surfaces a set of flags asks for: shading
+/// first, then blend mode.
+- (int)surfaceIndexFor:(int32_t)flags {
+  const int shading = flags & 3;
+  const int blend = (flags >> 2) & 15;
+  if (shading < 0 || shading > 1 || blend < 0 || blend > 4) return 0;
+  return shading * 5 + blend;
+}
+
+/// Builds a surface the first time something is made of it.
+///
+/// Ten compiled packages rather than one, because blending is the only thing
+/// about a material that a uniform cannot change — and lazily, because a
+/// scene of opaque lit objects should not compile the four blending variants
+/// it never draws.
+- (Material *)surfaceAt:(int)index {
+  static const uint8_t *packages[10] = {
+      klit_opaqueMaterial,        klit_transparentMaterial,
+      klit_fadeMaterial,          klit_maskedMaterial,
+      klit_addMaterial,           kunlit_opaqueMaterial,
+      kunlit_transparentMaterial, kunlit_fadeMaterial,
+      kunlit_maskedMaterial,      kunlit_addMaterial,
+  };
+  static const size_t sizes[10] = {
+      klit_opaqueMaterial_len,        klit_transparentMaterial_len,
+      klit_fadeMaterial_len,          klit_maskedMaterial_len,
+      klit_addMaterial_len,           kunlit_opaqueMaterial_len,
+      kunlit_transparentMaterial_len, kunlit_fadeMaterial_len,
+      kunlit_maskedMaterial_len,      kunlit_addMaterial_len,
+  };
+  if (index < 0 || index >= 10) index = 0;
+  if (_surfaces[index] == nullptr) {
+    _surfaces[index] =
+        Material::Builder().package(packages[index], sizes[index]).build(*_engine);
+  }
+  return _surfaces[index];
+}
+
+/// A single white pixel, for every sampler a material leaves empty.
+///
+/// Filament requires every sampler in a material to be bound whether the
+/// shader reads it or not, and an unbound one is undefined rather than
+/// ignored. One texture stands in for all of them; the `has` flag beside it
+/// is what actually decides whether it is read.
+- (Texture *)blankTexture {
+  if (_blankTexture != nullptr) return _blankTexture;
+  _blankTexture = Texture::Builder()
+                      .width(1)
+                      .height(1)
+                      .levels(1)
+                      .format(Texture::InternalFormat::RGBA8)
+                      .build(*_engine);
+  uint8_t *pixel = new uint8_t[4]{255, 255, 255, 255};
+  _blankTexture->setImage(
+      *_engine, 0,
+      Texture::PixelBufferDescriptor(
+          pixel, 4, Texture::Format::RGBA, Texture::Type::UBYTE,
+          [](void *buffer, size_t, void *) {
+            delete[] static_cast<uint8_t *>(buffer);
+          }));
+  return _blankTexture;
+}
+
+/// Fills in every parameter of the standard surface with what a material
+/// that says nothing would have.
+///
+/// Needed because Filament requires every sampler to be bound whether the
+/// shader reads it or not — an object drawn in a plain colour still has five
+/// maps, all of them the blank one, all of them switched off.
+- (void)setDefaultsOn:(MaterialInstance *)instance {
+  Texture *blank = [self blankTexture];
+  TextureSampler sampler(TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+                         TextureSampler::MagFilter::LINEAR);
+  instance->setParameter("baseColor", float4{0.8f, 0.8f, 0.8f, 1.0f});
+  instance->setParameter("metallic", 0.0f);
+  instance->setParameter("roughness", 0.4f);
+  instance->setParameter("reflectance", 0.5f);
+  instance->setParameter("emissive", float3{0.0f, 0.0f, 0.0f});
+  instance->setParameter("emissiveIntensity", 0.0f);
+  instance->setParameter("ambientOcclusion", 1.0f);
+  instance->setParameter("normalScale", 1.0f);
+  instance->setParameter("uvTransform", float4{1.0f, 1.0f, 0.0f, 0.0f});
+  static const char *kNames[5] = {"baseColorMap", "normalMap",
+                                  "metallicRoughnessMap", "occlusionMap",
+                                  "emissiveMap"};
+  static const char *kFlags[5] = {"hasBaseColorMap", "hasNormalMap",
+                                  "hasMetallicRoughnessMap", "hasOcclusionMap",
+                                  "hasEmissiveMap"};
+  for (int i = 0; i < 5; i++) {
+    instance->setParameter(kNames[i], blank, sampler);
+    instance->setParameter(kFlags[i], false);
+  }
+}
+
+/// Loads an image, or hands back the one already loaded for that path.
+///
+/// The colour space is part of the identity: the same file read as sRGB and
+/// as linear are two different textures, and a normal map decoded as though
+/// it were a colour bends every normal towards flat.
+- (Texture *)textureAtPath:(NSString *)path srgb:(bool)srgb {
+  std::string identity = std::string(path.UTF8String) + (srgb ? "|s" : "|l");
+  auto found = _ownTextures.find(identity);
+  if (found != _ownTextures.end()) return found->second;
+
+  // A failure is cached as null too. Forty objects naming a file that is not
+  // there would otherwise each read the disk, every frame, forever.
+  NSData *data = [NSData dataWithContentsOfFile:path];
+  Texture *texture = nullptr;
+  if (data != nil) {
+    NSString *extension = path.pathExtension.lowercaseString;
+    const char *mime = "image/png";
+    gltfio::TextureProvider *provider = _ownStbTextures;
+    if ([extension isEqualToString:@"jpg"] || [extension isEqualToString:@"jpeg"]) {
+      mime = "image/jpeg";
+    } else if ([extension isEqualToString:@"ktx2"]) {
+      mime = "image/ktx2";
+      provider = _ownKtxTextures;
+    }
+    texture = provider->pushTexture(
+        static_cast<const uint8_t *>(data.bytes), data.length, mime,
+        srgb ? gltfio::TextureProvider::TextureFlags::sRGB
+             : gltfio::TextureProvider::TextureFlags::NONE);
+    if (texture != nullptr) {
+      // The texture is usable now and its pixels arrive later, so an object
+      // made of it appears white for a frame or two rather than not at all.
+      _texturesPending++;
+    }
+  }
+  _ownTextures[identity] = texture;
+  return texture;
+}
+
+/// Gives the decoders a chance to hand over anything they have finished.
+///
+/// Called once a frame while something is outstanding, and not at all when
+/// nothing is — which is every frame after the first few.
+- (void)pollTextures {
+  if (_texturesPending == 0) return;
+  _ownStbTextures->updateQueue();
+  _ownKtxTextures->updateQueue();
+  while (_ownStbTextures->popTexture() != nullptr) _texturesPending--;
+  while (_ownKtxTextures->popTexture() != nullptr) _texturesPending--;
+  if (_texturesPending < 0) _texturesPending = 0;
+}
+
+/// Builds the sampler a material's wrap and filter settings describe.
+- (TextureSampler)samplerFor:(int32_t)flags {
+  const int wrap = (flags >> 10) & 3;
+  const bool sharp = ((flags >> 12) & 1) != 0;
+  TextureSampler sampler(
+      sharp ? TextureSampler::MinFilter::NEAREST
+            : TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+      sharp ? TextureSampler::MagFilter::NEAREST
+            : TextureSampler::MagFilter::LINEAR);
+  TextureSampler::WrapMode mode = TextureSampler::WrapMode::REPEAT;
+  if (wrap == 1) mode = TextureSampler::WrapMode::CLAMP_TO_EDGE;
+  if (wrap == 2) mode = TextureSampler::WrapMode::MIRRORED_REPEAT;
+  sampler.setWrapModeS(mode);
+  sampler.setWrapModeT(mode);
+  return sampler;
+}
+
+/// Writes everything about one material into its instance.
+- (void)write:(Surfaced &)surface
+    withParams:(const float *)params
+          maps:(const int32_t *)maps
+   texturePaths:(NSArray<NSString *> *)texturePaths
+     textureSrgb:(const int32_t *)textureSrgb {
+  MaterialInstance *instance = surface.instance;
+  const bool unlit = (surface.flags & 3) == 1;
+  const TextureSampler sampler = [self samplerFor:surface.flags];
+
+  instance->setParameter("baseColor",
+                         float4{params[0], params[1], params[2], params[3]});
+  instance->setParameter("emissive", float3{params[7], params[8], params[9]});
+  instance->setParameter("emissiveIntensity", params[10]);
+  instance->setParameter(
+      "uvTransform", float4{params[13], params[14], params[15], params[16]});
+
+  if (!unlit) {
+    instance->setParameter("metallic", params[4]);
+    instance->setParameter("roughness", params[5]);
+    instance->setParameter("reflectance", params[6]);
+    instance->setParameter("ambientOcclusion", params[11]);
+    instance->setParameter("normalScale", params[12]);
+  }
+
+  // The names are in the order the packed maps are, which is the order the
+  // Dart side lists them. A shorter list for the unlit surface, because it
+  // has nothing to do with the other four.
+  static const char *kMapNames[kMaterialMaps] = {
+      "baseColorMap", "normalMap", "metallicRoughnessMap", "occlusionMap",
+      "emissiveMap"};
+  static const char *kMapFlags[kMaterialMaps] = {
+      "hasBaseColorMap", "hasNormalMap", "hasMetallicRoughnessMap",
+      "hasOcclusionMap", "hasEmissiveMap"};
+
+  const size_t count = unlit ? 1 : kMaterialMaps;
+  for (size_t i = 0; i < count; i++) {
+    Texture *texture = nullptr;
+    const int32_t index = maps[i];
+    if (index >= 0 && index < static_cast<int32_t>(texturePaths.count)) {
+      texture = [self textureAtPath:texturePaths[index]
+                               srgb:textureSrgb[index] != 0];
+    }
+    const bool present = texture != nullptr;
+    instance->setParameter(kMapNames[i], present ? texture : [self blankTexture],
+                           sampler);
+    instance->setParameter(kMapFlags[i], present);
+  }
+}
+
+/// Sets up the parts of a material that are rasteriser state rather than
+/// shader input.
+- (void)applyRasterState:(Surfaced &)surface withThreshold:(float)threshold {
+  MaterialInstance *instance = surface.instance;
+  const int culling = (surface.flags >> 6) & 3;
+  const bool doubleSided = ((surface.flags >> 8) & 1) != 0;
+  const bool depthWrite = ((surface.flags >> 9) & 1) != 0;
+
+  // Order matters: turning double-sided lighting on disables culling as a
+  // side effect, so the culling mode is set afterwards and wins.
+  instance->setDoubleSided(doubleSided);
+  MaterialInstance::CullingMode mode = MaterialInstance::CullingMode::BACK;
+  if (culling == 1) mode = MaterialInstance::CullingMode::FRONT;
+  if (culling == 2 || doubleSided) mode = MaterialInstance::CullingMode::NONE;
+  instance->setCullingMode(mode);
+  instance->setDepthWrite(depthWrite);
+  // Only where it means anything: Filament asserts rather than ignores a
+  // threshold set on a material that does not punch pixels out.
+  if (((surface.flags >> 2) & 15) == 3) instance->setMaskThreshold(threshold);
+}
+
+- (void)applyMaterials:(const int64_t *)keys
+                 flags:(const int32_t *)flags
+                params:(const float *)params
+                  maps:(const int32_t *)maps
+          texturePaths:(NSArray<NSString *> *)texturePaths
+           textureSrgb:(const int32_t *)textureSrgb
+                 count:(uint32_t)count {
+  if (_disposed) return;
+
+  const uint64_t generation = ++_materialGeneration;
+  _materialOrder.clear();
+  _materialOrder.reserve(count);
+
+  for (uint32_t i = 0; i < count; i++) {
+    Surfaced &surface = _materials[keys[i]];
+    surface.seen = generation;
+    const float *values = params + i * kMaterialParams;
+    const int32_t *entries = maps + i * kMaterialMaps;
+
+    // A change of blend mode or shading is a different compiled material, so
+    // the instance is replaced rather than reconfigured. Everything else is
+    // set on the instance in place.
+    const int wanted = [self surfaceIndexFor:flags[i]];
+    const bool rebuild =
+        surface.instance == nullptr ||
+        [self surfaceIndexFor:surface.flags] != wanted ||
+        surface.flags == -1;
+    if (rebuild) {
+      if (surface.instance != nullptr) _engine->destroy(surface.instance);
+      surface.instance = [self surfaceAt:wanted]->createInstance();
+      if ((flags[i] & 3) == 0) [self setDefaultsOn:surface.instance];
+      surface.written = false;
+    }
+
+    if (rebuild || surface.flags != flags[i]) {
+      surface.flags = flags[i];
+      [self applyRasterState:surface withThreshold:values[17]];
+      // A new sampler means every map has to be bound again, so the numbers
+      // are rewritten with them rather than compared.
+      surface.written = false;
+    }
+
+    const bool sameParams =
+        surface.written &&
+        std::memcmp(surface.params, values, sizeof(float) * kMaterialParams) == 0 &&
+        std::memcmp(surface.maps, entries, sizeof(int32_t) * kMaterialMaps) == 0;
+    if (!sameParams) {
+      std::memcpy(surface.params, values, sizeof(float) * kMaterialParams);
+      std::memcpy(surface.maps, entries, sizeof(int32_t) * kMaterialMaps);
+      surface.written = true;
+      [self write:surface
+            withParams:values
+                  maps:entries
+          texturePaths:texturePaths
+           textureSrgb:textureSrgb];
+      if (((surface.flags >> 2) & 15) == 3) {
+        surface.instance->setMaskThreshold(values[17]);
+      }
+    }
+
+    _materialOrder.push_back(surface.instance);
+  }
+
+  // A material nothing is made of any more. Its instance goes; the textures
+  // it used stay, because the next scene almost always wants them again and
+  // an image is expensive to read twice.
+  for (auto it = _materials.begin(); it != _materials.end();) {
+    if (it->second.seen == generation) {
+      ++it;
+      continue;
+    }
+    if (it->second.instance != nullptr) _engine->destroy(it->second.instance);
+    it = _materials.erase(it);
+  }
+}
+
+/// Puts one object onto a material, or back onto the ones it came with.
+- (void)dress:(Drawn &)drawn withMaterial:(int32_t)index {
+  auto &renderableManager = _engine->getRenderableManager();
+  MaterialInstance *instance =
+      (index >= 0 && index < static_cast<int32_t>(_materialOrder.size()))
+          ? _materialOrder[index]
+          : nullptr;
+
+  if (drawn.instance != nullptr) {
+    const utils::Entity *entities = drawn.instance->getEntities();
+    const size_t entityCount = drawn.instance->getEntityCount();
+
+    // The file's own materials, kept the first time one is overridden. Every
+    // primitive in order, so putting them back is the same walk.
+    if (instance != nullptr && drawn.ownMaterials.empty()) {
+      for (size_t i = 0; i < entityCount; i++) {
+        auto renderable = renderableManager.getInstance(entities[i]);
+        if (!renderable) continue;
+        for (size_t p = 0; p < renderableManager.getPrimitiveCount(renderable); p++) {
+          drawn.ownMaterials.push_back(
+              renderableManager.getMaterialInstanceAt(renderable, p));
+        }
+      }
+    }
+
+    size_t slot = 0;
+    for (size_t i = 0; i < entityCount; i++) {
+      auto renderable = renderableManager.getInstance(entities[i]);
+      if (!renderable) continue;
+      for (size_t p = 0; p < renderableManager.getPrimitiveCount(renderable); p++) {
+        MaterialInstance *chosen = instance;
+        if (chosen == nullptr) {
+          if (slot >= drawn.ownMaterials.size()) { slot++; continue; }
+          chosen = drawn.ownMaterials[slot];
+        }
+        slot++;
+        if (chosen != nullptr) {
+          renderableManager.setMaterialInstanceAt(renderable, p, chosen);
+        }
+      }
+    }
+    return;
+  }
+
+  if (!drawn.entity) return;
+  auto renderable = renderableManager.getInstance(drawn.entity);
+  if (!renderable) return;
+  // No material named: back to the object's own instance, which is what its
+  // colour is written into.
+  MaterialInstance *chosen = instance != nullptr ? instance : drawn.material;
+  if (chosen != nullptr) {
+    renderableManager.setMaterialInstanceAt(renderable, 0, chosen);
+  }
+}
+
 - (void)applyObjects:(const int64_t *)keys
           transforms:(const float *)transforms
              colours:(const float *)colours
               meshes:(const int32_t *)meshes
                flags:(const int32_t *)flags
+           materials:(const int32_t *)materials
                paths:(NSArray<NSString *> *)paths
                count:(uint32_t)count {
   if (_disposed) return;
@@ -1758,13 +2222,23 @@ static constexpr NSUInteger kMaxPostParams = 128;
       if (colour.x != drawn.colour.x || colour.y != drawn.colour.y ||
           colour.z != drawn.colour.z) {
         drawn.colour = colour;
-        drawn.material->setParameter("baseColor", colour);
+        drawn.material->setParameter("baseColor",
+                                     float4{colour.x, colour.y, colour.z, 1.0f});
       }
     }
 
     if (flags[i] != drawn.flags) {
       drawn.flags = flags[i];
       [self applyFlags:flags[i] toDrawn:drawn];
+    }
+
+    // Compared rather than written, because dressing an object walks every
+    // primitive it has and a model can have hundreds. The instance behind the
+    // index may have changed underneath, but that is a change to the material
+    // and the renderable is already pointing at it.
+    if (materials[i] != drawn.surface) {
+      drawn.surface = materials[i];
+      [self dress:drawn withMaterial:materials[i]];
     }
   }
 
@@ -2559,6 +3033,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
   [self updateCloudsAtTime:time];
   [self updateMistAtTime:time];
   [self updateRainAtTime:time];
+  [self pollTextures];
 
   if (!_renderer->beginFrame(target)) return;
   _renderer->render(_view);
@@ -2743,6 +3218,25 @@ static constexpr NSUInteger kMaxPostParams = 128;
   delete _stbTextures;
   delete _ktxTextures;
 
+  // Materials before their textures, and both before the engine goes: an
+  // instance still pointing at a destroyed texture is a use-after-free the
+  // next time anything is drawn.
+  for (auto &entry : _materials) {
+    if (entry.second.instance != nullptr) _engine->destroy(entry.second.instance);
+  }
+  _materials.clear();
+  _materialOrder.clear();
+  for (auto &entry : _ownTextures) {
+    if (entry.second != nullptr) _engine->destroy(entry.second);
+  }
+  _ownTextures.clear();
+  delete _ownStbTextures;
+  delete _ownKtxTextures;
+  if (_blankTexture != nullptr) _engine->destroy(_blankTexture);
+  for (Material *surface : _surfaces) {
+    if (surface != nullptr) _engine->destroy(surface);
+  }
+
   auto &entities = utils::EntityManager::get();
   _engine->destroyCameraComponent(_cameraEntity);
   entities.destroy(_cameraEntity);
@@ -2801,7 +3295,6 @@ static constexpr NSUInteger kMaxPostParams = 128;
     _quadVertices = nullptr;
   }
 
-  _engine->destroy(_material);
   _engine->destroy(_vertexBuffer);
   _engine->destroy(_indexBuffer);
   [self releaseBuffers];

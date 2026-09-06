@@ -1,0 +1,37 @@
+// A surface that ignores light.
+//
+// For anything that carries its own brightness and would only be spoiled by
+// being lit: a marker, a sky card, a screen showing a video, a debug shape.
+// Cheaper than the standard surface by every light in the scene.
+material {
+    name : orbisUnlit,
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    requires : [ uv0 ],
+    parameters : [
+        { type : float4,    name : baseColor },
+        { type : float3,    name : emissive },
+        { type : float,     name : emissiveIntensity },
+        { type : float4,    name : uvTransform },
+        { type : sampler2d, name : baseColorMap },
+        { type : bool,      name : hasBaseColorMap }
+    ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 uv = getUV0() * materialParams.uvTransform.xy
+                + materialParams.uvTransform.zw;
+
+        vec4 base = materialParams.baseColor;
+        if (materialParams.hasBaseColorMap) {
+            base *= texture(materialParams_baseColorMap, uv);
+        }
+        material.baseColor = base;
+        material.emissive =
+            vec4(materialParams.emissive * materialParams.emissiveIntensity, 1.0);
+    }
+}

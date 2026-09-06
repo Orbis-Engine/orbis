@@ -6,6 +6,15 @@
 library;
 
 export 'src/orbis_view.dart' show OrbisView;
+export 'src/material.dart'
+    show
+        OrbisBlend,
+        OrbisCulling,
+        OrbisFilter,
+        OrbisMaterial,
+        OrbisShading,
+        OrbisTexture,
+        OrbisWrap;
 export 'src/population.dart' show OrbisPopulation;
 export 'src/post.dart'
     show

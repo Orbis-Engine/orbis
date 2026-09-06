@@ -1,18 +1,102 @@
+// The standard surface.
+//
+// Everything an object's look is made of, in one shader: a base colour that
+// can come from a texture, metalness and roughness that can come from a
+// packed map, a normal map, an occlusion map and an emissive map — plus one
+// UV transform applied to all of them.
+//
+// One shader rather than a family of them, with a `has*` flag per map. The
+// flags are uniforms, so every fragment in a draw takes the same branch and
+// the GPU pays for a scalar test, not a divergence. The alternative — a
+// compiled variant per combination of maps — is thirty-two shaders to reach
+// the same pixels.
+//
+// `blending` is the exception that cannot be a uniform: it is fixed function
+// state baked into the compiled material. setup.sh generates one copy of this
+// file per blend mode, which is why the line below is written plainly enough
+// to substitute.
 material {
     name : orbisLit,
     shadingModel : lit,
+    blending : opaque,
+    doubleSided : true,
+    requires : [ uv0 ],
     parameters : [
-        { type : float3, name : baseColor },
-        { type : float,  name : roughness },
-        { type : float,  name : metallic }
+        { type : float4,    name : baseColor },
+        { type : float,     name : metallic },
+        { type : float,     name : roughness },
+        { type : float,     name : reflectance },
+        { type : float3,    name : emissive },
+        { type : float,     name : emissiveIntensity },
+        { type : float,     name : ambientOcclusion },
+        { type : float,     name : normalScale },
+
+        // Tiling in xy, offset in zw. Filament has no automatic equivalent —
+        // a texture repeats only because the shader multiplies here.
+        { type : float4,    name : uvTransform },
+
+        { type : sampler2d, name : baseColorMap },
+        { type : sampler2d, name : normalMap },
+        { type : sampler2d, name : metallicRoughnessMap },
+        { type : sampler2d, name : occlusionMap },
+        { type : sampler2d, name : emissiveMap },
+
+        { type : bool,      name : hasBaseColorMap },
+        { type : bool,      name : hasNormalMap },
+        { type : bool,      name : hasMetallicRoughnessMap },
+        { type : bool,      name : hasOcclusionMap },
+        { type : bool,      name : hasEmissiveMap }
     ],
 }
 
 fragment {
     void material(inout MaterialInputs material) {
+        vec2 uv = getUV0() * materialParams.uvTransform.xy
+                + materialParams.uvTransform.zw;
+
+        // The normal has to be in before prepareMaterial builds the shading
+        // frame from it. Setting it afterwards is silently ignored.
+        if (materialParams.hasNormalMap) {
+            vec3 packed = texture(materialParams_normalMap, uv).xyz;
+            material.normal = packed * 2.0 - 1.0;
+            material.normal.xy *= materialParams.normalScale;
+        }
+
         prepareMaterial(material);
-        material.baseColor.rgb = materialParams.baseColor;
-        material.roughness     = materialParams.roughness;
-        material.metallic      = materialParams.metallic;
+
+        vec4 base = materialParams.baseColor;
+        if (materialParams.hasBaseColorMap) {
+            base *= texture(materialParams_baseColorMap, uv);
+        }
+        material.baseColor = base;
+
+        float metallic  = materialParams.metallic;
+        float roughness = materialParams.roughness;
+        if (materialParams.hasMetallicRoughnessMap) {
+            // glTF's packing, which is also what every exporter writes:
+            // occlusion in red, roughness in green, metalness in blue.
+            vec3 packed = texture(materialParams_metallicRoughnessMap, uv).rgb;
+            roughness *= packed.g;
+            metallic  *= packed.b;
+        }
+        material.metallic    = metallic;
+        material.roughness   = roughness;
+        material.reflectance = materialParams.reflectance;
+
+        float occlusion = materialParams.ambientOcclusion;
+        if (materialParams.hasOcclusionMap) {
+            occlusion *= texture(materialParams_occlusionMap, uv).r;
+        }
+        material.ambientOcclusion = occlusion;
+
+        vec3 emissive = materialParams.emissive * materialParams.emissiveIntensity;
+        if (materialParams.hasEmissiveMap) {
+            emissive *= texture(materialParams_emissiveMap, uv).rgb;
+        }
+        // The alpha is not opacity: it says whether the camera's exposure
+        // applies. One means the glow dims when the shot is stopped down,
+        // which is what makes an emissive surface sit in the scene rather
+        // than float on top of it.
+        material.emissive = vec4(emissive, 1.0);
     }
 }

@@ -26,16 +26,44 @@ fi
 # renderer has no file to find at runtime and no asset bundle to depend on.
 GENERATED="orbis_filament/Sources/orbis_filament_native/generated"
 mkdir -p "$GENERATED"
+# Surfaces are compiled once per blend mode, because blending is fixed
+# function state baked into the material and not something an instance can
+# override. Everything else about a material is a uniform, so this is the only
+# axis that multiplies.
+BLENDS="opaque transparent fade masked add"
+VARIANTS="lit unlit"
+
+# compile <source .mat> <generated name> [blend]
+compile() {
+  local source="$1" name="$2" blend="${3:-}"
+  local header="$GENERATED/${name}_material.h"
+  if [ -f "$header" ] && [ ! "$source" -nt "$header" ]; then
+    return
+  fi
+  echo "orbis_filament: compiling $name"
+  local input="$source"
+  if [ -n "$blend" ]; then
+    input="/tmp/orbis_src_$name.mat"
+    sed "s/^\( *blending *: *\)[a-z]*,/\1$blend,/" "$source" > "$input"
+  fi
+  "$FILAMENT/bin/matc" -a metal -p desktop -o "/tmp/orbis_$name.filamat" "$input"
+  (cd /tmp && xxd -i "orbis_$name.filamat") \
+    | sed "s/orbis_${name}_filamat/k${name}Material/g" > "$header"
+  rm -f "/tmp/orbis_$name.filamat" "/tmp/orbis_src_$name.mat"
+}
+
 for mat in materials/*.mat; do
   name="$(basename "$mat" .mat)"
-  header="$GENERATED/${name}_material.h"
-  if [ ! -f "$header" ] || [ "$mat" -nt "$header" ]; then
-    echo "orbis_filament: compiling $name.mat"
-    "$FILAMENT/bin/matc" -a metal -p desktop -o "/tmp/orbis_$name.filamat" "$mat"
-    (cd /tmp && xxd -i "orbis_$name.filamat") \
-      | sed "s/orbis_${name}_filamat/k${name}Material/g" > "$header"
-    rm -f "/tmp/orbis_$name.filamat"
-  fi
+  case " $VARIANTS " in
+    *" $name "*)
+      for blend in $BLENDS; do
+        compile "$mat" "${name}_${blend}" "$blend"
+      done
+      ;;
+    *)
+      compile "$mat" "$name"
+      ;;
+  esac
 done
 
 # One framework out of the SDK's own archives.

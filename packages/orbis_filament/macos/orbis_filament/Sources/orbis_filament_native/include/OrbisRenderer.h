@@ -47,8 +47,23 @@ NS_ASSUME_NONNULL_BEGIN
              colours:(const float *)colours
               meshes:(const int32_t *)meshes
                flags:(const int32_t *)flags
+           materials:(const int32_t *)materials
                paths:(NSArray<NSString *> *)paths
                count:(uint32_t)count;
+
+/// States what every material in the scene is made of.
+///
+/// Published whole each frame like everything else, and keyed the same way:
+/// a material keeps its instance for as long as its key is mentioned, and
+/// only the numbers that moved are written. Objects point at these by their
+/// position in this list, so this has to be applied before they are.
+- (void)applyMaterials:(const int64_t *)keys
+                 flags:(const int32_t *)flags
+                params:(const float *)params
+                  maps:(const int32_t *)maps
+          texturePaths:(NSArray<NSString *> *)texturePaths
+           textureSrgb:(const int32_t *)textureSrgb
+                 count:(uint32_t)count;
 
 /// States what is lighting the scene.
 ///

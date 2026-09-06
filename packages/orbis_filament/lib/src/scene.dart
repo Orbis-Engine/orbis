@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'material.dart';
 import 'post.dart';
 
 import 'package:vector_math/vector_math_64.dart';
@@ -27,6 +28,7 @@ class OrbisObject {
     required this.transform,
     required this.colour,
     this.mesh,
+    this.material,
     this.castShadows = true,
     this.receiveShadows = true,
     this.visible = true,
@@ -44,6 +46,20 @@ class OrbisObject {
   /// file that cannot be read is drawn as the cube, and the failure comes back
   /// from the publish rather than being logged where nobody sees it.
   final String? mesh;
+
+  /// The key of the material this object is made of, or null to be drawn in
+  /// [colour] on the default surface.
+  ///
+  /// A key rather than the material itself, because a material is shared —
+  /// one entry in [OrbisScene.materials] stands behind every object made of
+  /// it, and the renderer keeps one instance for the lot. Naming a key the
+  /// scene does not list falls back to [colour] rather than failing: a
+  /// material that has not finished loading should not take the object off
+  /// screen with it.
+  ///
+  /// On a mesh this *overrides* the materials the file brought with it, on
+  /// every primitive. Leave it null to keep them.
+  final int? material;
 
   /// Whether this object appears in other objects' shadows.
   ///
@@ -774,8 +790,10 @@ class OrbisScene {
     OrbisFog? fog,
     OrbisPrecipitation? precipitation,
     List<OrbisPopulation>? populations,
+    List<OrbisMaterial>? materials,
     OrbisPostProcess? post,
   }) : lights = lights ?? const [],
+       materials = materials ?? const [],
        post = post ?? OrbisPostProcess(),
        populations = populations ?? const [],
        sky = sky ?? OrbisSky(),
@@ -795,6 +813,16 @@ class OrbisScene {
   /// Every light in the scene. A scene with none is lit by its sky alone,
   /// which is dim and even and perfectly legitimate.
   final List<OrbisLight> lights;
+
+  /// Every material any object in the scene is made of.
+  ///
+  /// Listed here rather than held on the objects because materials are shared
+  /// and objects are not: a hundred crates made of the same wood are a
+  /// hundred entries in [objects] and one entry here, and the renderer builds
+  /// one shader instance for them all. Sending the list whole each frame also
+  /// means a material can be edited — a slider dragged — without anything
+  /// having to say which objects were affected.
+  final List<OrbisMaterial> materials;
 
   final OrbisCamera camera;
   final OrbisSky sky;
@@ -825,6 +853,15 @@ class OrbisScene {
     final colours = Float32List(count * 3);
     final meshes = Int32List(count);
     final flags = Int32List(count);
+    final objectMaterials = Int32List(count);
+
+    // Materials are referred to by their position in this frame's list, so
+    // the renderer never has to search. Keys are what survive between frames;
+    // indices are what travel in one.
+    final materialAt = <int, int>{};
+    for (var i = 0; i < materials.length; i++) {
+      materialAt[materials[i].key] = i;
+    }
 
     // Paths are sent once and referred to by index, because the same mesh is
     // usually on many objects and the message goes over the channel on every
@@ -843,12 +880,44 @@ class OrbisScene {
               return paths.length - 1;
             });
       flags[i] = object._flags;
+      final material = object.material;
+      objectMaterials[i] = material == null ? -1 : (materialAt[material] ?? -1);
       // Matrix4's storage is already column-major, which is what Filament's
       // mat4f expects, so this copies rather than transposes.
       transforms.setRange(i * 16, i * 16 + 16, object.transform.storage);
       colours[i * 3] = object.colour.x;
       colours[i * 3 + 1] = object.colour.y;
       colours[i * 3 + 2] = object.colour.z;
+    }
+
+    final materialCount = materials.length;
+    final materialKeys = Int64List(materialCount);
+    final materialFlags = Int32List(materialCount);
+    final materialParams = Float32List(materialCount * OrbisMaterial.stride);
+    final materialMaps = Int32List(materialCount * OrbisMaterial.mapCount);
+
+    // The same trick as mesh paths: an image is usually on several materials
+    // and always on several frames, so it travels once and is pointed at.
+    final texturePaths = <String>[];
+    final textureSrgb = <int>[];
+    final textureAt = <OrbisTexture, int>{};
+
+    for (var i = 0; i < materialCount; i++) {
+      final material = materials[i];
+      materialKeys[i] = material.key;
+      materialFlags[i] = material.flags;
+      material.pack(materialParams, i * OrbisMaterial.stride);
+      final maps = material.maps;
+      for (var m = 0; m < OrbisMaterial.mapCount; m++) {
+        final map = maps[m];
+        materialMaps[i * OrbisMaterial.mapCount + m] = map == null
+            ? -1
+            : textureAt.putIfAbsent(map, () {
+                texturePaths.add(map.path);
+                textureSrgb.add(map.srgb ? 1 : 0);
+                return texturePaths.length - 1;
+              });
+      }
     }
 
     final lightCount = lights.length;
@@ -873,6 +942,13 @@ class OrbisScene {
       'meshes': meshes,
       'objectFlags': flags,
       'meshPaths': paths,
+      'objectMaterials': objectMaterials,
+      'materialKeys': materialKeys,
+      'materialFlags': materialFlags,
+      'materialParams': materialParams,
+      'materialMaps': materialMaps,
+      'texturePaths': texturePaths,
+      'textureSrgb': Int32List.fromList(textureSrgb),
       'lightKeys': lightKeys,
       'lightKinds': lightKinds,
       'lightFlags': lightFlags,

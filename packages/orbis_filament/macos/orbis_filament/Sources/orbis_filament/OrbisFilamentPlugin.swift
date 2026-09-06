@@ -100,19 +100,51 @@ private final class Viewport {
     let colours = scene.count == 0 ? [Float(0)] : scene.colours
     let meshes = scene.count == 0 ? [Int32(-1)] : scene.meshes
     let flags = scene.count == 0 ? [Int32(0)] : scene.flags
+    let objectMaterials = scene.count == 0 ? [Int32(-1)] : scene.objectMaterials
+
+    // Materials first: an object published in the same breath may name one,
+    // and a material that does not exist yet would leave it on the default
+    // surface for a frame.
+    let materialCount = scene.materialKeys.count
+    let materialKeys = materialCount == 0 ? [Int64(0)] : scene.materialKeys
+    let materialFlags = materialCount == 0 ? [Int32(0)] : scene.materialFlags
+    let materialParams = materialCount == 0 ? [Float(0)] : scene.materialParams
+    let materialMaps = materialCount == 0 ? [Int32(-1)] : scene.materialMaps
+    let textureSrgb = scene.textureSrgb.isEmpty ? [Int32(0)] : scene.textureSrgb
+
+    materialKeys.withUnsafeBufferPointer { keyPointer in
+      materialFlags.withUnsafeBufferPointer { flagPointer in
+        materialParams.withUnsafeBufferPointer { paramPointer in
+          materialMaps.withUnsafeBufferPointer { mapPointer in
+            textureSrgb.withUnsafeBufferPointer { srgbPointer in
+              renderer.applyMaterials(keyPointer.baseAddress!,
+                                      flags: flagPointer.baseAddress!,
+                                      params: paramPointer.baseAddress!,
+                                      maps: mapPointer.baseAddress!,
+                                      texturePaths: scene.texturePaths,
+                                      textureSrgb: srgbPointer.baseAddress!,
+                                      count: UInt32(materialCount))
+            }
+          }
+        }
+      }
+    }
 
     keys.withUnsafeBufferPointer { keyPointer in
       transforms.withUnsafeBufferPointer { transformPointer in
         colours.withUnsafeBufferPointer { colourPointer in
           meshes.withUnsafeBufferPointer { meshPointer in
             flags.withUnsafeBufferPointer { flagPointer in
-              renderer.applyObjects(keyPointer.baseAddress!,
-                                    transforms: transformPointer.baseAddress!,
-                                    colours: colourPointer.baseAddress!,
-                                    meshes: meshPointer.baseAddress!,
-                                    flags: flagPointer.baseAddress!,
-                                    paths: scene.paths,
-                                    count: UInt32(scene.count))
+              objectMaterials.withUnsafeBufferPointer { materialPointer in
+                renderer.applyObjects(keyPointer.baseAddress!,
+                                      transforms: transformPointer.baseAddress!,
+                                      colours: colourPointer.baseAddress!,
+                                      meshes: meshPointer.baseAddress!,
+                                      flags: flagPointer.baseAddress!,
+                                      materials: materialPointer.baseAddress!,
+                                      paths: scene.paths,
+                                      count: UInt32(scene.count))
+              }
             }
           }
         }
@@ -237,6 +269,13 @@ private struct Scene {
   let meshes: [Int32]
   let flags: [Int32]
   let paths: [String]
+  let objectMaterials: [Int32]
+  let materialKeys: [Int64]
+  let materialFlags: [Int32]
+  let materialParams: [Float]
+  let materialMaps: [Int32]
+  let texturePaths: [String]
+  let textureSrgb: [Int32]
   let lightCount: Int
   let lightKeys: [Int64]
   let lightKinds: [Int32]
@@ -288,6 +327,8 @@ private struct Scene {
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
   private static let lightStride = 18
+  private static let materialStride = 18
+  private static let materialMaps = 5
   private static let fogStride = 16
   private static let precipitationStride = 12
   private static let skyStride = 34
@@ -349,6 +390,43 @@ private struct Scene {
     // defaults, not a scene that fails to arrive.
     self.postParams =
       (arguments["postParams"] as? FlutterStandardTypedData)?.floats ?? []
+
+    // Materials are optional the same way, so a host that never names one
+    // sends nothing rather than an empty array of everything. What arrives
+    // still has to agree with itself: every length below is walked as a
+    // pointer in C++, and every index is used to subscript.
+    let materialKeys =
+      (arguments["materialKeys"] as? FlutterStandardTypedData)?.int64s ?? []
+    let materialFlags =
+      (arguments["materialFlags"] as? FlutterStandardTypedData)?.int32s ?? []
+    let materialParams =
+      (arguments["materialParams"] as? FlutterStandardTypedData)?.floats ?? []
+    let materialMaps =
+      (arguments["materialMaps"] as? FlutterStandardTypedData)?.int32s ?? []
+    let texturePaths = arguments["texturePaths"] as? [String] ?? []
+    let textureSrgb =
+      (arguments["textureSrgb"] as? FlutterStandardTypedData)?.int32s ?? []
+    let objectMaterials =
+      (arguments["objectMaterials"] as? FlutterStandardTypedData)?.int32s
+        ?? [Int32](repeating: -1, count: count)
+
+    let materialCount = materialKeys.count
+    guard materialFlags.count == materialCount,
+          materialParams.count == materialCount * Scene.materialStride,
+          materialMaps.count == materialCount * Scene.materialMaps,
+          textureSrgb.count == texturePaths.count,
+          materialMaps.allSatisfy({ $0 < Int32(texturePaths.count) }),
+          objectMaterials.count == count,
+          objectMaterials.allSatisfy({ $0 < Int32(materialCount) })
+    else { return nil }
+
+    self.objectMaterials = objectMaterials
+    self.materialKeys = materialKeys
+    self.materialFlags = materialFlags
+    self.materialParams = materialParams
+    self.materialMaps = materialMaps
+    self.texturePaths = texturePaths
+    self.textureSrgb = textureSrgb
 
     self.count = count
     self.keys = keys
