@@ -24,6 +24,27 @@ enum OrbisShading {
   /// [OrbisMaterial.baseColour] tints it, so a screen can be dimmed or faded
   /// without touching the film.
   video,
+
+  /// Nothing but the shadows falling on it.
+  ///
+  /// For putting a rendered object onto something that is not rendered — a
+  /// photograph, a camera feed, a plate. The floor has to be in the scene,
+  /// because a shadow needs somewhere to land, but it must not be visible or
+  /// it would be a grey rectangle sitting on the photograph. So it draws its
+  /// shadow and nothing else.
+  ///
+  /// [OrbisMaterial.baseColour] is the colour a shadow lands in and how dark
+  /// it may get. Black at full alpha is the honest default: a shadow on a
+  /// pavement is the pavement with less light on it, not a grey wash over it.
+  ///
+  /// Blending is not a choice here — the surface is see-through by
+  /// definition, and [OrbisMaterial.blend] is ignored. Give the object
+  /// `receiveShadows`, or it catches nothing.
+  shadowCatcher;
+
+  /// Whether this surface is drawn with the same parameters as an ordinary
+  /// one. False for the two that have their own short list.
+  bool get isSurface => this == lit || this == unlit;
 }
 
 /// How a surface's pixels combine with what is already drawn.

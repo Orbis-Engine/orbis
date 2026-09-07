@@ -30,6 +30,7 @@ export 'src/graph.dart'
 export 'src/pipeline.dart'
     show
         OrbisDetail,
+        OrbisLighting,
         OrbisPipeline,
         OrbisResolution,
         OrbisShadowKind,

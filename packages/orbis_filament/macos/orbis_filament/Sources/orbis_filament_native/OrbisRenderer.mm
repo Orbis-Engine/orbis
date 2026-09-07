@@ -65,6 +65,7 @@
 #include "generated/video_add_material.h"
 #include "generated/mist_material.h"
 #include "generated/instanced_material.h"
+#include "generated/shadowcatcher_material.h"
 #include "generated/sky_material.h"
 #include "generated/rain_material.h"
 
@@ -328,6 +329,21 @@ struct Movie {
   uint64_t seen = 0;
 };
 
+/// How many floats one light takes on the wire.
+///
+/// Must match `OrbisLight.stride` on the Dart side and `lightStride` in the
+/// plugin. Used for both the offset into the message and the size of the copy
+/// kept per light, so those two cannot drift apart again — they already did
+/// once: the halo fields took a light from sixteen floats to eighteen, the
+/// kept copy followed and the offset did not, and every light after the first
+/// read a mixture of the one before it and itself.
+constexpr uint32_t kLightStride = 18;
+
+/// How many compiled surfaces there are: three shading models in five blend
+/// modes, and the shadow catcher on the end.
+constexpr int kShadowCatcherSurface = 15;
+constexpr int kSurfaceCount = 16;
+
 /// One light as the renderer holds it between frames.
 ///
 /// The whole parameter block is kept rather than the fields that matter,
@@ -337,7 +353,7 @@ struct Lit {
   utils::Entity entity;
   int32_t kind = -1;
   int32_t flags = -1;
-  float params[18] = {};
+  float params[kLightStride] = {};
   bool applied = false;
   uint64_t seen = 0;
 };
@@ -655,7 +671,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// The compiled surfaces, indexed by shading and blend mode. Built on
   /// first use: a scene of opaque lit objects should not compile the four
   /// blending variants it never draws.
-  filament::Material *_surfaces[15];
+  filament::Material *_surfaces[kSurfaceCount];
 
   /// Every material the host has named, by its key.
   std::unordered_map<int64_t, Surfaced> _materials;
@@ -2059,11 +2075,17 @@ static constexpr NSUInteger kMaxPostParams = 128;
 }
 
 
-/// Which of the ten compiled surfaces a set of flags asks for: shading
-/// first, then blend mode.
+/// Which compiled surface a set of flags asks for: shading first, then blend
+/// mode.
+///
+/// The shadow catcher sits outside that grid rather than adding a fourth row
+/// to it. Its blending is not a choice — a surface that is only its own
+/// shadow is see-through by definition — so five variants of it would be four
+/// packages compiled to be unreachable.
 - (int)surfaceIndexFor:(int32_t)flags {
   const int shading = flags & 3;
   const int blend = (flags >> 2) & 15;
+  if (shading == 3) return kShadowCatcherSurface;
   if (shading < 0 || shading > 2 || blend < 0 || blend > 4) return 0;
   return shading * 5 + blend;
 }
@@ -2075,7 +2097,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
 /// scene of opaque lit objects should not compile the four blending variants
 /// it never draws.
 - (Material *)surfaceAt:(int)index {
-  static const uint8_t *packages[15] = {
+  static const uint8_t *packages[kSurfaceCount] = {
       klit_opaqueMaterial,        klit_transparentMaterial,
       klit_fadeMaterial,          klit_maskedMaterial,
       klit_addMaterial,           kunlit_opaqueMaterial,
@@ -2083,9 +2105,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
       kunlit_maskedMaterial,      kunlit_addMaterial,
       kvideo_opaqueMaterial,      kvideo_transparentMaterial,
       kvideo_fadeMaterial,        kvideo_maskedMaterial,
-      kvideo_addMaterial,
+      kvideo_addMaterial,         kshadowcatcherMaterial,
   };
-  static const size_t sizes[15] = {
+  static const size_t sizes[kSurfaceCount] = {
       klit_opaqueMaterial_len,        klit_transparentMaterial_len,
       klit_fadeMaterial_len,          klit_maskedMaterial_len,
       klit_addMaterial_len,           kunlit_opaqueMaterial_len,
@@ -2093,9 +2115,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
       kunlit_maskedMaterial_len,      kunlit_addMaterial_len,
       kvideo_opaqueMaterial_len,      kvideo_transparentMaterial_len,
       kvideo_fadeMaterial_len,        kvideo_maskedMaterial_len,
-      kvideo_addMaterial_len,
+      kvideo_addMaterial_len,         kshadowcatcherMaterial_len,
   };
-  if (index < 0 || index >= 15) index = 0;
+  if (index < 0 || index >= kSurfaceCount) index = 0;
   if (_surfaces[index] == nullptr) {
     _surfaces[index] =
         Material::Builder().package(packages[index], sizes[index]).build(*_engine);
@@ -2264,6 +2286,15 @@ static constexpr NSUInteger kMaxPostParams = 128;
   const int shading = surface.flags & 3;
   const bool unlit = shading == 1;
   const TextureSampler sampler = [self samplerFor:surface.flags];
+
+  // A catcher has one parameter and no maps. Everything else the writer
+  // sets below would be a parameter this material does not declare, and
+  // Filament treats that as a mistake rather than ignoring it.
+  if (shading == 3) {
+    instance->setParameter("baseColor",
+                           float4{params[0], params[1], params[2], params[3]});
+    return;
+  }
 
   // A screen has its own short list: a tint, a transform, and the frame.
   if (shading == 2) {
@@ -3046,6 +3077,17 @@ static constexpr NSUInteger kMaxPostParams = 128;
   quality.hdrColorBuffer =
       (flags & 1) != 0 ? View::QualityLevel::ULTRA : View::QualityLevel::HIGH;
   _view->setRenderQuality(quality);
+
+  // Where the light grid is anchored. Only worth setting when the host has
+  // sent the two numbers — a shorter pipeline block is one from before they
+  // existed, and Filament's own defaults are the right answer for it.
+  if (_pipelineCount >= 18) {
+    const float near = _pipelineParams[16] > 0 ? _pipelineParams[16] : 5.0f;
+    // Far has to be beyond near or the grid has no depth to divide.
+    const float far =
+        _pipelineParams[17] > near ? _pipelineParams[17] : near + 1.0f;
+    _view->setDynamicLightingOptions(near, far);
+  }
   _view->setFrustumCullingEnabled((flags & 2) != 0);
   _view->setScreenSpaceRefractionEnabled((flags & 4) != 0);
 
@@ -3519,7 +3561,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   for (uint32_t i = 0; i < count; i++) {
     const int32_t kind = kinds[i];
-    const float *p = params + i * 16;
+    const float *p = params + i * kLightStride;
 
     // Filament shades one directional light per view. A second is dropped
     // rather than blended, and being told is the difference between a scene

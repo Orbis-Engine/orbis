@@ -31,6 +31,8 @@ mkdir -p "$GENERATED"
 # override. Everything else about a material is a uniform, so this is the only
 # axis that multiplies.
 BLENDS="opaque transparent fade masked add"
+# Compiled once each; everything else is a uniform. The shadow catcher is
+# deliberately not here: its blending is fixed by what it is.
 VARIANTS="lit unlit video"
 
 # compile <source .mat> <generated name> [blend]

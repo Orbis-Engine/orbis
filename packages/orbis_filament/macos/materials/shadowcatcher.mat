@@ -1,0 +1,36 @@
+// A surface that is nothing but the shadows falling on it.
+//
+// For putting a rendered object onto something that is not rendered: a
+// photograph, a camera feed, a plate. The floor it stands on has to be in the
+// scene — a shadow needs somewhere to land, and the renderer needs something
+// to work the contact out against — but that floor must not be visible, or it
+// would be a grey rectangle sitting on top of the photograph.
+//
+// So the surface draws its shadow and nothing else. Where nothing shadows it
+// there is nothing to see; where something does, the shadow is there at full
+// strength with the plate showing through it.
+//
+// `shadowMultiplier` is what does it: Filament multiplies the result by how
+// much light reaches the surface, so an unshadowed pixel comes out at zero
+// alpha and a shadowed one at the shadow's own depth. It forces the shading
+// model to unlit, which is right — a catcher is not lit, it is only darkened.
+material {
+    name : orbisShadowCatcher,
+    shadingModel : unlit,
+    blending : transparent,
+    shadowMultiplier : true,
+    doubleSided : false,
+    parameters : [
+        // The colour a shadow lands in, and how dark it is allowed to get.
+        // Black at full alpha is the honest default: a shadow on a pavement
+        // is the pavement with less light on it, not a grey wash over it.
+        { type : float4, name : baseColor }
+    ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.baseColor;
+    }
+}
