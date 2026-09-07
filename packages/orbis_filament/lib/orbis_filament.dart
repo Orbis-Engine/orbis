@@ -18,6 +18,7 @@ export 'src/material.dart'
 export 'src/pipeline.dart'
     show
         OrbisDetail,
+        OrbisLighting,
         OrbisPipeline,
         OrbisResolution,
         OrbisShadowKind,

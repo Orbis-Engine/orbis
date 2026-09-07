@@ -225,9 +225,9 @@ class OrbisGrading {
     Vector3? shadows,
     Vector3? midtones,
     Vector3? highlights,
-  })  : shadows = shadows ?? Vector3.all(1),
-        midtones = midtones ?? Vector3.all(1),
-        highlights = highlights ?? Vector3.all(1);
+  }) : shadows = shadows ?? Vector3.all(1),
+       midtones = midtones ?? Vector3.all(1),
+       highlights = highlights ?? Vector3.all(1);
 
   bool enabled;
 
@@ -277,12 +277,12 @@ class OrbisPostProcess {
     OrbisReflections? reflections,
     OrbisGrading? grading,
     this.dithering = true,
-  })  : bloom = bloom ?? OrbisBloom(),
-        depthOfField = depthOfField ?? OrbisDepthOfField(),
-        vignette = vignette ?? OrbisVignette(),
-        occlusion = occlusion ?? OrbisOcclusion(),
-        reflections = reflections ?? OrbisReflections(),
-        grading = grading ?? OrbisGrading();
+  }) : bloom = bloom ?? OrbisBloom(),
+       depthOfField = depthOfField ?? OrbisDepthOfField(),
+       vignette = vignette ?? OrbisVignette(),
+       occlusion = occlusion ?? OrbisOcclusion(),
+       reflections = reflections ?? OrbisReflections(),
+       grading = grading ?? OrbisGrading();
 
   /// The one switch over all of it, for comparing against the raw image.
   bool enabled;
@@ -364,7 +364,11 @@ class OrbisPostProcess {
     write(grading.vibrance);
     write(grading.temperature);
     write(grading.tint);
-    for (final channel in [grading.shadows, grading.midtones, grading.highlights]) {
+    for (final channel in [
+      grading.shadows,
+      grading.midtones,
+      grading.highlights,
+    ]) {
       write(channel.x);
       write(channel.y);
       write(channel.z);

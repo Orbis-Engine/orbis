@@ -157,6 +157,32 @@ class OrbisResolution {
   double sharpness;
 }
 
+/// How the renderer works out which lights reach a pixel.
+///
+/// A scene with two hundred lamps in it does not shade two hundred lights per
+/// pixel. The view is cut into cells running away from the camera, each light
+/// is put in the cells it actually reaches, and a pixel consults its own cell
+/// — so a lamp at the far end of a corridor costs nothing at this end.
+///
+/// What is worth setting is where that grid starts and stops, because the
+/// cells are not evenly spaced: they are fine near the camera and coarse far
+/// away, and these two numbers are where that distribution is anchored. A
+/// grid that stops at a hundred metres in a scene whose lights are two
+/// hundred metres out puts every distant light in one cell, which is the
+/// case this exists to avoid.
+class OrbisLighting {
+  OrbisLighting({this.clusterNear = 5, this.clusterFar = 100});
+
+  /// Where the cells start, in metres from the camera. Nearer than this is
+  /// one cell, which is the right answer for the few metres in front of a
+  /// face.
+  double clusterNear;
+
+  /// Where they stop, in metres. Everything beyond is one cell, so this wants
+  /// to be about as far as the furthest light that matters.
+  double clusterFar;
+}
+
 /// How a frame gets drawn.
 ///
 /// One pipeline, not a choice of them. Every frame goes the same way: shadow
@@ -179,12 +205,14 @@ class OrbisPipeline {
   OrbisPipeline({
     OrbisShadows? shadows,
     OrbisResolution? resolution,
+    OrbisLighting? lighting,
     this.samples = 1,
     this.precise = false,
     this.culling = true,
     this.refraction = true,
-  })  : shadows = shadows ?? OrbisShadows(),
-        resolution = resolution ?? OrbisResolution();
+  }) : shadows = shadows ?? OrbisShadows(),
+       lighting = lighting ?? OrbisLighting(),
+       resolution = resolution ?? OrbisResolution();
 
   /// The pipeline at one of the four named settings.
   factory OrbisPipeline.at(OrbisDetail detail) {
@@ -225,6 +253,7 @@ class OrbisPipeline {
 
   final OrbisShadows shadows;
   final OrbisResolution resolution;
+  final OrbisLighting lighting;
 
   /// How many samples an edge is worked out from, before any of the image
   /// work happens. One is none.
@@ -250,7 +279,7 @@ class OrbisPipeline {
   bool refraction;
 
   /// How many floats [packed] holds.
-  static const int stride = 16;
+  static const int stride = 18;
 
   /// Every number, in the order the renderer reads them.
   Float32List get packed {
@@ -273,6 +302,8 @@ class OrbisPipeline {
     out[13] = resolution.sharpness;
     out[14] = samples.toDouble();
     out[15] = (precise ? 1 : 0) + (culling ? 2 : 0) + (refraction ? 4 : 0);
+    out[16] = lighting.clusterNear;
+    out[17] = lighting.clusterFar;
     return out;
   }
 }
