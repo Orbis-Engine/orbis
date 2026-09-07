@@ -6,6 +6,8 @@
 library;
 
 export 'src/orbis_view.dart' show OrbisView;
+export 'src/bvh.dart' show OrbisBounds, OrbisBvh, OrbisVolume;
+export 'src/detail.dart' show OrbisDetailState, OrbisLod, OrbisStep;
 export 'src/material.dart'
     show
         OrbisBlend,

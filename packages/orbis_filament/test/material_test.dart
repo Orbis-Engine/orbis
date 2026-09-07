@@ -13,26 +13,26 @@ void main() {
     return OrbisScene(
       objects: objects,
       materials: materials,
-      camera: OrbisCamera(
-        position: Vector3(0, 2, 6),
-        target: Vector3.zero(),
-      ),
+      camera: OrbisCamera(position: Vector3(0, 2, 6), target: Vector3.zero()),
     );
   }
 
   OrbisObject objectOn(int key, {int? material}) => OrbisObject(
-        key: key,
-        material: material,
-        transform: Matrix4.identity(),
-        colour: Vector3(1, 1, 1),
-      );
+    key: key,
+    material: material,
+    transform: Matrix4.identity(),
+    colour: Vector3(1, 1, 1),
+  );
 
   test('a material with nothing said about it still draws something', () {
     const material = OrbisMaterial(key: 1);
     expect(material.baseColour.w, 1.0, reason: 'opaque');
     expect(material.metallic, 0.0);
-    expect(material.roughness, greaterThan(0.0),
-        reason: 'a perfectly smooth surface flickers');
+    expect(
+      material.roughness,
+      greaterThan(0.0),
+      reason: 'a perfectly smooth surface flickers',
+    );
     expect(material.tiling.x, 1.0);
     expect(material.maps, everyElement(isNull));
   });
@@ -91,12 +91,14 @@ void main() {
     expect(indices[2], 0);
   });
 
-  test('naming a material the scene does not list falls back rather than fails',
-      () {
-    final scene = sceneOf([objectOn(1, material: 999)], const []);
-    final indices = scene.toMessage(0)['objectMaterials']! as Int32List;
-    expect(indices[0], -1);
-  });
+  test(
+    'naming a material the scene does not list falls back rather than fails',
+    () {
+      final scene = sceneOf([objectOn(1, material: 999)], const []);
+      final indices = scene.toMessage(0)['objectMaterials']! as Int32List;
+      expect(indices[0], -1);
+    },
+  );
 
   test('an image on several materials travels once', () {
     const shared = OrbisTexture('/tmp/one.png');
@@ -183,22 +185,25 @@ void main() {
     final message = scene.toMessage(0);
 
     expect((message['materialVideos']! as Int32List)[0], 1);
-    expect((message['materialVideos']! as Int32List)[1], -1,
-        reason: 'a video the scene does not list');
-    expect((message['materialVideos']! as Int32List)[2], -1,
-        reason: 'not a screen at all');
+    expect(
+      (message['materialVideos']! as Int32List)[1],
+      -1,
+      reason: 'a video the scene does not list',
+    );
+    expect(
+      (message['materialVideos']! as Int32List)[2],
+      -1,
+      reason: 'not a screen at all',
+    );
     expect(message['videoPaths'], ['/tmp/a.mp4', '/tmp/b.mp4']);
   });
 
   test('a seek only counts when its token moves', () {
     OrbisScene sceneWith(OrbisVideo video) => OrbisScene(
-          objects: const [],
-          videos: [video],
-          camera: OrbisCamera(
-            position: Vector3(0, 0, 5),
-            target: Vector3.zero(),
-          ),
-        );
+      objects: const [],
+      videos: [video],
+      camera: OrbisCamera(position: Vector3(0, 0, 5), target: Vector3.zero()),
+    );
 
     final still = sceneWith(const OrbisVideo(key: 1, path: '/tmp/a.mp4'));
     final params = still.toMessage(0)['videoParams']! as Float32List;

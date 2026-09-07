@@ -14,7 +14,7 @@ void main() {
 
   test('the four named settings differ only in how much, not in what', () {
     final tiers = [
-      for (final detail in OrbisDetail.values) OrbisPipeline.at(detail)
+      for (final detail in OrbisDetail.values) OrbisPipeline.at(detail),
     ];
     // Nothing appears or disappears between them: a scene authored for one is
     // the same scene on all four.
@@ -35,8 +35,11 @@ void main() {
       OrbisDetail.high,
       OrbisDetail.ultra,
     ]) {
-      expect(OrbisPipeline.at(detail).resolution.adaptive, isFalse,
-          reason: '${detail.label} holds its resolution');
+      expect(
+        OrbisPipeline.at(detail).resolution.adaptive,
+        isFalse,
+        reason: '${detail.label} holds its resolution',
+      );
     }
   });
 
@@ -71,8 +74,11 @@ void main() {
   test('the view flags pack together', () {
     expect(OrbisPipeline().packed[15], 6, reason: 'culling and refraction');
     expect(
-      OrbisPipeline(precise: true, culling: false, refraction: false)
-          .packed[15],
+      OrbisPipeline(
+        precise: true,
+        culling: false,
+        refraction: false,
+      ).packed[15],
       1,
     );
   });

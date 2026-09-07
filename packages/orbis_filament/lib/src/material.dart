@@ -164,10 +164,10 @@ class OrbisMaterial {
     this.metallicRoughnessMap,
     this.occlusionMap,
     this.emissiveMap,
-  })  : _baseColour = baseColour,
-        _emissive = emissive,
-        _tiling = tiling,
-        _offset = offset;
+  }) : _baseColour = baseColour,
+       _emissive = emissive,
+       _tiling = tiling,
+       _offset = offset;
 
   /// This material's identity, stable for as long as it exists — the same
   /// contract as an object's key, and for the same reason. A renderer that
@@ -284,12 +284,12 @@ class OrbisMaterial {
 
   /// The maps in the order the renderer expects them.
   List<OrbisTexture?> get maps => [
-        baseColourMap,
-        normalMap,
-        metallicRoughnessMap,
-        occlusionMap,
-        emissiveMap,
-      ];
+    baseColourMap,
+    normalMap,
+    metallicRoughnessMap,
+    occlusionMap,
+    emissiveMap,
+  ];
 
   /// How many maps a material has room for.
   static const int mapCount = 5;

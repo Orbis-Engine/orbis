@@ -12,12 +12,7 @@ import 'scene.dart';
 /// the whole point of routing Filament through the texture registry rather
 /// than a platform view.
 class OrbisView extends StatefulWidget {
-  const OrbisView({
-    super.key,
-    this.scene,
-    this.onSceneNotes,
-    this.onViewport,
-  });
+  const OrbisView({super.key, this.scene, this.onSceneNotes, this.onViewport});
 
   /// What to draw. While this is null the renderer shows its own placeholder,
   /// so an unconfigured view is visibly working rather than merely blank.
@@ -46,10 +41,8 @@ class OrbisView extends StatefulWidget {
   /// display's business, and a renderer with twice the headroom it needs looks
   /// exactly the same there.
   static Future<double> gpuMilliseconds(int textureId) async {
-    final stats = await _OrbisViewState._channel.invokeMapMethod<String, Object?>(
-      'stats',
-      {'textureId': textureId},
-    );
+    final stats = await _OrbisViewState._channel
+        .invokeMapMethod<String, Object?>('stats', {'textureId': textureId});
     final cost = stats?['gpuMilliseconds'];
     return cost is num ? cost.toDouble() : 0;
   }
