@@ -130,6 +130,25 @@ NS_ASSUME_NONNULL_BEGIN
 /// rebuilds to say nothing happened.
 - (void)setPostProcess:(const float *)params count:(NSUInteger)count;
 
+/// Sets the place the scene is standing in: the light it casts, and the
+/// backdrop it is seen against.
+///
+/// `radiance` is a prefiltered cubemap as `cmgen` writes it — the mip chain is
+/// the reflection and the spherical harmonics in its metadata are the diffuse
+/// — and `skybox` is the backdrop. Either may be empty. `params` is four
+/// floats: how bright it is in lux, how far it is turned about the vertical in
+/// radians, whether the backdrop is drawn, and one spare.
+///
+/// Loaded once per path and kept, because a scene arrives on every frame and
+/// reading a cubemap at that rate is not a thing to do twice.
+///
+/// While one is set it overrules the flat ambient: a scene lit by a photograph
+/// of a room *and* by an even grey wash is lit twice, and the wash is the half
+/// that flattens it.
+- (void)setEnvironmentRadiance:(NSString *)radiance
+                        skybox:(NSString *)skybox
+                        params:(const float *)params;
+
 /// States how the frame is put together: which passes there are, what they
 /// draw into, and which layers of the scene each one draws.
 ///

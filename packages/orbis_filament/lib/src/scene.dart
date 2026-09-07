@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'material.dart';
+import 'environment.dart';
 import 'graph.dart';
 import 'pipeline.dart';
 import 'video.dart';
@@ -832,7 +833,9 @@ class OrbisScene {
     OrbisPostProcess? post,
     OrbisPipeline? pipeline,
     OrbisRenderGraph? graph,
+    OrbisEnvironment? environment,
   }) : lights = lights ?? const [],
+       environment = environment ?? OrbisEnvironment.none,
        pipeline = pipeline ?? OrbisPipeline(),
        graph = graph ?? OrbisRenderGraph.standard(),
        materials = materials ?? const [],
@@ -901,6 +904,14 @@ class OrbisScene {
   /// the renderer drew before graphs existed — so nothing pays for the
   /// generality until it is used.
   final OrbisRenderGraph graph;
+
+  /// The place the scene is standing in, as light and as a backdrop.
+  ///
+  /// Overrules [sky]'s flat ambient while it is set: a scene lit by a
+  /// photograph of a room and *also* by an even grey wash is a scene lit
+  /// twice, and the wash is the half that flattens it. The sky's own colour
+  /// and its body go on meaning what they meant.
+  final OrbisEnvironment environment;
 
   /// The highest layer an object may be on.
   ///
@@ -1084,6 +1095,9 @@ class OrbisScene {
       'skyEnabled': sky.drawn,
       'postParams': post.packed,
       'pipelineParams': pipeline.packed,
+      'environmentRadiance': environment.radiance ?? '',
+      'environmentSkybox': environment.skybox ?? '',
+      'environmentParams': environment.packed,
       'graphPasses': graph.packedPasses,
       'graphTargets': graph.packedTargets,
       'graphTargetNames': [for (final target in graph.targets) target.name],

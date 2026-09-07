@@ -106,8 +106,14 @@ private final class Viewport {
     let flags = scene.count == 0 ? [Int32(0)] : scene.flags
     let objectMaterials = scene.count == 0 ? [Int32(-1)] : scene.objectMaterials
 
-    // The graph first of all: a material may sample what a pass drew, and a
-    // target that does not exist yet reads as a texture that failed to load.
+    // The place before anything in it, so that the first frame drawn with a
+    // new environment is lit by it rather than by the one before.
+    renderer.setEnvironmentRadiance(scene.environmentRadiance,
+                                    skybox: scene.environmentSkybox,
+                                    params: scene.environmentParams)
+
+    // The graph next: a material may sample what a pass drew, and a target
+    // that does not exist yet reads as a texture that failed to load.
     let graphPasses = scene.graphPasses.isEmpty ? [Float(0)] : scene.graphPasses
     let graphTargets =
       scene.graphTargets.isEmpty ? [Float(0)] : scene.graphTargets
@@ -353,6 +359,12 @@ private struct Scene {
   let postParams: [Float]
   let pipelineParams: [Float]
 
+  /// The place the scene is standing in: a baked cubemap for the light, one
+  /// for the backdrop, and how bright and how turned they are.
+  let environmentRadiance: String
+  let environmentSkybox: String
+  let environmentParams: [Float]
+
   /// How the frame is put together: the passes, already in the order they
   /// run, the targets between them, and what those targets are called.
   let graphPasses: [Float]
@@ -386,6 +398,7 @@ private struct Scene {
 
   /// How many floats a graph pass and a graph target take. Must match
   /// OrbisRenderGraph on the Dart side and the constants in the renderer.
+  fileprivate static let environmentStride = 4
   fileprivate static let passStride = 12
   fileprivate static let targetStride = 6
   private static let materialStride = 19
@@ -454,6 +467,20 @@ private struct Scene {
       (arguments["postParams"] as? FlutterStandardTypedData)?.floats ?? []
     self.pipelineParams =
       (arguments["pipelineParams"] as? FlutterStandardTypedData)?.floats ?? []
+
+    // An environment is optional, and a short params array is a read past the
+    // end in C++ rather than a dimmer scene here.
+    let environmentParams =
+      (arguments["environmentParams"] as? FlutterStandardTypedData)?.floats ?? []
+    if environmentParams.count == Scene.environmentStride {
+      self.environmentRadiance = arguments["environmentRadiance"] as? String ?? ""
+      self.environmentSkybox = arguments["environmentSkybox"] as? String ?? ""
+      self.environmentParams = environmentParams
+    } else {
+      self.environmentRadiance = ""
+      self.environmentSkybox = ""
+      self.environmentParams = [30000, 0, 1, 0]
+    }
 
     // The graph is optional in exactly the same way. What does have to hold
     // is that the rows are whole and that every target index a pass names is

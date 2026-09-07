@@ -33,6 +33,8 @@
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/TextureProvider.h>
 #include <gltfio/materials/uberarchive.h>
+#include <image/Ktx1Bundle.h>
+#include <ktxreader/Ktx1Reader.h>
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
 
@@ -694,6 +696,33 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// Target textures given up but not yet destroyed, with the material
   /// generation they were given up in.
   std::vector<RetiredTexture> _retiredTextures;
+
+  /// The place the scene is standing in, when a host has named one.
+  ///
+  /// Held apart from the flat ambient rather than replacing it, so that
+  /// clearing an environment puts back the sky the day cycle had been
+  /// writing rather than leaving the scene unlit.
+  filament::IndirectLight *_environmentLight;
+  filament::Texture *_environmentRadiance;
+  filament::Texture *_environmentSkyTexture;
+  filament::Skybox *_environmentSkybox;
+  std::string _environmentRadiancePath;
+  std::string _environmentSkyboxPath;
+  float _environmentParams[4];
+
+  /// The diffuse harmonics read off the radiance cubemap, kept because
+  /// Filament does not hand them back and the bundle they came from is freed
+  /// as soon as the driver has taken the pixels. Turning an environment or
+  /// dimming it rebuilds the light, and a rebuild without these is an
+  /// environment that lights reflections and nothing matte.
+  float3 _environmentHarmonics[9];
+  bool _environmentHasHarmonics;
+
+  /// The last flat ambient asked for, kept so it can be put back when an
+  /// environment is cleared. The day cycle writes this on every frame and
+  /// would otherwise have to be waited for.
+  float3 _ambientColour;
+  float _ambientIntensity;
 
   /// The graph as last received, so a scene republished sixty times a second
   /// only rebuilds views and render targets when something in it moved.
@@ -1415,6 +1444,15 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
 - (void)setAmbientColour:(float3)colour intensity:(float)intensity {
   if (_disposed) return;
+
+  // Recorded whatever happens, so clearing an environment puts back the sky
+  // the day cycle has been writing all along rather than an unlit scene.
+  _ambientColour = colour;
+  _ambientIntensity = intensity;
+
+  // An environment is already lighting this. Two indirect lights is one
+  // scene lit twice, and the flat one is the half that flattens it.
+  if (_environmentLight != nullptr) return;
 
   // Replaced rather than mutated: an IndirectLight's irradiance is fixed at
   // build time.
@@ -2394,6 +2432,210 @@ static constexpr NSUInteger kMaxPostParams = 128;
 /// configures the view or is remembered for the lights, which read it when
 /// they set their own shadow options — a cascade count is a property of the
 /// light that casts, but nobody wants to set it per light.
+/// Reads a cubemap `cmgen` baked, and the harmonics it wrote beside it.
+///
+/// Returns null and says why rather than throwing: an environment is an asset
+/// somebody typed a path to, and a scene that refuses to draw because the
+/// path was wrong is worse than one drawn by its lights alone.
+- (Texture *)cubemapAtPath:(NSString *)path
+                  harmonics:(float3 *)harmonics
+                   hasThose:(bool *)hasThose
+                       note:(NSString *)note {
+  *hasThose = false;
+
+  NSData *data = [NSData dataWithContentsOfFile:path];
+  if (data == nil) {
+    _assetNotes[note] = [NSString stringWithFormat:@"%@ could not be read.",
+                                          path.lastPathComponent];
+    return nullptr;
+  }
+
+  // The bundle owns the pixels and has to outlive the upload, so it is handed
+  // to createTexture along with the callback that frees it once the driver has
+  // taken a copy. Freeing it here would be a race with the render thread.
+  auto *bundle = new image::Ktx1Bundle(
+      static_cast<const uint8_t *>(data.bytes),
+      static_cast<uint32_t>(data.length));
+
+  if (!bundle->isCubemap()) {
+    _assetNotes[note] = [NSString
+        stringWithFormat:
+            @"%@ is not a cubemap. cmgen writes one; a flat image will not do.",
+            path.lastPathComponent];
+    delete bundle;
+    return nullptr;
+  }
+
+  *hasThose = bundle->getSphericalHarmonics(harmonics);
+
+  Texture *texture = ktxreader::Ktx1Reader::createTexture(
+      _engine, *bundle, false,
+      [](void *userdata) {
+        delete static_cast<image::Ktx1Bundle *>(userdata);
+      },
+      bundle);
+  if (texture == nullptr) {
+    _assetNotes[note] =
+        [NSString stringWithFormat:@"%@ is not a KTX this build can read.",
+                                   path.lastPathComponent];
+    delete bundle;
+  }
+  return texture;
+}
+
+- (void)setEnvironmentRadiance:(NSString *)radiance
+                        skybox:(NSString *)skybox
+                        params:(const float *)params {
+  if (_disposed || _engine == nullptr) return;
+
+  const std::string wantedRadiance(radiance.UTF8String);
+  const std::string wantedSkybox(skybox.UTF8String);
+  const bool sameFiles = wantedRadiance == _environmentRadiancePath &&
+                         wantedSkybox == _environmentSkyboxPath;
+
+  // The numbers can move without the files changing — an environment being
+  // turned, or brought up and down — and rebuilding a cubemap for that would
+  // be reading a file off disk on every frame of a drag.
+  if (sameFiles &&
+      memcmp(params, _environmentParams, sizeof(_environmentParams)) == 0) {
+    return;
+  }
+
+  const bool onlyNumbersMoved = sameFiles && _environmentRadiance != nullptr;
+  memcpy(_environmentParams, params, sizeof(_environmentParams));
+
+  if (onlyNumbersMoved) {
+    [self rebuildEnvironmentLight];
+    if (_environmentSkybox != nullptr) {
+      _scene->setSkybox(params[2] != 0.0f ? _environmentSkybox : _skybox);
+    }
+    return;
+  }
+
+  [self releaseEnvironment];
+  _environmentRadiancePath = wantedRadiance;
+  _environmentSkyboxPath = wantedSkybox;
+
+  if (!wantedRadiance.empty()) {
+    float3 harmonics[9];
+    bool hasHarmonics = false;
+    _environmentRadiance = [self cubemapAtPath:radiance
+                                     harmonics:harmonics
+                                      hasThose:&hasHarmonics
+                                          note:@"environment"];
+    if (_environmentRadiance != nullptr) {
+      auto builder = IndirectLight::Builder();
+      builder.reflections(_environmentRadiance);
+      _environmentHasHarmonics = hasHarmonics;
+      if (hasHarmonics) {
+        for (int i = 0; i < 9; i++) _environmentHarmonics[i] = harmonics[i];
+        // Three bands, which is what cmgen writes and what a diffuse
+        // response actually needs: nine coefficients describe every low
+        // frequency a matte surface can tell apart.
+        builder.irradiance(3, harmonics);
+      } else {
+        _assetNotes[@"environment"] =
+            @"This cubemap has no baked harmonics, so nothing matte is lit by "
+            @"it. Bake it with cmgen rather than converting it by hand.";
+      }
+      _environmentLight = builder.intensity(_environmentParams[0])
+                              .rotation(mat3f::rotation(_environmentParams[1],
+                                                        float3{0, 1, 0}))
+                              .build(*_engine);
+    }
+  }
+
+  if (!wantedSkybox.empty()) {
+    float3 unused[9];
+    bool ignored = false;
+    _environmentSkyTexture = [self cubemapAtPath:skybox
+                                       harmonics:unused
+                                        hasThose:&ignored
+                                            note:@"skybox"];
+    if (_environmentSkyTexture != nullptr) {
+      _environmentSkybox = Skybox::Builder()
+                               .environment(_environmentSkyTexture)
+                               .showSun(false)
+                               .build(*_engine);
+    }
+  }
+
+  if (_environmentLight != nullptr) {
+    // The flat ambient steps aside rather than being blended with: a scene
+    // lit by a photograph of a room and by an even wash is lit twice.
+    if (_ambient != nullptr) {
+      _engine->destroy(_ambient);
+      _ambient = nullptr;
+    }
+    _scene->setIndirectLight(_environmentLight);
+  } else {
+    // Nothing loaded, so the sky the day cycle has been writing goes back.
+    [self setAmbientColour:_ambientColour intensity:_ambientIntensity];
+  }
+
+  if (_environmentSkybox != nullptr && _environmentParams[2] != 0.0f) {
+    _scene->setSkybox(_environmentSkybox);
+  } else if (_skybox != nullptr) {
+    _scene->setSkybox(_skybox);
+  }
+}
+
+/// Builds the indirect light again for a change of brightness or rotation.
+///
+/// Rather than mutated: an IndirectLight's intensity and rotation are fixed
+/// when it is built. The cubemap behind it is not rebuilt, which is the
+/// expensive half.
+- (void)rebuildEnvironmentLight {
+  if (_environmentRadiance == nullptr) return;
+
+  IndirectLight *previous = _environmentLight;
+
+  auto builder = IndirectLight::Builder();
+  builder.reflections(_environmentRadiance);
+  // From the copy kept when the file was read. The bundle is long gone and
+  // Filament does not hand harmonics back, so this is the only place they
+  // survive.
+  if (_environmentHasHarmonics) {
+    builder.irradiance(3, _environmentHarmonics);
+  }
+
+  IndirectLight *rebuilt =
+      builder.intensity(_environmentParams[0])
+          .rotation(mat3f::rotation(_environmentParams[1], float3{0, 1, 0}))
+          .build(*_engine);
+
+  _scene->setIndirectLight(rebuilt);
+  if (previous != nullptr) _engine->destroy(previous);
+  _environmentLight = rebuilt;
+}
+
+/// Gives back everything an environment was holding.
+- (void)releaseEnvironment {
+  if (_engine == nullptr) return;
+
+  if (_environmentLight != nullptr) {
+    _scene->setIndirectLight(nullptr);
+    _engine->destroy(_environmentLight);
+    _environmentLight = nullptr;
+  }
+  if (_environmentSkybox != nullptr) {
+    if (_skybox != nullptr) _scene->setSkybox(_skybox);
+    _engine->destroy(_environmentSkybox);
+    _environmentSkybox = nullptr;
+  }
+  if (_environmentRadiance != nullptr) {
+    _engine->destroy(_environmentRadiance);
+    _environmentRadiance = nullptr;
+  }
+  if (_environmentSkyTexture != nullptr) {
+    _engine->destroy(_environmentSkyTexture);
+    _environmentSkyTexture = nullptr;
+  }
+  _environmentRadiancePath.clear();
+  _environmentSkyboxPath.clear();
+  _environmentHasHarmonics = false;
+}
+
 - (void)setRenderGraph:(const float *)passes
                  count:(uint32_t)count
                targets:(const float *)targets
@@ -2421,6 +2663,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
   _graphTargetNames = std::move(targetNames);
 
   [self releaseGraph];
+  [self releaseEnvironment];
 
   // Nothing is bound to anything any more, so whatever is still retired can
   // go — and has to, because Filament asserts on a texture outliving its
