@@ -91,7 +91,10 @@ class UiBuilder {
   ];
 
   /// Builds one node and everything under it.
-  Widget build(UiNode node, [List<int> path = const []]) {
+  ///
+  /// [canGrow] false when the parent has worked out that it cannot hand out
+  /// the space a `flex-1` asks for — see [_container].
+  Widget build(UiNode node, [List<int> path = const [], bool canGrow = true]) {
     final style = styleOf(node);
     final inherited = TextStyle(
       color: style.colour,
@@ -127,7 +130,7 @@ class UiBuilder {
     // Growing is a thing the *parent* does with a child, so it is applied
     // here rather than inside the child's own layout.
     final grow = style.grow;
-    if (grow != null && grow > 0) {
+    if (canGrow && grow != null && grow > 0) {
       widget = Expanded(flex: grow.round().clamp(1, 1000), child: widget);
     }
 
@@ -252,23 +255,64 @@ class UiBuilder {
           _ => node.children.length > 1 ? 'column' : 'none',
         };
 
-    final children = [
-      for (var i = 0; i < node.children.length; i++)
-        build(node.children[i], [...path, i]),
-    ];
-
-    if (children.isEmpty) return const SizedBox.shrink();
+    if (node.children.isEmpty) return const SizedBox.shrink();
 
     if (direction == 'stack') {
       return Stack(
         clipBehavior: (style.clip ?? false) ? Clip.hardEdge : Clip.none,
-        children: children,
+        children: [
+          for (var i = 0; i < node.children.length; i++)
+            build(node.children[i], [...path, i]),
+        ],
       );
     }
 
-    if (direction == 'none' && children.length == 1) return children.single;
+    if (direction == 'none' && node.children.length == 1) {
+      return build(node.children.single, [...path, 0]);
+    }
 
-    final spaced = _spaced(children, style.gap ?? 0, direction == 'row');
+    // A child asking to grow is asking for a share of space its parent may
+    // not have. A row inside a stack with only a `left` is handed no width at
+    // all, and a flex with a flexible child and nothing to divide does not lay
+    // out badly — it throws, and the rest of the frame's layout is abandoned
+    // with it. Somebody who split a container into four columns and got a
+    // blank canvas met exactly that.
+    //
+    // So it is measured first, and the children keep their natural size when
+    // there is nothing to share. What that shows is a row that did not
+    // stretch: wrong, but legible, and fixable by whoever is looking at it.
+    final wantsToGrow = node.children.any(
+      (child) => (styleOf(child).grow ?? 0) > 0,
+    );
+    if (!wantsToGrow) return _flex(node, style, path, direction == 'row', true);
+
+    return LayoutBuilder(
+      builder: (context, constraints) => _flex(
+        node,
+        style,
+        path,
+        direction == 'row',
+        direction == 'row'
+            ? constraints.hasBoundedWidth
+            : constraints.hasBoundedHeight,
+      ),
+    );
+  }
+
+  /// The row or column itself, with its children built to suit.
+  Widget _flex(
+    UiNode node,
+    UiStyle style,
+    List<int> path,
+    bool horizontal,
+    bool canGrow,
+  ) {
+    final children = [
+      for (var i = 0; i < node.children.length; i++)
+        build(node.children[i], [...path, i], canGrow),
+    ];
+
+    final spaced = _spaced(children, style.gap ?? 0, horizontal);
     final scroll = style.scroll;
 
     // Lining up on the baseline needs to be told which baseline, and Flutter
@@ -278,19 +322,25 @@ class UiBuilder {
         ? TextBaseline.alphabetic
         : null;
 
-    final flex = direction == 'row'
+    // Shrink-wrapped when there is nothing to fill: filling a maximum that is
+    // infinite is the same unbounded problem one step along.
+    final mainSize = scroll == null && canGrow
+        ? MainAxisSize.max
+        : MainAxisSize.min;
+
+    final flex = horizontal
         ? Row(
             mainAxisAlignment: _main(style.mainAxis),
             crossAxisAlignment: _cross(style.crossAxis),
             textBaseline: baseline,
-            mainAxisSize: scroll == null ? MainAxisSize.max : MainAxisSize.min,
+            mainAxisSize: mainSize,
             children: spaced,
           )
         : Column(
             mainAxisAlignment: _main(style.mainAxis),
             crossAxisAlignment: _cross(style.crossAxis),
             textBaseline: baseline,
-            mainAxisSize: scroll == null ? MainAxisSize.max : MainAxisSize.min,
+            mainAxisSize: mainSize,
             children: spaced,
           );
 

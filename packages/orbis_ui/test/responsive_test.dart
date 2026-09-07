@@ -111,11 +111,27 @@ void main() {
       expect(columns.last.right, closeTo(950, 0.001));
     });
 
+    test('a narrow screen gets fewer columns, not thinner ones', () {
+      // Twelve seven-pixel slivers across a phone is not a grid anybody can
+      // lay out against — and it reads as the layout rather than as a measure
+      // of it, which is how somebody comes to think their four-column split
+      // drew twelve.
+      const canvas = UiCanvas(columns: 12, gutter: 24);
+      expect(canvas.columnsAt(1920), 12);
+      expect(canvas.columnsAt(390), 4);
+
+      // A divisor every time, so a narrower grid is a subset of the wider
+      // one's lines and something lined up on a desktop column still is on a
+      // phone.
+      for (final width in [320.0, 480.0, 640.0, 900.0, 1280.0, 3840.0]) {
+        expect(12 % canvas.columnsAt(width), 0);
+      }
+    });
+
     test('numbers that do not leave room draw nothing', () {
-      // Twelve columns and a wide gutter on a phone. Better to draw no grid
-      // than columns of negative width.
-      const canvas = UiCanvas(columns: 12, gutter: 80);
-      expect(canvas.columnsAcross(390), isEmpty);
+      // Narrower than a single column may be drawn.
+      const canvas = UiCanvas(columns: 1, gutter: 0);
+      expect(canvas.columnsAcross(40), isEmpty);
     });
 
     test('a position near a column edge snaps to it', () {

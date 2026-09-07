@@ -35,8 +35,10 @@ void main() {
     test('colours come from the palette, or are written out', () {
       expect(utilities.parse('bg-slate-800').background, isNotNull);
       expect(utilities.parse('text-ember-500').colour, const Color(0xFFC25E22));
-      expect(utilities.parse('bg-[#123456]').background,
-          const Color(0xFF123456));
+      expect(
+        utilities.parse('bg-[#123456]').background,
+        const Color(0xFF123456),
+      );
       expect(utilities.parse('bg-nonesuch-500').background, isNull);
     });
 
@@ -60,8 +62,10 @@ void main() {
       final style = utilities.parse('p-4 rounded-lg wobbly bg-slate-800');
       expect(style.paddingTop, 16);
       expect(style.background, isNotNull);
-      expect(utilities.unknownIn('p-4 wobbly nonsense-9'),
-          ['wobbly', 'nonsense-9']);
+      expect(utilities.unknownIn('p-4 wobbly nonsense-9'), [
+        'wobbly',
+        'nonsense-9',
+      ]);
     });
 
     test('opacity is a percentage, because that is how it is written', () {
@@ -79,7 +83,12 @@ void main() {
 
       final four = css.parse('padding: 1px 2px 3px 4px');
       expect(
-        [four.paddingTop, four.paddingRight, four.paddingBottom, four.paddingLeft],
+        [
+          four.paddingTop,
+          four.paddingRight,
+          four.paddingBottom,
+          four.paddingLeft,
+        ],
         [1, 2, 3, 4],
       );
     });
@@ -89,9 +98,14 @@ void main() {
       expect(css.parse('color: #1a2b3c').colour, const Color(0xFF1A2B3C));
       // CSS puts the alpha last; Dart puts it first.
       expect(css.parse('color: #11223380').colour, const Color(0x80112233));
-      expect(css.parse('color: rgb(255, 0, 0)').colour, const Color(0xFFFF0000));
-      expect(css.parse('color: rgba(0, 0, 0, 0.5)').colour,
-          const Color(0x80000000));
+      expect(
+        css.parse('color: rgb(255, 0, 0)').colour,
+        const Color(0xFFFF0000),
+      );
+      expect(
+        css.parse('color: rgba(0, 0, 0, 0.5)').colour,
+        const Color(0x80000000),
+      );
       expect(css.parse('color: slate-500').colour, isNotNull);
     });
 
@@ -128,11 +142,13 @@ void main() {
   group('the two notations together', () {
     test('CSS is laid over the classes rather than replacing them', () {
       final builder = UiBuilder();
-      final style = builder.styleOf(const UiNode(
-        type: 'box',
-        classes: 'p-4 bg-slate-800 rounded-lg',
-        css: 'padding: 24px',
-      ));
+      final style = builder.styleOf(
+        const UiNode(
+          type: 'box',
+          classes: 'p-4 bg-slate-800 rounded-lg',
+          css: 'padding: 24px',
+        ),
+      );
 
       // The one thing the CSS said wins; everything else the classes said
       // survives.

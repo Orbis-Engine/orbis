@@ -125,14 +125,44 @@ class UiCanvas {
   ({double left, double right}) gridSpanAcross(double ofWidth) =>
       (left: ofWidth * safeArea, right: ofWidth * (1 - safeArea));
 
+  /// The narrowest a column may be drawn before the grid gives up a division.
+  ///
+  /// Twelve columns across a phone is twelve seven-pixel slivers: not a grid
+  /// anybody can lay out against, and — worse — indistinguishable from the
+  /// layout it is meant to be measuring.
+  static const double minColumnWidth = 40;
+
+  /// How many columns the grid actually draws across a canvas [ofWidth] wide.
+  ///
+  /// The authored count where it fits, and otherwise the largest **divisor**
+  /// of it that does. A divisor rather than any smaller number so that every
+  /// narrower grid is a subset of the wider one's lines: twelve columns become
+  /// six, then four, then three, and a thing lined up on a desktop column is
+  /// still lined up on a phone one. Zero when even a single column will not
+  /// fit, which draws nothing rather than nonsense.
+  int columnsAt(double ofWidth) {
+    if (columns <= 0 || ofWidth <= 0) return 0;
+
+    final span = gridSpanAcross(ofWidth);
+    final usable = span.right - span.left;
+
+    for (var count = columns; count >= 1; count--) {
+      if (columns % count != 0) {
+        continue;
+      }
+      final each = (usable - gutter * (count - 1)) / count;
+      if (each >= minColumnWidth) return count;
+    }
+    return 0;
+  }
+
   /// Every column, left and right, across a canvas [ofWidth] wide.
   ///
-  /// Empty when the numbers do not leave room for a column, which is what a
-  /// twelve-column grid on a narrow phone with a wide gutter comes to. An
-  /// empty list draws nothing and snaps to nothing, rather than drawing
-  /// columns of negative width.
+  /// As many as [columnsAt] says fit. Empty when none do, which draws nothing
+  /// and snaps to nothing rather than drawing columns of negative width.
   List<({double left, double right})> columnsAcross(double ofWidth) {
-    if (columns <= 0 || ofWidth <= 0) return const [];
+    final columns = columnsAt(ofWidth);
+    if (columns == 0) return const [];
 
     final span = gridSpanAcross(ofWidth);
     final each = (span.right - span.left - gutter * (columns - 1)) / columns;
@@ -324,8 +354,9 @@ class UiDocument {
     } on FormatException {
       return null;
     }
-    if (parsed is! Map<String, Object?> || parsed['kind'] != marker)
+    if (parsed is! Map<String, Object?> || parsed['kind'] != marker) {
       return null;
+    }
 
     return UiDocument(
       name: parsed['name'] is String ? parsed['name']! as String : 'Interface',
