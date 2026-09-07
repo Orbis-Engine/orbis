@@ -184,6 +184,7 @@ class OrbisMaterial {
     this.wrap = OrbisWrap.repeat,
     this.filter = OrbisFilter.smooth,
     this.video,
+    this.screenMapped = false,
     this.baseColourMap,
     this.normalMap,
     this.metallicRoughnessMap,
@@ -289,6 +290,20 @@ class OrbisMaterial {
   /// Ignored by every other shading model.
   final int? video;
 
+  /// Whether [baseColourMap] is projected from the camera rather than wrapped
+  /// onto the surface.
+  ///
+  /// What turns a reflection target into a mirror. A reflection is drawn from
+  /// a camera behind the glass and belongs in the frame wherever the glass is
+  /// on screen, so it has to be sampled by where a pixel *is*. Sampled by the
+  /// surface's own coordinates it is a decal — the reflected world lying flat
+  /// on the floor, sliding about as the camera turns.
+  ///
+  /// Only [OrbisShading.unlit] honours it. A mirror carries its lighting in
+  /// the reflection it is showing, and lighting that a second time is lighting
+  /// it twice.
+  final bool screenMapped;
+
   /// Multiplied into [baseColour]. sRGB.
   final OrbisTexture? baseColourMap;
 
@@ -334,7 +349,8 @@ class OrbisMaterial {
       ((doubleSided ? 1 : 0) << 8) |
       ((depthWrite ? 1 : 0) << 9) |
       (wrap.index << 10) |
-      (filter.index << 12);
+      (filter.index << 12) |
+      (screenMapped ? 1 << 13 : 0);
 
   /// Writes this material's numbers into [out] at [at], in the fixed order
   /// the renderer reads them back.

@@ -15,8 +15,30 @@ material {
         { type : float,     name : emissiveIntensity },
         { type : float4,    name : uvTransform },
         { type : sampler2d, name : baseColorMap },
-        { type : bool,      name : hasBaseColorMap }
+        { type : bool,      name : hasBaseColorMap },
+
+        // Whether the base colour map is wrapped onto the surface or
+        // projected from the camera.
+        //
+        // What a mirror needs. A reflection is drawn from a camera behind the
+        // glass and lands in the frame where the glass is on screen, so it
+        // has to be sampled by where a pixel *is* rather than by where it sits
+        // on the surface. Sampled by the surface's own coordinates it is a
+        // decal: the reflected world lying flat on the floor, sliding about as
+        // the camera turns.
+        { type : bool,      name : screenMapped }
     ],
+    variables : [ screenPosition ],
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // Camera-relative, like everything else Filament hands out here, and
+        // the clip matrix expects it that way — so this is the same multiply
+        // it would be anywhere else.
+        material.screenPosition =
+            getClipFromWorldMatrix() * material.worldPosition;
+    }
 }
 
 fragment {
@@ -25,6 +47,16 @@ fragment {
 
         vec2 uv = getUV0() * materialParams.uvTransform.xy
                 + materialParams.uvTransform.zw;
+
+        if (materialParams.screenMapped) {
+            // The perspective divide is what turns a clip position into a
+            // place on the screen; doing it here rather than in the vertex
+            // shader is what keeps it correct across a large surface.
+            vec2 screen = variable_screenPosition.xy /
+                          variable_screenPosition.w;
+            uv = screen * 0.5 + 0.5;
+            uv.y = 1.0 - uv.y;
+        }
 
         vec4 base = materialParams.baseColor;
         if (materialParams.hasBaseColorMap) {

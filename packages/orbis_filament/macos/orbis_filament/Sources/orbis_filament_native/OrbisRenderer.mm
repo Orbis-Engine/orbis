@@ -1299,6 +1299,12 @@ static constexpr NSUInteger kMaxPostParams = 128;
 }
 
 - (void)setSkyEnabled:(BOOL)enabled params:(const float *)params {
+  // The third thing that wants to be the backdrop. An environment's cubemap
+  // is behind everything; this dome is geometry in front of it, so leaving it
+  // on hides a photographed sky completely — and there is nothing on screen
+  // to say which of the two is winning.
+  if (_showingEnvironmentSkybox) enabled = NO;
+
   if (_disposed) return;
 
   const bool showing = enabled;
@@ -2290,6 +2296,12 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   instance->setParameter("baseColor",
                          float4{params[0], params[1], params[2], params[3]});
+  if (unlit) {
+    // Projected from the camera rather than wrapped on the surface, which is
+    // what makes a reflection target a mirror instead of a decal.
+    instance->setParameter("screenMapped",
+                           ((surface.flags >> 13) & 1) != 0);
+  }
   instance->setParameter("emissive", float3{params[7], params[8], params[9]});
   instance->setParameter("emissiveIntensity", params[10]);
   instance->setParameter(
@@ -2600,7 +2612,12 @@ static constexpr NSUInteger kMaxPostParams = 128;
                                .environment(_environmentSkyTexture)
                                .showSun(false)
                                .build(*_engine);
+      if (_environmentSkybox == nullptr) {
+        _assetNotes[@"skybox"] =
+            @"The cubemap loaded but no backdrop could be built from it.";
+      }
     }
+
   }
 
   if (_environmentLight != nullptr) {
@@ -2618,6 +2635,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   _showingEnvironmentSkybox =
       _environmentSkybox != nullptr && _environmentParams[2] != 0.0f;
+
   if (_showingEnvironmentSkybox) {
     _scene->setSkybox(_environmentSkybox);
   } else if (_skybox != nullptr) {
