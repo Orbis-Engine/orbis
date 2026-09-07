@@ -130,6 +130,39 @@ NS_ASSUME_NONNULL_BEGIN
 /// rebuilds to say nothing happened.
 - (void)setPostProcess:(const float *)params count:(NSUInteger)count;
 
+/// States how the frame is put together: which passes there are, what they
+/// draw into, and which layers of the scene each one draws.
+///
+/// One pass into the frame is the whole of an ordinary frame and is what
+/// arrives when nobody has said otherwise, so a host that has never heard of
+/// a graph gets exactly the frame this drew before graphs existed.
+///
+/// `passes` is `count` rows of twelve floats: the kind, the target it writes
+/// as an index into `targets` or -1 for the frame, its layer mask, whether it
+/// clears, four target indices it reads, and a plane to reflect in. `targets`
+/// is `targetCount` rows of six: width, height, scale, whether it keeps
+/// depth, whether it keeps colour, and one spare.
+///
+/// Already in the order they run: the ordering falls out of what each pass
+/// reads, and that is worked out where the graph is written rather than here.
+/// A renderer that re-derived it would be a second implementation of the same
+/// rule, and the two would disagree the first time either changed.
+///
+/// Applied before materials, because a material may sample what a pass drew.
+- (void)setRenderGraph:(const float *)passes
+                 count:(uint32_t)count
+               targets:(const float *)targets
+           targetCount:(uint32_t)targetCount
+                 names:(NSArray<NSString *> *)names;
+
+/// What each pass of the last frame cost, in milliseconds, and how many
+/// renderables it submitted — two numbers per pass, in the order they ran.
+///
+/// Empty before the first frame. The names are not here: they are on the
+/// other side already, and sending the same strings sixty times a second to
+/// label numbers that arrive in a known order is work for nothing.
+@property(nonatomic, readonly) NSArray<NSNumber *> *passTimings;
+
 /// What recent frames cost the GPU, in milliseconds, or zero when the backend
 /// has not reported any yet.
 ///

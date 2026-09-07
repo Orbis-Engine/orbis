@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'material.dart';
+import 'graph.dart';
 import 'pipeline.dart';
 import 'video.dart';
 import 'post.dart';
@@ -34,6 +35,7 @@ class OrbisObject {
     this.castShadows = true,
     this.receiveShadows = true,
     this.visible = true,
+    this.layer = 0,
   });
 
   /// This object's identity, stable for as long as the object exists.
@@ -79,9 +81,29 @@ class OrbisObject {
   /// loaded, so showing it again costs a flag rather than a parse.
   final bool visible;
 
+  /// Which group of the scene this belongs to, from 0 to
+  /// [OrbisScene.maxLayer].
+  ///
+  /// What lets one scene serve several passes. A pass draws the layers it
+  /// names and no others, so the water can be left out of its own reflection,
+  /// the editor's gizmos out of a thumbnail, and a stand-in for an
+  /// off-screen object into a shadow pass and nowhere else.
+  ///
+  /// Zero for everything until somebody says otherwise, and a pass draws every
+  /// layer until it says otherwise, so a scene that has never heard of layers
+  /// behaves exactly as it did.
+  final int layer;
+
   /// The flag bits this object contributes to the message.
+  ///
+  /// The layer rides in the high bits rather than in an array of its own: it
+  /// is three bits per object, and a parallel array of them would be a fourth
+  /// buffer allocated, packed and crossed every frame to carry a byte.
   int get _flags =>
-      (castShadows ? 1 : 0) | (receiveShadows ? 2 : 0) | (visible ? 4 : 0);
+      (castShadows ? 1 : 0) |
+      (receiveShadows ? 2 : 0) |
+      (visible ? 4 : 0) |
+      (layer.clamp(0, OrbisScene.maxLayer) << 8);
 }
 
 /// The kinds of light a renderer actually implements.
@@ -421,13 +443,23 @@ class OrbisSky {
         : Vector3(0, 0, 1);
 
     return Float32List.fromList([
-      zenith.x, zenith.y, zenith.z,
-      horizon.x, horizon.y, horizon.z,
-      body.x, body.y, body.z,
-      bodyColour.x, bodyColour.y, bodyColour.z,
+      zenith.x,
+      zenith.y,
+      zenith.z,
+      horizon.x,
+      horizon.y,
+      horizon.z,
+      body.x,
+      body.y,
+      body.z,
+      bodyColour.x,
+      bodyColour.y,
+      bodyColour.z,
       bodySize,
       showBody ? 1 : 0,
-      clouds.colour.x, clouds.colour.y, clouds.colour.z,
+      clouds.colour.x,
+      clouds.colour.y,
+      clouds.colour.z,
       clouds.cover,
       clouds.altitude,
       clouds.thickness,
@@ -438,9 +470,12 @@ class OrbisSky {
       quality.marchSteps.toDouble(),
       quality.lightSteps.toDouble(),
       quality.erosion,
-      clouds.wind.x, clouds.wind.y,
+      clouds.wind.x,
+      clouds.wind.y,
       flash,
-      strike.x, strike.y, strike.z,
+      strike.x,
+      strike.y,
+      strike.z,
       flashSeed,
     ]);
   }
@@ -796,8 +831,10 @@ class OrbisScene {
     List<OrbisVideo>? videos,
     OrbisPostProcess? post,
     OrbisPipeline? pipeline,
+    OrbisRenderGraph? graph,
   }) : lights = lights ?? const [],
        pipeline = pipeline ?? OrbisPipeline(),
+       graph = graph ?? OrbisRenderGraph.standard(),
        materials = materials ?? const [],
        videos = videos ?? const [],
        post = post ?? OrbisPostProcess(),
@@ -855,6 +892,29 @@ class OrbisScene {
   /// place rather than to where somebody is standing in it: four views of one
   /// world should not each grade it differently.
   final OrbisPostProcess post;
+
+  /// How the frame is put together: which passes there are and what they draw
+  /// into.
+  ///
+  /// [pipeline] says how much of each step happens; this says which steps
+  /// there are. The default is one pass into the picture, which is the frame
+  /// the renderer drew before graphs existed — so nothing pays for the
+  /// generality until it is used.
+  final OrbisRenderGraph graph;
+
+  /// The highest layer an object may be on.
+  ///
+  /// Seven of them, because the renderer's own mask is eight bits and the
+  /// top one says whether a thing is drawn at all. Seven groups is more
+  /// than any scene here has wanted and few enough to stay one byte.
+  static const int maxLayer = 6;
+
+  /// The names of the passes that will run, in order.
+  ///
+  /// What a capture's timings line up against: the renderer sends back two
+  /// numbers per pass and this says which pass each pair belongs to, so the
+  /// names never have to cross.
+  List<String> get passNames => [for (final pass in graph.schedule) pass.name];
 
   /// Packs the scene into the flat arrays the channel carries.
   /// The whole scene, as the renderer takes it.
@@ -1024,6 +1084,9 @@ class OrbisScene {
       'skyEnabled': sky.drawn,
       'postParams': post.packed,
       'pipelineParams': pipeline.packed,
+      'graphPasses': graph.packedPasses,
+      'graphTargets': graph.packedTargets,
+      'graphTargetNames': [for (final target in graph.targets) target.name],
       // When the application reckons this is, in its own seconds.
       //
       // The renderer draws far more often than it is told anything, and works

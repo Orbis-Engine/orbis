@@ -34,6 +34,7 @@ class OrbisPopulation {
     this.revision = 0,
     this.castShadows = false,
     this.receiveShadows = true,
+    this.layer = 0,
   }) : assert(
          transforms.length == colours.length ~/ 3 * 16,
          'one transform of sixteen and one colour of three for each',
@@ -98,11 +99,22 @@ class OrbisPopulation {
   final bool castShadows;
   final bool receiveShadows;
 
+  /// Which group of the scene this belongs to, the same way an object has one.
+  ///
+  /// A population is one thing to the renderer, so its whole membership is on
+  /// one layer — which is the right grain: a forest is either in the
+  /// reflection or it is not.
+  final int layer;
+
   /// How many members there are.
   int get count => transforms.length ~/ 16;
 
   bool get isVisible => count > 0;
 
-  /// Bit flags, in the order the renderer reads them.
-  int get flags => (castShadows ? 1 : 0) | (receiveShadows ? 2 : 0);
+  /// Bit flags, in the order the renderer reads them. The layer rides in the
+  /// high bits, as it does for an object.
+  int get flags =>
+      (castShadows ? 1 : 0) |
+      (receiveShadows ? 2 : 0) |
+      (layer.clamp(0, 6) << 8);
 }

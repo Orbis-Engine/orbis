@@ -183,8 +183,8 @@ class OrbisPipeline {
     this.precise = false,
     this.culling = true,
     this.refraction = true,
-  })  : shadows = shadows ?? OrbisShadows(),
-        resolution = resolution ?? OrbisResolution();
+  }) : shadows = shadows ?? OrbisShadows(),
+       resolution = resolution ?? OrbisResolution();
 
   /// The pipeline at one of the four named settings.
   factory OrbisPipeline.at(OrbisDetail detail) {

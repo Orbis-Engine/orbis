@@ -58,10 +58,7 @@ void main() {
       ]).toMessage(1, sentRevisions: {1: 2, 2: 8});
 
       expect((message['populationChanged']! as Int32List).single, 2);
-      expect(
-        (message['populationTransforms']! as Float32List).length,
-        20 * 16,
-      );
+      expect((message['populationTransforms']! as Float32List).length, 20 * 16);
     });
 
     test('the changed buffers are packed in the order they are named', () {

@@ -15,6 +15,15 @@ export 'src/material.dart'
         OrbisShading,
         OrbisTexture,
         OrbisWrap;
+export 'src/graph.dart'
+    show
+        OrbisFrameCapture,
+        OrbisGraphProblem,
+        OrbisPass,
+        OrbisPassKind,
+        OrbisPassTiming,
+        OrbisRenderGraph,
+        OrbisTarget;
 export 'src/pipeline.dart'
     show
         OrbisDetail,

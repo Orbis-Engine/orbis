@@ -106,8 +106,33 @@ enum OrbisFilter {
 class OrbisTexture {
   const OrbisTexture(this.path, {this.srgb = true});
 
-  /// Absolute path to the image.
+  /// What a pass drew, sampled as a texture.
+  ///
+  /// This is what makes a render target worth writing. A mirror is a pass
+  /// that draws the scene from behind the glass into a target and a material
+  /// that samples it; a portal, a security monitor and a rear-view mirror are
+  /// the same two halves. Without this a target is a picture nothing can
+  /// look at.
+  ///
+  /// Addressed as a path with a scheme rather than through a second field:
+  /// a texture is already "where the image comes from", and one more place it
+  /// can come from is a different answer to the same question rather than a
+  /// different question. Never sRGB — what a pass drew is already linear, and
+  /// decoding it again would darken every reflection in the scene.
+  factory OrbisTexture.ofTarget(String target) =>
+      OrbisTexture('$targetScheme$target', srgb: false);
+
+  /// What a target's path starts with.
+  static const String targetScheme = 'orbis:target/';
+
+  /// Absolute path to the image, or `orbis:target/<name>` for what a pass
+  /// drew.
   final String path;
+
+  /// The pass target this samples, or null if it is an image on disk.
+  String? get target => path.startsWith(targetScheme)
+      ? path.substring(targetScheme.length)
+      : null;
 
   /// Whether the file's numbers are sRGB and need decoding to linear.
   ///
@@ -164,10 +189,10 @@ class OrbisMaterial {
     this.metallicRoughnessMap,
     this.occlusionMap,
     this.emissiveMap,
-  })  : _baseColour = baseColour,
-        _emissive = emissive,
-        _tiling = tiling,
-        _offset = offset;
+  }) : _baseColour = baseColour,
+       _emissive = emissive,
+       _tiling = tiling,
+       _offset = offset;
 
   /// This material's identity, stable for as long as it exists — the same
   /// contract as an object's key, and for the same reason. A renderer that
@@ -284,12 +309,12 @@ class OrbisMaterial {
 
   /// The maps in the order the renderer expects them.
   List<OrbisTexture?> get maps => [
-        baseColourMap,
-        normalMap,
-        metallicRoughnessMap,
-        occlusionMap,
-        emissiveMap,
-      ];
+    baseColourMap,
+    normalMap,
+    metallicRoughnessMap,
+    occlusionMap,
+    emissiveMap,
+  ];
 
   /// How many maps a material has room for.
   static const int mapCount = 5;
