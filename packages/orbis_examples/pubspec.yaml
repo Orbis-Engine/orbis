@@ -1,0 +1,27 @@
+name: orbis_examples
+description: >-
+  One technique at a time: a scene that shows it, the controls that change it,
+  and the lines that do it. Shown by the gallery app and by the editor.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  orbis_filament:
+    path: ../orbis_filament
+  orbis_camera:
+    path: ../orbis_camera
+  orbis_weather:
+    path: ../orbis_weather
+
+  vector_math: ^2.1.4
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter
