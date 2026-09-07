@@ -524,6 +524,18 @@ struct GraphTarget {
   uint32_t builtHeight = 0;
 };
 
+/// One material sampler that reads what a pass drew.
+///
+/// Kept so the renderer can put it right by itself. A target that follows the
+/// view is a new texture every time the window changes, and a host is under
+/// no obligation to publish again afterwards — a static scene never does. The
+/// binding has to be renewed by whoever rebuilt the texture.
+struct TargetBinding {
+  filament::MaterialInstance *instance = nullptr;
+  std::string parameter;
+  std::string target;
+};
+
 /// A target texture that is no longer wanted but may still be bound.
 struct RetiredTexture {
   filament::Texture *texture = nullptr;
@@ -697,6 +709,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// generation they were given up in.
   std::vector<RetiredTexture> _retiredTextures;
 
+  /// Every material sampler currently reading a pass, rebuilt on each
+  /// publish and replayed whenever a target is rebuilt.
+  std::vector<TargetBinding> _targetBindings;
+
   /// The place the scene is standing in, when a host has named one.
   ///
   /// Held apart from the flat ambient rather than replacing it, so that
@@ -706,6 +722,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   filament::Texture *_environmentRadiance;
   filament::Texture *_environmentSkyTexture;
   filament::Skybox *_environmentSkybox;
+
+  /// Whether the environment's backdrop is the one in the scene, so the
+  /// procedural sky knows to stay out of the way.
+  bool _showingEnvironmentSkybox;
   std::string _environmentRadiancePath;
   std::string _environmentSkyboxPath;
   float _environmentParams[4];
@@ -2293,18 +2313,39 @@ static constexpr NSUInteger kMaxPostParams = 128;
       "hasBaseColorMap", "hasNormalMap", "hasMetallicRoughnessMap",
       "hasOcclusionMap", "hasEmissiveMap"};
 
+  // What a pass drew has one level and is never tiled, so it is bound with a
+  // sampler of its own rather than the material's.
+  //
+  // Not a nicety. The ordinary sampler asks for LINEAR_MIPMAP_LINEAR, and
+  // minifying a texture that has no mips through it is undefined — which on
+  // Metal comes out as flat magenta across the whole surface, with nothing
+  // logged. A mirror that is entirely the missing-texture colour is a long
+  // afternoon if the sampler is not the first place you look.
+  const TextureSampler drawn(TextureSampler::MinFilter::LINEAR,
+                             TextureSampler::MagFilter::LINEAR,
+                             TextureSampler::WrapMode::CLAMP_TO_EDGE);
+
   const size_t count = unlit ? 1 : kMaterialMaps;
   for (size_t i = 0; i < count; i++) {
     Texture *texture = nullptr;
+    bool fromPass = false;
     const int32_t index = maps[i];
     if (index >= 0 && index < static_cast<int32_t>(texturePaths.count)) {
+      fromPass = [texturePaths[index] hasPrefix:@(kTargetScheme)];
       texture = [self textureAtPath:texturePaths[index]
                                srgb:textureSrgb[index] != 0];
     }
     const bool present = texture != nullptr;
-    instance->setParameter(kMapNames[i], present ? texture : [self blankTexture],
-                           sampler);
+    instance->setParameter(kMapNames[i],
+                           present ? texture : [self blankTexture],
+                           present && fromPass ? drawn : sampler);
     instance->setParameter(kMapFlags[i], present);
+
+    if (fromPass) {
+      const std::string path(texturePaths[index].UTF8String);
+      _targetBindings.push_back({instance, kMapNames[i],
+                                 path.substr(strlen(kTargetScheme))});
+    }
   }
 }
 
@@ -2507,7 +2548,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
   if (onlyNumbersMoved) {
     [self rebuildEnvironmentLight];
     if (_environmentSkybox != nullptr) {
-      _scene->setSkybox(params[2] != 0.0f ? _environmentSkybox : _skybox);
+      _showingEnvironmentSkybox = params[2] != 0.0f;
+      _scene->setSkybox(_showingEnvironmentSkybox ? _environmentSkybox
+                                                  : _skybox);
     }
     return;
   }
@@ -2573,7 +2616,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
     [self setAmbientColour:_ambientColour intensity:_ambientIntensity];
   }
 
-  if (_environmentSkybox != nullptr && _environmentParams[2] != 0.0f) {
+  _showingEnvironmentSkybox =
+      _environmentSkybox != nullptr && _environmentParams[2] != 0.0f;
+  if (_showingEnvironmentSkybox) {
     _scene->setSkybox(_environmentSkybox);
   } else if (_skybox != nullptr) {
     _scene->setSkybox(_skybox);
@@ -2623,6 +2668,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
     _engine->destroy(_environmentSkybox);
     _environmentSkybox = nullptr;
   }
+  _showingEnvironmentSkybox = false;
   if (_environmentRadiance != nullptr) {
     _engine->destroy(_environmentRadiance);
     _environmentRadiance = nullptr;
@@ -2672,6 +2718,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
     _engine->destroy(retired.texture);
   }
   _retiredTextures.clear();
+  _targetBindings.clear();
 
   _targets.resize(targetCount);
   for (uint32_t i = 0; i < targetCount; i++) {
@@ -2699,6 +2746,14 @@ static constexpr NSUInteger kMaxPostParams = 128;
     pass.clears = row[3] != 0.0f;
     for (int p = 0; p < 4; p++) pass.plane[p] = row[8 + p];
   }
+
+  // Built here rather than only at the top of the frame, because materials
+  // are bound straight after this and a material sampling a target that does
+  // not exist yet gets the blank white texture instead. That is not a
+  // rendering fault anybody can see the cause of — it is a mirror that is
+  // simply white, on the first frame and every frame after, because nothing
+  // re-binds it.
+  [self prepareTargets];
 }
 
 /// Makes sure every target a pass writes exists at the right size.
@@ -2710,6 +2765,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
 - (void)prepareTargets {
   [self sweepRetiredTextures];
 
+  bool rebuilt = false;
   for (GraphTarget &target : _targets) {
     uint32_t wide = target.width;
     uint32_t tall = target.height;
@@ -2761,6 +2817,32 @@ static constexpr NSUInteger kMaxPostParams = 128;
     target.target = builder.build(*_engine);
     target.builtWidth = wide;
     target.builtHeight = tall;
+
+    rebuilt = true;
+  }
+
+  // A texture cannot be resized, so a target that follows the view is a new
+  // texture every time the window changes — and every material sampling the
+  // old one is left pointing at a texture nothing writes to any more. What
+  // that looks like is the missing-texture magenta, for ever, because a host
+  // showing a scene that does not change never publishes again and nothing
+  // asks for the binding a second time.
+  //
+  // So it is renewed here, by whoever rebuilt it.
+  if (rebuilt) [self rebindTargets];
+}
+
+/// Points every material sampler that reads a pass at the texture that pass
+/// now draws into.
+- (void)rebindTargets {
+  const TextureSampler drawn(TextureSampler::MinFilter::LINEAR,
+                             TextureSampler::MagFilter::LINEAR,
+                             TextureSampler::WrapMode::CLAMP_TO_EDGE);
+
+  for (const TargetBinding &binding : _targetBindings) {
+    Texture *texture = [self targetTextureNamed:binding.target];
+    if (texture == nullptr) continue;
+    binding.instance->setParameter(binding.parameter.c_str(), texture, drawn);
   }
 }
 
@@ -3104,6 +3186,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   const uint64_t generation = ++_materialGeneration;
   _materialOrder.clear();
+  // Rebuilt by the writes below, so an instance that has gone does not
+  // outlive its entry here.
+  _targetBindings.clear();
   _materialOrder.reserve(count);
   _materialRebuilt.clear();
   _materialRebuilt.reserve(count);
@@ -3773,7 +3858,11 @@ static constexpr NSUInteger kMaxPostParams = 128;
                   .color({sky.x, sky.y, sky.z, 1.0f})
                   .showSun(showBody)
                   .build(*_engine);
-    _scene->setSkybox(_skybox);
+    // Kept, but not shown over an environment that is already the backdrop.
+    // This runs after the environment on every publish, so installing it
+    // unconditionally is a photographed sky replaced by a flat colour on the
+    // frame after it loads — with nothing in the notes to say why.
+    if (!_showingEnvironmentSkybox) _scene->setSkybox(_skybox);
     _skyShowsBody = showBody;
   } else if (!sameColour) {
     _skybox->setColor({sky.x, sky.y, sky.z, 1.0f});
