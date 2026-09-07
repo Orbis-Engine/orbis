@@ -58,9 +58,7 @@ void main() {
     });
 
     test('flags are one and nought rather than anything else', () {
-      final packed = OrbisPostProcess(
-        bloom: OrbisBloom(enabled: true),
-      ).packed;
+      final packed = OrbisPostProcess(bloom: OrbisBloom(enabled: true)).packed;
 
       for (final value in packed) {
         expect(value.isFinite, isTrue);
@@ -100,10 +98,7 @@ void main() {
 
       final message = scene.toMessage(1);
       expect(message['postParams'], isNotNull);
-      expect(
-        (message['postParams']! as List).length,
-        OrbisPostProcess.stride,
-      );
+      expect((message['postParams']! as List).length, OrbisPostProcess.stride);
     });
 
     test('a look belongs to the scene rather than to a camera', () {
