@@ -168,11 +168,14 @@ void main() {
         damping: Vector3.zero(),
       );
       final target = FixedTarget(Vector3(10, 0, 0));
-      final position = body.solve(Vector3.zero(), target,
-          rotation: Quaternion.identity(),
-          lens: const Lens(),
-          aspect: 16 / 9,
-          delta: 1 / 60);
+      final position = body.solve(
+        Vector3.zero(),
+        target,
+        rotation: Quaternion.identity(),
+        lens: const Lens(),
+        aspect: 16 / 9,
+        delta: 1 / 60,
+      );
       expect(position.x, near(10, 1e-6));
       expect(position.y, near(2, 1e-6));
       expect(position.z, near(6, 1e-6));
@@ -186,11 +189,14 @@ void main() {
       final target = FixedTarget(Vector3(100, 0, 0));
 
       var position = Vector3.zero();
-      position = body.solve(position, target,
-          rotation: Quaternion.identity(),
-          lens: const Lens(),
-          aspect: 16 / 9,
-          delta: 1 / 60);
+      position = body.solve(
+        position,
+        target,
+        rotation: Quaternion.identity(),
+        lens: const Lens(),
+        aspect: 16 / 9,
+        delta: 1 / 60,
+      );
       expect(position.x, greaterThan(0));
       expect(
         position.x,
@@ -199,11 +205,14 @@ void main() {
       );
 
       for (var i = 0; i < 600; i++) {
-        position = body.solve(position, target,
+        position = body.solve(
+          position,
+          target,
           rotation: Quaternion.identity(),
           lens: const Lens(),
           aspect: 16 / 9,
-          delta: 1 / 60);
+          delta: 1 / 60,
+        );
       }
       expect(position.x, closeTo(100, 0.01), reason: 'and then get there');
     });
@@ -219,11 +228,14 @@ void main() {
         Vector3.zero(),
         Quaternion.axisAngle(Vector3(1, 0, 0), 0.6),
       );
-      final position = body.solve(Vector3.zero(), target,
-          rotation: Quaternion.identity(),
-          lens: const Lens(),
-          aspect: 16 / 9,
-          delta: 1 / 60);
+      final position = body.solve(
+        Vector3.zero(),
+        target,
+        rotation: Quaternion.identity(),
+        lens: const Lens(),
+        aspect: 16 / 9,
+        delta: 1 / 60,
+      );
       expect(
         position.y,
         near(0, 1e-6),
@@ -236,11 +248,14 @@ void main() {
     test('an orbit holds its radius', () {
       final body = OrbitBody(radius: 7, elevation: 30, damping: 0);
       final target = FixedTarget(Vector3(1, 2, 3));
-      final position = body.solve(Vector3.zero(), target,
-          rotation: Quaternion.identity(),
-          lens: const Lens(),
-          aspect: 16 / 9,
-          delta: 1 / 60);
+      final position = body.solve(
+        Vector3.zero(),
+        target,
+        rotation: Quaternion.identity(),
+        lens: const Lens(),
+        aspect: 16 / 9,
+        delta: 1 / 60,
+      );
       expect((position - target.position).length, closeTo(7, 1e-6));
     });
   });
@@ -558,12 +573,14 @@ void _robustnessTests() {
       // rest of the run.
       final subject = FixedTarget(Vector3(0, 0, -10));
       final brain = CameraBrain()
-        ..add(VirtualCamera(
-          name: 'Chase',
-          lookAt: subject,
-          body: StaticBody(Vector3.zero()),
-          aim: ComposerAim(),
-        ))
+        ..add(
+          VirtualCamera(
+            name: 'Chase',
+            lookAt: subject,
+            body: StaticBody(Vector3.zero()),
+            aim: ComposerAim(),
+          ),
+        )
         ..snap();
 
       brain.aspect = 0 / 0;
@@ -600,17 +617,19 @@ void _robustnessTests() {
           Vector3(math.sin(s * 0.45) * 9, 0, math.sin(s * 0.9) * 5.5);
 
       final brain = CameraBrain()
-        ..add(VirtualCamera(
-          name: 'Chase',
-          follow: subject,
-          lookAt: subject,
-          body: FollowBody(
-            offset: Vector3(0, 2.4, 7),
-            damping: Vector3(0.35, 0.18, 0.5),
+        ..add(
+          VirtualCamera(
+            name: 'Chase',
+            follow: subject,
+            lookAt: subject,
+            body: FollowBody(
+              offset: Vector3(0, 2.4, 7),
+              damping: Vector3(0.35, 0.18, 0.5),
+            ),
+            // Off centre both ways, which is what makes the offset oblique.
+            aim: ComposerAim(screenX: 0.42, screenY: 0.45, damping: 0.4),
           ),
-          // Off centre both ways, which is what makes the offset oblique.
-          aim: ComposerAim(screenX: 0.42, screenY: 0.45, damping: 0.4),
-        ))
+        )
         ..snap();
 
       var worst = 0.0;
@@ -635,16 +654,18 @@ void _robustnessTests() {
           Vector3(math.sin(s * 0.45) * 9, 0, math.sin(s * 0.9) * 5.5);
 
       final brain = CameraBrain()
-        ..add(VirtualCamera(
-          name: 'Chase',
-          follow: subject,
-          lookAt: subject,
-          body: FollowBody(
-            offset: Vector3(0, 2.4, 7),
-            damping: Vector3(0.35, 0.18, 0.5),
+        ..add(
+          VirtualCamera(
+            name: 'Chase',
+            follow: subject,
+            lookAt: subject,
+            body: FollowBody(
+              offset: Vector3(0, 2.4, 7),
+              damping: Vector3(0.35, 0.18, 0.5),
+            ),
+            aim: ComposerAim(screenY: 0.45, damping: 0.4),
           ),
-          aim: ComposerAim(screenY: 0.45, damping: 0.4),
-        ))
+        )
         ..snap();
 
       var seconds = 0.0;
@@ -655,7 +676,11 @@ void _robustnessTests() {
           ..position = at
           ..rotation = lookRotation(pathAt(seconds + 0.12) - at);
         brain.update(1 / 60);
-        expect(brain.state.forward.length, closeTo(1, 1e-6), reason: 'frame $i');
+        expect(
+          brain.state.forward.length,
+          closeTo(1, 1e-6),
+          reason: 'frame $i',
+        );
       }
     });
   });
@@ -687,7 +712,10 @@ void _headTests() {
     });
 
     test('a vehicle can lag behind its own chassis', () {
-      final target = FixedTarget(Vector3.zero(), lookRotation(Vector3(1, 0, 0)));
+      final target = FixedTarget(
+        Vector3.zero(),
+        lookRotation(Vector3(1, 0, 0)),
+      );
       final aim = HeadAim(damping: 0.5);
 
       final got = aim.solve(
@@ -709,8 +737,13 @@ void _headTests() {
 
 void _flatTests() {
   group('a game seen flat on', () {
-    Vector3 solveOnce(ScreenFollowBody body, Vector3 at, Vector3 subject,
-        {Lens lens = const Lens.flat(height: 10), double delta = 1e6}) {
+    Vector3 solveOnce(
+      ScreenFollowBody body,
+      Vector3 at,
+      Vector3 subject, {
+      Lens lens = const Lens.flat(height: 10),
+      double delta = 1e6,
+    }) {
       return body.solve(
         at,
         FixedTarget(subject),
@@ -727,10 +760,20 @@ void _flatTests() {
       // flat game has to move rather than turn: turning sweeps a perspective
       // view across the world and does nothing at all to a flat one.
       const lens = Lens.flat(height: 10);
-      final near = project(Vector3.zero(), Quaternion.identity(),
-          Vector3(2, 0, -5), lens: lens, aspect: 1);
-      final far = project(Vector3.zero(), Quaternion.identity(),
-          Vector3(2, 0, -50), lens: lens, aspect: 1);
+      final near = project(
+        Vector3.zero(),
+        Quaternion.identity(),
+        Vector3(2, 0, -5),
+        lens: lens,
+        aspect: 1,
+      );
+      final far = project(
+        Vector3.zero(),
+        Quaternion.identity(),
+        Vector3(2, 0, -50),
+        lens: lens,
+        aspect: 1,
+      );
 
       expect(near.x, closeTo(far.x, 1e-9));
       expect(near.x, closeTo(2 / 5, 1e-9));
@@ -847,11 +890,14 @@ void _guideTests() {
       );
     });
 
-    test('an aim with nothing to compose says so rather than drawing a dot', () {
-      expect(HardLookAt().guides, isNull);
-      expect(StaticAim(Quaternion.identity()).guides, isNull);
-      expect(PovAim().guides, isNull);
-    });
+    test(
+      'an aim with nothing to compose says so rather than drawing a dot',
+      () {
+        expect(HardLookAt().guides, isNull);
+        expect(StaticAim(Quaternion.identity()).guides, isNull);
+        expect(PovAim().guides, isNull);
+      },
+    );
 
     test('the zones move with the screen position', () {
       final left = ComposerAim(screenX: 0.25).guides;

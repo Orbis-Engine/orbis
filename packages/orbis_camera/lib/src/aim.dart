@@ -406,8 +406,8 @@ class HeadAim implements CameraAim {
 
     var wanted = Quaternion.copy(lookAt.rotation)..normalize();
     if (tilt != 0) {
-      wanted = wanted *
-          Quaternion.axisAngle(Vector3(1, 0, 0), tilt * math.pi / 180);
+      wanted =
+          wanted * Quaternion.axisAngle(Vector3(1, 0, 0), tilt * math.pi / 180);
     }
 
     if (damping <= 0) return wanted..normalize();

@@ -137,9 +137,11 @@ extension MeshCut on Mesh {
     if (first < 0 || last < 0 || first == last) return const [];
 
     // Later edges first, so inserting into one does not move the next.
-    inserts.sort((a, b) => a.after == b.after
-        ? b.along.compareTo(a.along)
-        : b.after.compareTo(a.after));
+    inserts.sort(
+      (a, b) => a.after == b.after
+          ? b.along.compareTo(a.along)
+          : b.after.compareTo(a.after),
+    );
     for (final one in inserts) {
       outline.insert(one.after + 1, one.vertex);
     }
@@ -187,7 +189,9 @@ extension MeshCut on Mesh {
 
     final normal = normalOf(face);
     // Wound the same way as the face, so the inner face faces the same way.
-    final wound = signedLoopArea(loop, normal) < 0 ? loop.reversed.toList() : loop;
+    final wound = signedLoopArea(loop, normal) < 0
+        ? loop.reversed.toList()
+        : loop;
 
     final inner = [for (final point in wound) addVertex(point.clone())];
     // A second set for the ring, so the two faces do not share corners along
@@ -234,9 +238,7 @@ extension MeshCut on Mesh {
           corners,
           material: face.material,
           smooth: face.smooth,
-          uv: face.uv.isManual
-              ? face.uv.copyWith(clearManual: true)
-              : face.uv,
+          uv: face.uv.isManual ? face.uv.copyWith(clearManual: true) : face.uv,
         ),
     ];
 

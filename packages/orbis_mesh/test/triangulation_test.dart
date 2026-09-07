@@ -8,13 +8,13 @@ void main() {
   /// An L, which is the shape of the commonest room somebody draws and the
   /// simplest thing a fan gets wrong.
   List<Vector3> ell() => [
-        Vector3(0, 0, 0),
-        Vector3(0, 0, 3),
-        Vector3(2, 0, 3),
-        Vector3(2, 0, 1),
-        Vector3(4, 0, 1),
-        Vector3(4, 0, 0),
-      ];
+    Vector3(0, 0, 0),
+    Vector3(0, 0, 3),
+    Vector3(2, 0, 3),
+    Vector3(2, 0, 1),
+    Vector3(4, 0, 1),
+    Vector3(4, 0, 0),
+  ];
 
   /// The area of the triangles a face is cut into.
   double areaOfPieces(List<Vector3> points, List<int> corners) {
@@ -65,8 +65,11 @@ void main() {
       final a = points[corners[i]];
       final b = points[corners[i + 1]];
       final c = points[corners[i + 2]];
-      expect((b - a).cross(c - a).y, greaterThan(0),
-          reason: 'a piece facing the other way is a hole');
+      expect(
+        (b - a).cross(c - a).y,
+        greaterThan(0),
+        reason: 'a piece facing the other way is a hole',
+      );
     }
   });
 
@@ -92,7 +95,9 @@ void main() {
         Vector3(4, 0, 4),
         Vector3(4, 0, 0),
       ],
-      faces: [Face([0, 1, 2, 3])],
+      faces: [
+        Face([0, 1, 2, 3]),
+      ],
     );
     mesh.cutFace(mesh.faces.single, [
       Vector3(1, 0, 1),
@@ -104,9 +109,11 @@ void main() {
 
     final ring = mesh.faces.first;
     final corners = cutUp(mesh.pointsOf(ring), mesh.normalOf(ring));
-    expect(areaOfPieces(mesh.pointsOf(ring), corners),
-        closeTo(16 - 4, 1e-6),
-        reason: 'the square less the hole, and nothing counted twice');
+    expect(
+      areaOfPieces(mesh.pointsOf(ring), corners),
+      closeTo(16 - 4, 1e-6),
+      reason: 'the square less the hole, and nothing counted twice',
+    );
   });
 
   test('a face that crosses itself still produces triangles', () {
@@ -145,10 +152,10 @@ void main() {
     var total = 0.0;
     for (var i = 0; i < tris.triangleCount; i++) {
       Vector3 corner(int at) => Vector3(
-            tris.positions[tris.indices[at] * 3],
-            tris.positions[tris.indices[at] * 3 + 1],
-            tris.positions[tris.indices[at] * 3 + 2],
-          );
+        tris.positions[tris.indices[at] * 3],
+        tris.positions[tris.indices[at] * 3 + 1],
+        tris.positions[tris.indices[at] * 3 + 2],
+      );
       final a = corner(i * 3);
       final b = corner(i * 3 + 1);
       final c = corner(i * 3 + 2);

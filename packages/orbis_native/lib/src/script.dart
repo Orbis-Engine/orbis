@@ -35,20 +35,27 @@ final class _Loader {
   static final DynamicLibrary _process = DynamicLibrary.process();
 
   static final Pointer<Void> Function(Pointer<Char>, int) open = _process
-      .lookupFunction<Pointer<Void> Function(Pointer<Char>, Int32),
-          Pointer<Void> Function(Pointer<Char>, int)>('dlopen');
+      .lookupFunction<
+        Pointer<Void> Function(Pointer<Char>, Int32),
+        Pointer<Void> Function(Pointer<Char>, int)
+      >('dlopen');
 
   static final Pointer<Void> Function(Pointer<Void>, Pointer<Char>) symbol =
       _process.lookupFunction<
-          Pointer<Void> Function(Pointer<Void>, Pointer<Char>),
-          Pointer<Void> Function(Pointer<Void>, Pointer<Char>)>('dlsym');
+        Pointer<Void> Function(Pointer<Void>, Pointer<Char>),
+        Pointer<Void> Function(Pointer<Void>, Pointer<Char>)
+      >('dlsym');
 
-  static final int Function(Pointer<Void>) close = _process.lookupFunction<
-      Int32 Function(Pointer<Void>), int Function(Pointer<Void>)>('dlclose');
+  static final int Function(Pointer<Void>) close = _process
+      .lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('dlclose');
 
   static final Pointer<Char> Function() error = _process
       .lookupFunction<Pointer<Char> Function(), Pointer<Char> Function()>(
-          'dlerror');
+        'dlerror',
+      );
 
   /// RTLD_NOW | RTLD_LOCAL: every symbol resolved at load, and nothing put
   /// into the global namespace where two scripts could shadow each other.
@@ -66,8 +73,14 @@ final class _Loader {
 /// TypeScript module, a Dart file — stops mattering at this line: everything
 /// above it sees start, step and stop.
 class NativeScript {
-  NativeScript._(this._handle, this._file, this._name, this._start, this._step,
-      this._stop);
+  NativeScript._(
+    this._handle,
+    this._file,
+    this._name,
+    this._start,
+    this._step,
+    this._stop,
+  );
 
   final Pointer<Void> _handle;
   final File _file;
@@ -108,11 +121,11 @@ class NativeScript {
     }
 
     Pointer<Void> find(String symbol) => using(
-          (arena) => _Loader.symbol(
-            handle,
-            symbol.toNativeUtf8(allocator: arena).cast<Char>(),
-          ),
-        );
+      (arena) => _Loader.symbol(
+        handle,
+        symbol.toNativeUtf8(allocator: arena).cast<Char>(),
+      ),
+    );
 
     void refuse(String why) {
       _Loader.close(handle);
@@ -130,8 +143,9 @@ class NativeScript {
       );
     }
 
-    final version =
-        abi.cast<NativeFunction<_AbiFn>>().asFunction<int Function()>()();
+    final version = abi
+        .cast<NativeFunction<_AbiFn>>()
+        .asFunction<int Function()>()();
     if (version != ScriptHost.abi) {
       refuse(
         '${_nameOf(library)} was built against contract $version and this '
@@ -221,5 +235,4 @@ class NativeScript {
       // and this one is only taking up space.
     }
   }
-
 }

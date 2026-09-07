@@ -110,7 +110,11 @@ extern "C" void orbis_stop(void) {}
 ''';
 
 class _Values implements ScriptValues {
-  _Values([this.numbers = const {}, this.toggles = const {}, this.texts = const {}]);
+  _Values([
+    this.numbers = const {},
+    this.toggles = const {},
+    this.texts = const {},
+  ]);
 
   final Map<String, double> numbers;
   final Map<String, bool> toggles;
@@ -184,11 +188,11 @@ void main() {
       File('${root.path}/$name.cpp')..writeAsStringSync(source);
 
   ScriptRunner runner({ScriptValues values = const NoValues()}) => ScriptRunner(
-        world: world,
-        build: Directory('${root.path}/build'),
-        values: values,
-        onLog: said.add,
-      );
+    world: world,
+    build: Directory('${root.path}/build'),
+    values: values,
+    onLog: said.add,
+  );
 
   /// A component the C++ side registered, looked up by registering the same
   /// layout — which the core answers with the existing id.
@@ -203,9 +207,13 @@ void main() {
   }
 
   test('there is a compiler to test with', () {
-    expect(Toolchain.find(), isNotNull,
-        reason: 'these tests compile real C++; with no toolchain they would '
-            'pass by not running');
+    expect(
+      Toolchain.find(),
+      isNotNull,
+      reason:
+          'these tests compile real C++; with no toolchain they would '
+          'pass by not running',
+    );
   });
 
   group('building', () {
@@ -302,26 +310,28 @@ void main() {
       expect(ticks[3], 10, reason: 'the second counts by ten');
     });
 
-    test('every build goes to a path of its own and takes the last one away',
-        () {
-      final host = runner();
-      addTearDown(host.dispose);
-      final source = write('counter', counter);
-      host.add(source);
-      host.add(source);
-      host.add(source);
+    test(
+      'every build goes to a path of its own and takes the last one away',
+      () {
+        final host = runner();
+        addTearDown(host.dispose);
+        final source = write('counter', counter);
+        host.add(source);
+        host.add(source);
+        host.add(source);
 
-      // A new path each time, because a loader hands back the image it
-      // already has for a path it has already seen. And only the current one
-      // left on disk, because the others were unloaded — an afternoon of
-      // saving would otherwise leave an afternoon of libraries.
-      final built = Directory('${root.path}/build')
-          .listSync()
-          .where((entry) => entry.path.endsWith(Toolchain.librarySuffix));
-      expect(built, hasLength(1));
-      expect(built.single.path, contains('counter.2'));
-      expect(host.scripts.single.revision, 2);
-    });
+        // A new path each time, because a loader hands back the image it
+        // already has for a path it has already seen. And only the current one
+        // left on disk, because the others were unloaded — an afternoon of
+        // saving would otherwise leave an afternoon of libraries.
+        final built = Directory('${root.path}/build').listSync().where(
+          (entry) => entry.path.endsWith(Toolchain.librarySuffix),
+        );
+        expect(built, hasLength(1));
+        expect(built.single.path, contains('counter.2'));
+        expect(host.scripts.single.revision, 2);
+      },
+    );
 
     test('the old one is stopped, once', () {
       final host = runner();
@@ -372,13 +382,15 @@ void main() {
       final host = runner();
       addTearDown(host.dispose);
 
-      final built = host.add(write('ancient', '''
+      final built = host.add(
+        write('ancient', '''
 #include "orbis_script.h"
 extern "C" uint32_t orbis_script_abi(void) { return 99; }
 extern "C" void orbis_start(const OrbisScriptHost *h) { (void)h; }
 extern "C" void orbis_step(double d) { (void)d; }
 extern "C" void orbis_stop(void) {}
-'''));
+'''),
+      );
 
       expect(built.ok, isFalse);
       expect(built.output, contains('99'));
@@ -391,14 +403,16 @@ extern "C" void orbis_stop(void) {}
 
       // Checked by the compiler rather than asserted in Dart: C++ is the side
       // that has to agree, and a static_assert fails the build.
-      final built = host.add(write('sizes', '''
+      final built = host.add(
+        write('sizes', '''
 #include "orbis_script.h"
 static_assert(sizeof(OrbisScriptHost) == ${sizeOf<OrbisScriptHost>()},
               "the host table and the Dart struct have drifted apart");
 ORBIS_SCRIPT {}
 extern "C" void orbis_step(double d) { (void)d; }
 extern "C" void orbis_stop(void) {}
-'''));
+'''),
+      );
 
       expect(built.ok, isTrue, reason: built.output);
     });
@@ -432,15 +446,17 @@ extern "C" void orbis_stop(void) {}
       expect(said, contains('Ball'));
     });
 
-    test('a value that is not there falls back to what the script asked for',
-        () {
-      final host = runner(values: _Values());
-      addTearDown(host.dispose);
-      host.add(write('reader', reader));
-      host.step(0.016);
+    test(
+      'a value that is not there falls back to what the script asked for',
+      () {
+        final host = runner(values: _Values());
+        addTearDown(host.dispose);
+        host.add(write('reader', reader));
+        host.step(0.016);
 
-      expect(rows('Speed')[0], -1.0);
-    });
+        expect(rows('Speed')[0], -1.0);
+      },
+    );
 
     test('changing one reaches the next frame, through the address', () {
       final values = _Values({'ball.odata/speed': 1.0});
@@ -529,7 +545,8 @@ extern "C" void orbis_stop(void) {}
     /// A script that reads one value a million times a frame, either through
     /// the address or by calling in for it. The difference between the two is
     /// the whole reason the addresses exist.
-    String loop({required bool byAddress}) => '''
+    String loop({required bool byAddress}) =>
+        '''
 #include "orbis_script.h"
 
 struct Total { double sum; double calls; };
@@ -580,16 +597,20 @@ extern "C" void orbis_stop(void) {}
       final addressed = time('addressed', true);
 
       // ignore: avoid_print
-      print('  a million reads: ${calling.inMicroseconds}us calling in, '
-          '${addressed.inMicroseconds}us through the address');
+      print(
+        '  a million reads: ${calling.inMicroseconds}us calling in, '
+        '${addressed.inMicroseconds}us through the address',
+      );
 
       // A crossing into Dart per read against a load from memory. The margin
       // asserted here is deliberately loose — the point is the order of
       // magnitude, and a tight bound would be a test that fails on a busy
       // machine rather than on a regression.
-      expect(addressed.inMicroseconds * 10,
-          lessThan(calling.inMicroseconds),
-          reason: 'addressed reads should be at least ten times cheaper');
+      expect(
+        addressed.inMicroseconds * 10,
+        lessThan(calling.inMicroseconds),
+        reason: 'addressed reads should be at least ten times cheaper',
+      );
     });
 
     test('rebuilding does not leak the library it replaced', () {
@@ -604,9 +625,9 @@ extern "C" void orbis_stop(void) {}
 
       // Forty saves, one library. Without a real unload this folder would hold
       // forty of them and the process would be mapping all forty.
-      final built = Directory('${root.path}/build')
-          .listSync()
-          .where((entry) => entry.path.endsWith(Toolchain.librarySuffix));
+      final built = Directory('${root.path}/build').listSync().where(
+        (entry) => entry.path.endsWith(Toolchain.librarySuffix),
+      );
       expect(built, hasLength(1));
     });
   });

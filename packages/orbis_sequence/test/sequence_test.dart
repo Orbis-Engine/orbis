@@ -2,49 +2,55 @@ import 'package:orbis_sequence/orbis_sequence.dart';
 import 'package:test/test.dart';
 import 'package:vector_math/vector_math_64.dart';
 
-Clip clipOf(double start, double duration,
-        {double easeIn = 0, double easeOut = 0}) =>
-    Clip(start: start, duration: duration, easeIn: easeIn, easeOut: easeOut);
+Clip clipOf(
+  double start,
+  double duration, {
+  double easeIn = 0,
+  double easeOut = 0,
+}) => Clip(start: start, duration: duration, easeIn: easeIn, easeOut: easeOut);
 
 PropertyTrack<double> numbersOn(
   String binding,
   String property,
   List<Keyed<double>> clips,
-) =>
-    PropertyTrack<double>(
-      binding: binding,
-      property: property,
-      clips: clips,
-      mixer: doubleMixer,
-    );
+) => PropertyTrack<double>(
+  binding: binding,
+  property: property,
+  clips: clips,
+  mixer: doubleMixer,
+);
 
 void main() {
   group('channels', () {
     test('do not extrapolate past their ends', () {
-      final channel = Channel<double>(
-        [const Key(1, 10.0), const Key(2, 20.0)],
-        doubleMixer,
-      );
+      final channel = Channel<double>([
+        const Key(1, 10.0),
+        const Key(2, 20.0),
+      ], doubleMixer);
       expect(channel.at(0), 10, reason: 'held before the first key');
       expect(channel.at(3), 20, reason: 'held after the last');
-      expect(channel.at(1.5), closeTo(15, 1e-9),
-          reason: 'the smooth default is symmetric at the middle');
+      expect(
+        channel.at(1.5),
+        closeTo(15, 1e-9),
+        reason: 'the smooth default is symmetric at the middle',
+      );
     });
 
     test('a step key holds until the next one', () {
-      final channel = Channel<double>(
-        [const Key(0, 1.0, hold: Hold.step), const Key(1, 9.0)],
-        doubleMixer,
-      );
+      final channel = Channel<double>([
+        const Key(0, 1.0, hold: Hold.step),
+        const Key(1, 9.0),
+      ], doubleMixer);
       expect(channel.at(0.99), 1);
       expect(channel.at(1), 9);
     });
 
     test('two keys at the same moment are a cut', () {
-      final channel = Channel<double>(
-        [const Key(0, 0.0), const Key(1, 1.0), const Key(1, 5.0)],
-        doubleMixer,
-      );
+      final channel = Channel<double>([
+        const Key(0, 0.0),
+        const Key(1, 1.0),
+        const Key(1, 5.0),
+      ], doubleMixer);
       expect(channel.at(1), 5);
     });
 
@@ -55,14 +61,18 @@ void main() {
       // sign check the blend takes the long way and swings all the way round.
       final flipped = Quaternion(-to.x, -to.y, -to.z, -to.w);
       final middle = quaternionMixer.lerp(from, flipped, 0.5);
-      expect(middle.y.abs(), lessThan(1e-6),
-          reason: 'halfway between +0.1 and -0.1 about Y is no turn at all');
+      expect(
+        middle.y.abs(),
+        lessThan(1e-6),
+        reason: 'halfway between +0.1 and -0.1 about Y is no turn at all',
+      );
       expect(middle.w.abs(), closeTo(1, 1e-6));
     });
 
     test('a binary search finds the right span in a long channel', () {
       final keys = [
-        for (var i = 0; i < 200; i++) Key(i.toDouble(), i * 2.0, hold: Hold.linear)
+        for (var i = 0; i < 200; i++)
+          Key(i.toDouble(), i * 2.0, hold: Hold.linear),
       ];
       final channel = Channel<double>(keys, doubleMixer);
       expect(channel.at(150.5), closeTo(301, 1e-9));
@@ -104,10 +114,14 @@ void main() {
 
     test('two overlapping clips blend by weight', () {
       final track = numbersOn('crate', 'height', [
-        Keyed(clipOf(0, 4, easeOut: 2),
-            Channel<double>([const Key(0, 0.0)], doubleMixer)),
-        Keyed(clipOf(2, 4, easeIn: 2),
-            Channel<double>([const Key(0, 10.0)], doubleMixer)),
+        Keyed(
+          clipOf(0, 4, easeOut: 2),
+          Channel<double>([const Key(0, 0.0)], doubleMixer),
+        ),
+        Keyed(
+          clipOf(2, 4, easeIn: 2),
+          Channel<double>([const Key(0, 10.0)], doubleMixer),
+        ),
       ]);
       // At the exact middle of the overlap both are at half weight, so the
       // answer is halfway between what each of them wanted.
@@ -123,7 +137,10 @@ void main() {
         muted: true,
         mixer: doubleMixer,
         clips: [
-          Keyed(clipOf(0, 4), Channel<double>([const Key(0, 5.0)], doubleMixer))
+          Keyed(
+            clipOf(0, 4),
+            Channel<double>([const Key(0, 5.0)], doubleMixer),
+          ),
         ],
       );
       final frame = SequenceFrame(1);
@@ -152,10 +169,10 @@ void main() {
 
   group('activation', () {
     test('says off in the gaps and nothing outside its span', () {
-      const track = ActivationTrack(binding: 'door', clips: [
-        Clip(start: 1, duration: 1),
-        Clip(start: 3, duration: 1),
-      ]);
+      const track = ActivationTrack(
+        binding: 'door',
+        clips: [Clip(start: 1, duration: 1), Clip(start: 3, duration: 1)],
+      );
       expect(track.contributionAt(0), isNull, reason: 'before it starts');
       expect(track.contributionAt(1.5), isTrue);
       expect(track.contributionAt(2.5), isFalse, reason: 'in the gap');
@@ -166,45 +183,50 @@ void main() {
 
   group('marks', () {
     test('fire on the way forwards and never on the way back', () {
-      const sequence = Sequence(tracks: [
-        MarkTrack(marks: [Mark(1, 'open'), Mark(2, 'shut')]),
-      ], duration: 5);
+      const sequence = Sequence(
+        tracks: [
+          MarkTrack(marks: [Mark(1, 'open'), Mark(2, 'shut')]),
+        ],
+        duration: 5,
+      );
 
-      expect(sequence.marksBetween(0, 3).map((one) => one.name),
-          ['open', 'shut']);
+      expect(sequence.marksBetween(0, 3).map((one) => one.name), [
+        'open',
+        'shut',
+      ]);
       expect(sequence.marksBetween(3, 0), isEmpty);
-      expect(sequence.marksBetween(1, 2).map((one) => one.name), ['shut'],
-          reason: 'the start of a span is exclusive, so nothing fires twice');
+      expect(sequence.marksBetween(1, 2).map((one) => one.name), [
+        'shut',
+      ], reason: 'the start of a span is exclusive, so nothing fires twice');
     });
 
     test('a step big enough to skip several fires all of them', () {
-      const sequence = Sequence(tracks: [
-        MarkTrack(marks: [
-          Mark(0.1, 'a'),
-          Mark(0.2, 'b'),
-          Mark(0.3, 'c'),
-        ]),
-      ], duration: 1);
+      const sequence = Sequence(
+        tracks: [
+          MarkTrack(marks: [Mark(0.1, 'a'), Mark(0.2, 'b'), Mark(0.3, 'c')]),
+        ],
+        duration: 1,
+      );
       expect(sequence.marksBetween(0, 0.9).length, 3);
     });
   });
 
   group('the director', () {
     Sequence sequenceOf() => Sequence(
-          duration: 4,
-          tracks: [
-            numbersOn('crate', 'height', [
-              Keyed(
-                clipOf(0, 4),
-                Channel<double>([
-                  const Key(0, 0.0, hold: Hold.linear),
-                  const Key(4, 4.0),
-                ], doubleMixer),
-              ),
-            ]),
-            const MarkTrack(marks: [Mark(1, 'ping'), Mark(3, 'pong')]),
-          ],
-        );
+      duration: 4,
+      tracks: [
+        numbersOn('crate', 'height', [
+          Keyed(
+            clipOf(0, 4),
+            Channel<double>([
+              const Key(0, 0.0, hold: Hold.linear),
+              const Key(4, 4.0),
+            ], doubleMixer),
+          ),
+        ]),
+        const MarkTrack(marks: [Mark(1, 'ping'), Mark(3, 'pong')]),
+      ],
+    );
 
     test('does not move while paused', () {
       final director = Director(sequenceOf());
@@ -232,17 +254,21 @@ void main() {
 
     test('looping wraps and fires the marks it crosses on the way round', () {
       final director = Director(sequenceOf(), whenDone: WhenDone.loop)..play();
-      expect(director.advance(3.5).marks.map((one) => one.name),
-          ['ping', 'pong'], reason: 'both, in order, in one step');
+      expect(director.advance(3.5).marks.map((one) => one.name), [
+        'ping',
+        'pong',
+      ], reason: 'both, in order, in one step');
       final wrapped = director.advance(1.5);
       expect(director.at, closeTo(1, 1e-9));
-      expect(wrapped.marks.map((one) => one.name), ['ping'],
-          reason: 'nothing left this pass, then the first of the next');
+      expect(wrapped.marks.map((one) => one.name), [
+        'ping',
+      ], reason: 'nothing left this pass, then the first of the next');
       expect(director.playing, isTrue);
     });
 
     test('bouncing turns round rather than stopping', () {
-      final director = Director(sequenceOf(), whenDone: WhenDone.bounce)..play();
+      final director = Director(sequenceOf(), whenDone: WhenDone.bounce)
+        ..play();
       director.advance(5);
       expect(director.at, closeTo(3, 1e-9));
       expect(director.playing, isTrue);
@@ -271,10 +297,12 @@ void main() {
     test('scrubbing backwards gives the same values as playing forwards', () {
       final sequence = sequenceOf();
       final forwards = [
-        for (var i = 0; i <= 40; i++) sequence.sampleAt(i / 10).get('crate', 'height')
+        for (var i = 0; i <= 40; i++)
+          sequence.sampleAt(i / 10).get('crate', 'height'),
       ];
       final backwards = [
-        for (var i = 40; i >= 0; i--) sequence.sampleAt(i / 10).get('crate', 'height')
+        for (var i = 40; i >= 0; i--)
+          sequence.sampleAt(i / 10).get('crate', 'height'),
       ].reversed.toList();
       expect(forwards, backwards);
     });
@@ -282,18 +310,22 @@ void main() {
 
   group('shots and sounds', () {
     test('adjacent shots are a cut and overlapping ones a blend', () {
-      const track = ShotTrack(shots: [
-        (Clip(start: 0, duration: 2), 'wide'),
-        (Clip(start: 2, duration: 2), 'close'),
-      ]);
+      const track = ShotTrack(
+        shots: [
+          (Clip(start: 0, duration: 2), 'wide'),
+          (Clip(start: 2, duration: 2), 'close'),
+        ],
+      );
       final cut = SequenceFrame(1.9);
       track.contribute(1.9, cut);
       expect(cut.shots.map((one) => one.camera), ['wide']);
 
-      const blended = ShotTrack(shots: [
-        (Clip(start: 0, duration: 3, easeOut: 1), 'wide'),
-        (Clip(start: 2, duration: 3, easeIn: 1), 'close'),
-      ]);
+      const blended = ShotTrack(
+        shots: [
+          (Clip(start: 0, duration: 3, easeOut: 1), 'wide'),
+          (Clip(start: 2, duration: 3, easeIn: 1), 'close'),
+        ],
+      );
       final over = SequenceFrame(2.5);
       blended.contribute(2.5, over);
       expect(over.shots.length, 2);
@@ -301,23 +333,27 @@ void main() {
     });
 
     test('a sound reports where in itself the playhead is', () {
-      const track = SoundTrack(clips: [
-        (Clip(start: 4, duration: 3, clipIn: 1), 'thunder.wav'),
-      ]);
+      const track = SoundTrack(
+        clips: [(Clip(start: 4, duration: 3, clipIn: 1), 'thunder.wav')],
+      );
       final frame = SequenceFrame(5);
       track.contribute(5, frame);
       expect(frame.sounds.single.sound, 'thunder.wav');
-      expect(frame.sounds.single.at, 2, reason: 'one second of trim, one played');
+      expect(
+        frame.sounds.single.at,
+        2,
+        reason: 'one second of trim, one played',
+      );
     });
   });
 
   test('a sequence is as long as its longest track unless told otherwise', () {
     final tracks = [
       numbersOn('a', 'x', [
-        Keyed(clipOf(0, 2), Channel<double>([const Key(0, 0.0)], doubleMixer))
+        Keyed(clipOf(0, 2), Channel<double>([const Key(0, 0.0)], doubleMixer)),
       ]),
       numbersOn('b', 'x', [
-        Keyed(clipOf(0, 7), Channel<double>([const Key(0, 0.0)], doubleMixer))
+        Keyed(clipOf(0, 7), Channel<double>([const Key(0, 0.0)], doubleMixer)),
       ]),
     ];
     expect(Sequence(tracks: tracks).duration, 7);

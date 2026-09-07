@@ -8,9 +8,11 @@ import 'package:vector_math/vector_math_64.dart';
 void main() {
   group('triangulating', () {
     test('a quad becomes two triangles', () {
-      final tris = Shape(kind: ShapeKind.plane, widthCuts: 0, heightCuts: 0)
-          .build()
-          .triangulate();
+      final tris = Shape(
+        kind: ShapeKind.plane,
+        widthCuts: 0,
+        heightCuts: 0,
+      ).build().triangulate();
 
       expect(tris.triangleCount, 2);
       expect(tris.vertexCount, 4);
@@ -57,8 +59,10 @@ void main() {
     });
 
     test('a smooth side shades round rather than faceted', () {
-      final tris = Shape(kind: ShapeKind.cylinder, sides: 16).build()
-          .triangulate();
+      final tris = Shape(
+        kind: ShapeKind.cylinder,
+        sides: 16,
+      ).build().triangulate();
 
       // On a smooth cylinder a vertex's normal points away from the axis. On a
       // faceted one it points the way its own flat face does, which at the
@@ -93,9 +97,11 @@ void main() {
       // Six faces, six directions, and no averaging between them.
       final directions = <String>{};
       for (var i = 0; i < tris.vertexCount; i++) {
-        directions.add('${tris.normals[i * 3].round()}'
-            '${tris.normals[i * 3 + 1].round()}'
-            '${tris.normals[i * 3 + 2].round()}');
+        directions.add(
+          '${tris.normals[i * 3].round()}'
+          '${tris.normals[i * 3 + 1].round()}'
+          '${tris.normals[i * 3 + 2].round()}',
+        );
       }
       expect(directions, hasLength(6));
     });
@@ -138,12 +144,17 @@ void main() {
 
     test('describes one mesh with the three attributes a renderer wants', () {
       final header = headerOf(Shape(kind: ShapeKind.cube).build().toGlb());
-      final primitive = ((header['meshes']! as List).first
-          as Map<String, Object?>)['primitives'] as List;
+      final primitive =
+          ((header['meshes']! as List).first
+                  as Map<String, Object?>)['primitives']
+              as List;
       final attributes =
           (primitive.first as Map<String, Object?>)['attributes'] as Map;
 
-      expect(attributes.keys, containsAll(['POSITION', 'NORMAL', 'TEXCOORD_0']));
+      expect(
+        attributes.keys,
+        containsAll(['POSITION', 'NORMAL', 'TEXCOORD_0']),
+      );
     });
 
     test('the accessors count what is actually in the buffer', () {
@@ -160,8 +171,10 @@ void main() {
     test('the buffer views stay inside the buffer', () {
       for (final kind in ShapeKind.values) {
         final header = headerOf(Shape(kind: kind).build().toGlb());
-        final length = ((header['buffers']! as List).first
-            as Map<String, Object?>)['byteLength']! as int;
+        final length =
+            ((header['buffers']! as List).first
+                    as Map<String, Object?>)['byteLength']!
+                as int;
 
         for (final view in header['bufferViews']! as List) {
           final at = (view as Map)['byteOffset']! as int;

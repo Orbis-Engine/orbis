@@ -34,12 +34,14 @@ void main() {
       double longest(({Vector2 min, Vector2 max}) box) =>
           math.max(box.max.x - box.min.x, box.max.y - box.min.y);
 
-      expect(longest(b), closeTo(longest(a) * 2, 1e-9),
-          reason: 'twice the wall, twice the bricks');
+      expect(
+        longest(b),
+        closeTo(longest(a) * 2, 1e-9),
+        reason: 'twice the wall, twice the bricks',
+      );
     });
 
-    test('stretching puts the whole texture on whatever shape the face is',
-        () {
+    test('stretching puts the whole texture on whatever shape the face is', () {
       final mesh = cube();
       for (final at in mesh.positions) {
         at.x *= 3;
@@ -51,8 +53,11 @@ void main() {
       expect(box.min.x, closeTo(0, 1e-9));
       expect(box.min.y, closeTo(0, 1e-9));
       expect(box.max.x, closeTo(1, 1e-9));
-      expect(box.max.y, closeTo(1, 1e-9),
-          reason: 'both axes filled, whatever that does to the picture');
+      expect(
+        box.max.y,
+        closeTo(1, 1e-9),
+        reason: 'both axes filled, whatever that does to the picture',
+      );
     });
 
     test('fitting keeps the picture square and leaves the spare room', () {
@@ -66,14 +71,19 @@ void main() {
       final box = mesh.uvBoundsOf([face])!;
       final spans = [box.max.x - box.min.x, box.max.y - box.min.y]..sort();
       expect(spans.last, closeTo(1, 1e-9), reason: 'the long way fills it');
-      expect(spans.first, closeTo(1 / 3, 1e-9),
-          reason: 'and the short way keeps its proportion');
+      expect(
+        spans.first,
+        closeTo(1 / 3, 1e-9),
+        reason: 'and the short way keeps its proportion',
+      );
     });
 
     test('an edge-on face does not divide by nothing', () {
       final mesh = Mesh(
         positions: [Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(2, 0, 0)],
-        faces: [Face([0, 1, 2], uv: const FaceUv(fit: UvFit.stretch))],
+        faces: [
+          Face([0, 1, 2], uv: const FaceUv(fit: UvFit.stretch)),
+        ],
       );
       for (final at in mesh.uvsOf(mesh.faces.first)) {
         expect(at.x.isFinite, isTrue);
@@ -137,9 +147,13 @@ void main() {
       for (final at in mesh.positions) {
         at.x *= 5;
       }
-      expect(mesh.uvsOf(face).first.x, closeTo(was.x, 1e-12),
-          reason: 'drawn coordinates belong to nobody but the person who drew '
-              'them');
+      expect(
+        mesh.uvsOf(face).first.x,
+        closeTo(was.x, 1e-12),
+        reason:
+            'drawn coordinates belong to nobody but the person who drew '
+            'them',
+      );
     });
 
     test('letting go returns to the rule and keeps the settings', () {
@@ -159,8 +173,11 @@ void main() {
       final face = facing(mesh, Vector3(0, 1, 0));
       // Two, for a face with four. What a face looks like after being cut.
       face.uv = FaceUv(manual: [Vector2.zero(), Vector2(1, 1)]);
-      expect(mesh.uvsOf(face), hasLength(4),
-          reason: 'back to the rule rather than out of range');
+      expect(
+        mesh.uvsOf(face),
+        hasLength(4),
+        reason: 'back to the rule rather than out of range',
+      );
     });
   });
 
@@ -180,21 +197,27 @@ void main() {
       expect(mesh.uvsOf(drawn).first.y, closeTo(wasDrawn.y - 0.2, 1e-9));
     });
 
-    test('scaling a selection keeps the faces where they are to each other',
-        () {
-      final mesh = cube();
-      final faces = mesh.faces.take(3).toList();
-      mesh
-        ..projectBox(faces)
-        ..nudgeUvs([faces[1]], Vector2(4, 0));
+    test(
+      'scaling a selection keeps the faces where they are to each other',
+      () {
+        final mesh = cube();
+        final faces = mesh.faces.take(3).toList();
+        mesh
+          ..projectBox(faces)
+          ..nudgeUvs([faces[1]], Vector2(4, 0));
 
-      final apart = mesh.uvsOf(faces[1]).first.x - mesh.uvsOf(faces[0]).first.x;
-      mesh.scaleUvs(faces, Vector2(2, 2));
-      final now = mesh.uvsOf(faces[1]).first.x - mesh.uvsOf(faces[0]).first.x;
+        final apart =
+            mesh.uvsOf(faces[1]).first.x - mesh.uvsOf(faces[0]).first.x;
+        mesh.scaleUvs(faces, Vector2(2, 2));
+        final now = mesh.uvsOf(faces[1]).first.x - mesh.uvsOf(faces[0]).first.x;
 
-      expect(now, closeTo(apart * 2, 1e-9),
-          reason: 'about the selection, not each face on its own');
-    });
+        expect(
+          now,
+          closeTo(apart * 2, 1e-9),
+          reason: 'about the selection, not each face on its own',
+        );
+      },
+    );
 
     test('fitting puts the whole selection in the square', () {
       final mesh = cube();
@@ -254,8 +277,11 @@ void main() {
       final was = mesh.uvBoundsOf([drawn])!;
       mesh.flipUvs([drawn], u: true);
       final now = mesh.uvBoundsOf([drawn])!;
-      expect(now.min.x, closeTo(was.min.x, 1e-9),
-          reason: 'mirrored about its own middle, so it stays where it was');
+      expect(
+        now.min.x,
+        closeTo(was.min.x, 1e-9),
+        reason: 'mirrored about its own middle, so it stays where it was',
+      );
       expect(now.max.x, closeTo(was.max.x, 1e-9));
     });
 
@@ -294,10 +320,11 @@ void main() {
     });
 
     test('drawn coordinates survive one too', () {
-      final face = Face(
-        [0, 1, 2],
-        uv: FaceUv(manual: [Vector2(0, 0), Vector2(1, 0), Vector2(0.5, 1)]),
-      );
+      final face = Face([
+        0,
+        1,
+        2,
+      ], uv: FaceUv(manual: [Vector2(0, 0), Vector2(1, 0), Vector2(0.5, 1)]));
       final back = Face.fromJson(face.toJson())!;
       expect(back.uv.isManual, isTrue);
       expect(back.uv.manual!, hasLength(3));
@@ -309,24 +336,27 @@ void main() {
     });
 
     test('a copy of a face gets its own coordinates', () {
-      final face = Face([0, 1, 2],
-          uv: FaceUv(manual: [Vector2.zero(), Vector2.zero(), Vector2.zero()]));
+      final face = Face([
+        0,
+        1,
+        2,
+      ], uv: FaceUv(manual: [Vector2.zero(), Vector2.zero(), Vector2.zero()]));
       final copy = face.copy();
       expect(copy.uv.manual, isNotNull);
-      expect(identical(copy.uv, face.uv), isTrue,
-          reason: 'the rule is immutable, so sharing it is safe');
+      expect(
+        identical(copy.uv, face.uv),
+        isTrue,
+        reason: 'the rule is immutable, so sharing it is safe',
+      );
     });
   });
 
   test('what a mesh is drawn with comes from the faces', () {
     final mesh = cube();
     final face = facing(mesh, Vector3(0, 1, 0))
-      ..uv = FaceUv(manual: [
-        Vector2(0, 0),
-        Vector2(1, 0),
-        Vector2(1, 1),
-        Vector2(0, 1),
-      ]);
+      ..uv = FaceUv(
+        manual: [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)],
+      );
 
     final tris = mesh.triangulate();
     // The face's own corners, wherever they ended up in the buffer.
@@ -337,7 +367,8 @@ void main() {
     // rule would never produce for a cube centred on the origin.
     var found = false;
     for (var i = 0; i + 1 < tris.uvs.length; i += 2) {
-      if ((tris.uvs[i] - 1).abs() < 1e-6 && (tris.uvs[i + 1] - 1).abs() < 1e-6) {
+      if ((tris.uvs[i] - 1).abs() < 1e-6 &&
+          (tris.uvs[i + 1] - 1).abs() < 1e-6) {
         found = true;
       }
     }

@@ -14,8 +14,6 @@
 /// It has no Flutter in it either, for the same reason.
 library;
 
-export 'src/sky.dart'
-    show CameraExposure, CelestialBody, DayCycle, SkyState;
+export 'src/sky.dart' show CameraExposure, CelestialBody, DayCycle, SkyState;
 export 'src/strike.dart' show Strike;
-export 'src/weather.dart'
-    show CloudKind, WeatherCondition, WeatherState;
+export 'src/weather.dart' show CloudKind, WeatherCondition, WeatherState;

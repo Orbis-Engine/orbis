@@ -5,14 +5,16 @@ import 'package:vector_math/vector_math_64.dart';
 void main() {
   /// One square face on the ground, two metres across, facing up.
   Mesh quad() => Mesh(
-        positions: [
-          Vector3(0, 0, 0),
-          Vector3(0, 0, 2),
-          Vector3(2, 0, 2),
-          Vector3(2, 0, 0),
-        ],
-        faces: [Face([0, 1, 2, 3])],
-      );
+    positions: [
+      Vector3(0, 0, 0),
+      Vector3(0, 0, 2),
+      Vector3(2, 0, 2),
+      Vector3(2, 0, 0),
+    ],
+    faces: [
+      Face([0, 1, 2, 3]),
+    ],
+  );
 
   Mesh cube() => Shape.of(ShapeKind.cube).build();
 
@@ -29,8 +31,8 @@ void main() {
 
     test('an edge point says which edge and how far along', () {
       final mesh = quad();
-      final where = mesh.whereOn(mesh.faces.single, Vector3(0, 0, 0.5))
-          as AlongEdge;
+      final where =
+          mesh.whereOn(mesh.faces.single, Vector3(0, 0, 0.5)) as AlongEdge;
       expect(where.corner, 0, reason: 'the edge leaving corner nought');
       expect(where.along, closeTo(0.25, 1e-9));
     });
@@ -39,10 +41,14 @@ void main() {
       final mesh = quad();
       // Somebody aiming at an edge and missing by a centimetre means the
       // edge; a cut that landed just inside would leave a sliver.
-      expect(mesh.whereOn(mesh.faces.single, Vector3(0.01, 0, 1)),
-          isA<AlongEdge>());
-      expect(mesh.whereOn(mesh.faces.single, Vector3(0.5, 0, 1)),
-          isA<InsideFace>());
+      expect(
+        mesh.whereOn(mesh.faces.single, Vector3(0.01, 0, 1)),
+        isA<AlongEdge>(),
+      );
+      expect(
+        mesh.whereOn(mesh.faces.single, Vector3(0.5, 0, 1)),
+        isA<InsideFace>(),
+      );
     });
   });
 
@@ -102,8 +108,11 @@ void main() {
       expect(made, hasLength(2));
       // Two ends on edges plus two bends, and the bends belong to both halves.
       expect(mesh.vertexCount, 8);
-      expect(made.first.vertices.length + made.last.vertices.length, 12,
-          reason: 'four corners each side, shared along the cut');
+      expect(
+        made.first.vertices.length + made.last.vertices.length,
+        12,
+        reason: 'four corners each side, shared along the cut',
+      );
     });
 
     test('the bends are shared, not duplicated', () {
@@ -113,10 +122,14 @@ void main() {
         Vector3(1, 0, 1.2),
         Vector3(2, 0, 1),
       ]);
-      final shared =
-          made.first.vertices.toSet().intersection(made.last.vertices.toSet());
-      expect(shared, hasLength(3),
-          reason: 'both ends and the bend, or the cut is a crack');
+      final shared = made.first.vertices.toSet().intersection(
+        made.last.vertices.toSet(),
+      );
+      expect(
+        shared,
+        hasLength(3),
+        reason: 'both ends and the bend, or the cut is a crack',
+      );
     });
 
     test('a path that starts inside cuts nothing', () {
@@ -159,24 +172,23 @@ void main() {
       }
     });
 
-    test('drawn coordinates do not carry over, because their corners are gone',
-        () {
-      final mesh = quad();
-      mesh.faces.single.uv = FaceUv(manual: [
-        Vector2(0, 0),
-        Vector2(0, 1),
-        Vector2(1, 1),
-        Vector2(1, 0),
-      ]);
+    test(
+      'drawn coordinates do not carry over, because their corners are gone',
+      () {
+        final mesh = quad();
+        mesh.faces.single.uv = FaceUv(
+          manual: [Vector2(0, 0), Vector2(0, 1), Vector2(1, 1), Vector2(1, 0)],
+        );
 
-      final made = mesh.cutFace(mesh.faces.single, [
-        Vector3(0, 0, 1),
-        Vector3(2, 0, 1),
-      ]);
-      for (final face in made) {
-        expect(face.uv.isManual, isFalse);
-      }
-    });
+        final made = mesh.cutFace(mesh.faces.single, [
+          Vector3(0, 0, 1),
+          Vector3(2, 0, 1),
+        ]);
+        for (final face in made) {
+          expect(face.uv.isManual, isFalse);
+        }
+      },
+    );
 
     test('the new faces sit where the old one was in the list', () {
       final mesh = cube();
@@ -194,19 +206,21 @@ void main() {
     test('a face the mesh does not have is refused', () {
       final mesh = quad();
       final stranger = Face([0, 1, 2]);
-      expect(mesh.cutFace(stranger, [Vector3.zero(), Vector3(1, 0, 0)]),
-          isEmpty);
+      expect(
+        mesh.cutFace(stranger, [Vector3.zero(), Vector3(1, 0, 0)]),
+        isEmpty,
+      );
     });
   });
 
   group('cutting a loop inside', () {
     List<Vector3> loop() => [
-          Vector3(0.5, 0, 0.5),
-          Vector3(0.5, 0, 1.5),
-          Vector3(1.5, 0, 1.5),
-          Vector3(1.5, 0, 0.5),
-          Vector3(0.5, 0, 0.5),
-        ];
+      Vector3(0.5, 0, 0.5),
+      Vector3(0.5, 0, 1.5),
+      Vector3(1.5, 0, 1.5),
+      Vector3(1.5, 0, 0.5),
+      Vector3(0.5, 0, 0.5),
+    ];
 
     test('the loop becomes a face and the rest surrounds it', () {
       final mesh = quad();
@@ -251,10 +265,7 @@ void main() {
     test('a loop of two points is not a loop', () {
       final mesh = quad();
       expect(
-        mesh.cutFace(mesh.faces.single, [
-          Vector3(1, 0, 1),
-          Vector3(1, 0, 1),
-        ]),
+        mesh.cutFace(mesh.faces.single, [Vector3(1, 0, 1), Vector3(1, 0, 1)]),
         isEmpty,
       );
     });
