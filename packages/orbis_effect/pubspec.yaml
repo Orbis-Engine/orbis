@@ -1,0 +1,16 @@
+name: orbis_effect
+description: >-
+  Change stated as a function of time — move, turn, grow, fade — sequenced
+  and composed.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  vector_math: ^2.1.4
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0

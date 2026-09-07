@@ -10,10 +10,14 @@ cd "$(dirname "$0")/.."
 PACKAGES=(
   packages/orbis_agent
   packages/orbis_camera
+  packages/orbis_collide
   packages/orbis_codegen
   packages/orbis_core
+  packages/orbis_effect
   packages/orbis_light
+  packages/orbis_noise
   packages/orbis_rig
+  packages/orbis_sprite
 )
 
 failures=0
