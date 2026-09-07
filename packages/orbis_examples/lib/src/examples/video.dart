@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:orbis_filament/orbis_filament.dart';
 import 'package:vector_math/vector_math_64.dart' hide Colors;
@@ -18,13 +19,8 @@ import 'surface.dart' show linearOf;
 /// four: a video is listed on the scene, and a material points at it.
 class VideoExample extends Example {
   VideoExample() {
-    // Somewhere to point at without asking anybody to find a file first.
-    //
-    // Worth knowing when nothing appears: a macOS application is sandboxed,
-    // so the decoder can only open what the container can reach. A path under
-    // the app's own temporary directory works; one under /tmp does not, and
-    // fails silently because a file that cannot be opened and a file that has
-    // not started decoding look the same from here.
+    // A film named on the way in, for a screenshot or a test. Everybody else
+    // picks one — see [settings].
     final given = Platform.environment['ORBIS_VIDEO'];
     if (given != null && File(given).existsSync()) path = given;
   }
@@ -42,6 +38,15 @@ class VideoExample extends Example {
       const ViewPoint(distance: 14, pitch: 0.14, yaw: 0.0);
 
   String? path;
+
+  /// What went wrong with the last file somebody named, if anything.
+  ///
+  /// Said out loud, because a path that cannot be read and a film that has
+  /// not started decoding look identical from here — four black rectangles —
+  /// and the example is then indistinguishable from a renderer that does not
+  /// work.
+  String? trouble;
+
   bool playing = true;
   bool loop = true;
   double rate = 1.0;
@@ -142,17 +147,51 @@ class VideoExample extends Example {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.movie_outlined, size: 16),
+            label: Text(path == null ? 'Choose a film…' : 'Choose another…'),
+            onPressed: () async {
+              // Picked rather than typed. A path somebody types is a guess,
+              // and this example spent its life showing four black
+              // rectangles because the guess was usually wrong and nothing
+              // said so.
+              final file = await openFile(
+                acceptedTypeGroups: const [
+                  XTypeGroup(label: 'Video', extensions: ['mp4', 'mov', 'm4v']),
+                ],
+              );
+              if (file == null) return;
+              path = file.path;
+              trouble = null;
+              _field.text = file.path;
+              changed();
+            },
+          ),
+        ),
+        Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: TextField(
             controller: _field,
             style: const TextStyle(fontSize: 12),
             decoration: const InputDecoration(
               isDense: true,
-              labelText: 'File',
+              labelText: 'Or a path',
               hintText: '/path/to/a.mp4',
             ),
             onSubmitted: (value) {
-              path = value.trim().isEmpty ? null : value.trim();
+              final wanted = value.trim();
+              if (wanted.isEmpty) {
+                path = null;
+                trouble = null;
+              } else if (!File(wanted).existsSync()) {
+                // Checked here rather than left to the decoder, which reports
+                // nothing back and simply shows no frames.
+                trouble = 'There is no file at that path.';
+              } else {
+                path = wanted;
+                trouble = null;
+              }
               changed();
             },
           ),
@@ -218,6 +257,44 @@ class VideoExample extends Example {
           ),
         ),
       ],
+    );
+  }
+
+  /// What to say when there is nothing to play.
+  ///
+  /// Four unlit rectangles are what this example looks like with no film, and
+  /// they look exactly like a broken renderer. Saying so is the difference
+  /// between an example that appears not to work and one that is waiting.
+  @override
+  Widget? overlay(BuildContext context, VoidCallback changed) {
+    final say = trouble ?? (path == null ? 'No film yet.' : null);
+    if (say == null) return null;
+
+    return IgnorePointer(
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xCC11141A),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0x33FFFFFF)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                say,
+                style: const TextStyle(fontSize: 13, color: Colors.white),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Choose one in the panel, and it plays on all four screens.',
+                style: TextStyle(fontSize: 11.5, color: Color(0xFFA6B0BF)),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
