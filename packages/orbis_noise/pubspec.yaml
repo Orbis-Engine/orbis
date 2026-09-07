@@ -1,0 +1,16 @@
+name: orbis_noise
+description: >-
+  Value and gradient noise, tiling and deterministic — the same field every
+  run, on every machine.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  vector_math: ^2.1.4
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0
