@@ -279,7 +279,7 @@ struct Drawn {
 /// How many floats one material's numbers occupy, and how many maps it has
 /// room for. Both agree with the Dart side by hand; a mismatch is caught in
 /// the plugin, which checks the array lengths before any of this is reached.
-constexpr size_t kMaterialParams = 18;
+constexpr size_t kMaterialParams = 19;
 constexpr size_t kMaterialMaps = 5;
 
 /// One material as the renderer holds it between frames.
@@ -2136,7 +2136,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
 /// Sets up the parts of a material that are rasteriser state rather than
 /// shader input.
-- (void)applyRasterState:(Surfaced &)surface withThreshold:(float)threshold {
+- (void)applyRasterState:(Surfaced &)surface
+           withThreshold:(float)threshold
+                    bias:(float)bias {
   MaterialInstance *instance = surface.instance;
   const int culling = (surface.flags >> 6) & 3;
   const bool doubleSided = ((surface.flags >> 8) & 1) != 0;
@@ -2150,6 +2152,11 @@ static constexpr NSUInteger kMaxPostParams = 128;
   if (culling == 2 || doubleSided) mode = MaterialInstance::CullingMode::NONE;
   instance->setCullingMode(mode);
   instance->setDepthWrite(depthWrite);
+  // Pushed away in the depth test only, without moving where it is drawn:
+  // which of two things sharing a plane is behind. The slope term goes with
+  // the constant one, or a surface seen nearly edge-on needs a bias so large
+  // that it separates visibly when seen face-on.
+  instance->setPolygonOffset(bias, bias * 1000.0f);
   // Only where it means anything: Filament asserts rather than ignores a
   // threshold set on a material that does not punch pixels out.
   if (((surface.flags >> 2) & 15) == 3) instance->setMaskThreshold(threshold);
@@ -2500,7 +2507,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
     if (rebuild || surface.flags != flags[i]) {
       surface.flags = flags[i];
-      [self applyRasterState:surface withThreshold:values[17]];
+      [self applyRasterState:surface
+                withThreshold:values[17]
+                         bias:values[18]];
       // A new sampler means every map has to be bound again, so the numbers
       // are rewritten with them rather than compared.
       surface.written = false;
@@ -2523,6 +2532,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
       if (((surface.flags >> 2) & 15) == 3) {
         surface.instance->setMaskThreshold(values[17]);
       }
+      surface.instance->setPolygonOffset(values[18], values[18] * 1000.0f);
     }
 
     _materialOrder.push_back(surface.instance);

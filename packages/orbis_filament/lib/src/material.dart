@@ -155,6 +155,7 @@ class OrbisMaterial {
     Vector2? offset,
     this.maskThreshold = 0.4,
     this.depthWrite = true,
+    this.depthBias = 0.0,
     this.wrap = OrbisWrap.repeat,
     this.filter = OrbisFilter.smooth,
     this.video,
@@ -243,6 +244,19 @@ class OrbisMaterial {
   /// to be drawn.
   final bool depthWrite;
 
+  /// How far the surface is pushed away from the camera in the depth test
+  /// only, without moving where it is drawn.
+  ///
+  /// For the surfaces that share a plane with another and must lose. Two
+  /// coplanar things flicker pixel by pixel as the camera moves — each one
+  /// winning wherever the arithmetic rounds its way — and no amount of depth
+  /// precision fixes it, because the two really are at the same depth. This
+  /// says which of them is behind.
+  ///
+  /// Positive pushes back. A ground marking, a decal, a grid: anything meant
+  /// to be *on* a surface rather than fighting it.
+  final double depthBias;
+
   final OrbisWrap wrap;
   final OrbisFilter filter;
 
@@ -281,7 +295,7 @@ class OrbisMaterial {
   static const int mapCount = 5;
 
   /// How many floats one material contributes to the message.
-  static const int stride = 18;
+  static const int stride = 19;
 
   /// The bits that decide which compiled material an instance comes from and
   /// how the rasteriser is set up. Separate from the floats because a change
@@ -322,6 +336,7 @@ class OrbisMaterial {
     out[at + 15] = shift.x;
     out[at + 16] = shift.y;
     out[at + 17] = maskThreshold;
+    out[at + 18] = depthBias;
   }
 
   OrbisMaterial copyWith({
@@ -341,6 +356,7 @@ class OrbisMaterial {
     Vector2? offset,
     double? maskThreshold,
     bool? depthWrite,
+    double? depthBias,
     OrbisWrap? wrap,
     OrbisFilter? filter,
   }) {
@@ -362,6 +378,7 @@ class OrbisMaterial {
       offset: offset ?? this.offset,
       maskThreshold: maskThreshold ?? this.maskThreshold,
       depthWrite: depthWrite ?? this.depthWrite,
+      depthBias: depthBias ?? this.depthBias,
       wrap: wrap ?? this.wrap,
       filter: filter ?? this.filter,
       video: video,

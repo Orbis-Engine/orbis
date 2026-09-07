@@ -357,7 +357,7 @@ private struct Scene {
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
   private static let lightStride = 18
-  private static let materialStride = 18
+  private static let materialStride = 19
   private static let materialMaps = 5
   private static let videoStride = 4
   private static let fogStride = 16
