@@ -36,20 +36,20 @@ void main() {
 
   group('editing', () {
     test('replacing leaves the original alone', () {
-      final changed = tree.replaceAt(
-        const [1, 1],
-        const UiNode(type: 'button', text: 'Changed'),
-      );
+      final changed = tree.replaceAt(const [
+        1,
+        1,
+      ], const UiNode(type: 'button', text: 'Changed'));
 
       expect(changed.at(const [1, 1])!.text, 'Changed');
       expect(tree.at(const [1, 1])!.text, 'Two');
     });
 
     test('siblings are shared rather than copied', () {
-      final changed = tree.replaceAt(
-        const [1, 1],
-        const UiNode(type: 'button', text: 'Changed'),
-      );
+      final changed = tree.replaceAt(const [
+        1,
+        1,
+      ], const UiNode(type: 'button', text: 'Changed'));
 
       // An edit deep in a large interface copies the spine and nothing else.
       expect(identical(changed.children.first, tree.children.first), isTrue);
@@ -60,8 +60,10 @@ void main() {
     });
 
     test('replacing the root replaces everything', () {
-      final changed =
-          tree.replaceAt(const [], const UiNode(type: 'text', text: 'Only'));
+      final changed = tree.replaceAt(
+        const [],
+        const UiNode(type: 'text', text: 'Only'),
+      );
       expect(changed.type, 'text');
     });
 
@@ -72,8 +74,12 @@ void main() {
         const UiNode(type: 'button', text: 'Middle'),
       );
 
-      expect([for (final c in changed.at(const [1])!.children) c.text],
-          ['One', 'Middle', 'Two']);
+      expect(
+        [
+          for (final c in changed.at(const [1])!.children) c.text,
+        ],
+        ['One', 'Middle', 'Two'],
+      );
     });
 
     test('an index past the end appends rather than failing', () {
@@ -106,8 +112,12 @@ void main() {
 
     test('moving reorders among siblings', () {
       final changed = tree.moveAt(const [1, 1], 0);
-      expect([for (final c in changed.at(const [1])!.children) c.text],
-          ['Two', 'One']);
+      expect(
+        [
+          for (final c in changed.at(const [1])!.children) c.text,
+        ],
+        ['Two', 'One'],
+      );
     });
   });
 
@@ -196,60 +206,67 @@ void main() {
   });
 
   group('the design chrome', () {
-    testWidgets('a decorator sees every element, with its path',
-        (tester) async {
+    testWidgets('a decorator sees every element, with its path', (
+      tester,
+    ) async {
       final seen = <String, List<int>>{};
 
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: UiSurface(
-            description: tree,
-            decorate: (node, path, built) {
-              seen['${node.type}${node.text ?? ''}'] = path;
-              return built;
-            },
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: UiSurface(
+              description: tree,
+              decorate: (node, path, built) {
+                seen['${node.type}${node.text ?? ''}'] = path;
+                return built;
+              },
+            ),
           ),
         ),
-      ));
+      );
 
       expect(seen['column'], isEmpty);
       expect(seen['buttonTwo'], [1, 1]);
       expect(seen, hasLength(5));
     });
 
-    testWidgets('a wrapper does not come between a Stack and its Positioned',
-        (tester) async {
+    testWidgets('a wrapper does not come between a Stack and its Positioned', (
+      tester,
+    ) async {
       // Expanded and Positioned are read by the parent that lays them out and
       // have to be its direct child. A decorator outside them is not a
       // cosmetic problem: Flutter throws and the element loses its place.
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: UiSurface(
-            description: const UiNode(
-              type: 'stack',
-              children: [
-                UiNode(type: 'text', css: 'left: 10px; top: 20px', text: 'A'),
-                UiNode(type: 'row', children: [
-                  UiNode(type: 'text', css: 'flex: 1', text: 'B'),
-                ]),
-              ],
-            ),
-            decorate: (node, path, built) => ColoredBox(
-              color: const Color(0x11FFFFFF),
-              child: built,
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: UiSurface(
+              description: const UiNode(
+                type: 'stack',
+                children: [
+                  UiNode(type: 'text', css: 'left: 10px; top: 20px', text: 'A'),
+                  UiNode(
+                    type: 'row',
+                    children: [UiNode(type: 'text', css: 'flex: 1', text: 'B')],
+                  ),
+                ],
+              ),
+              decorate: (node, path, built) =>
+                  ColoredBox(color: const Color(0x11FFFFFF), child: built),
             ),
           ),
         ),
-      ));
+      );
 
       expect(tester.takeException(), isNull);
       expect(find.text('A'), findsOneWidget);
     });
 
     testWidgets('without one, nothing is wrapped', (tester) async {
-      await tester.pumpWidget(const MaterialApp(
-        home: Scaffold(body: UiSurface(description: tree)),
-      ));
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(body: UiSurface(description: tree)),
+        ),
+      );
 
       // The point of the hook being null in a game: the chrome is not stripped
       // out at build time, it was never built.
@@ -294,20 +311,24 @@ void main() {
       expect(moved.placed!.left, 10);
     });
 
-    test('a drag keeps the fraction, so slow dragging does not lose ground',
-        () {
-      var node = const UiNode(type: 'box').placeAt(0, 0);
-      // Ten steps of a third of a pixel. Rounded each time this would not
-      // move at all.
-      for (var i = 0; i < 10; i++) {
-        final at = node.placed!;
-        node = node.placeAt(at.left + 0.34, at.top, round: false);
-      }
-      expect(node.placed!.left, closeTo(3.4, 0.1));
-    });
+    test(
+      'a drag keeps the fraction, so slow dragging does not lose ground',
+      () {
+        var node = const UiNode(type: 'box').placeAt(0, 0);
+        // Ten steps of a third of a pixel. Rounded each time this would not
+        // move at all.
+        for (var i = 0; i < 10; i++) {
+          final at = node.placed!;
+          node = node.placeAt(at.left + 0.34, at.top, round: false);
+        }
+        expect(node.placed!.left, closeTo(3.4, 0.1));
+      },
+    );
 
     test('letting go lands it on a whole pixel', () {
-      final dragged = const UiNode(type: 'box').placeAt(10.4, 20.6, round: false);
+      final dragged = const UiNode(
+        type: 'box',
+      ).placeAt(10.4, 20.6, round: false);
       expect(dragged.placed!.left, 10.4);
 
       final dropped = dragged.placeAt(

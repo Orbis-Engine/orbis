@@ -8,11 +8,13 @@ void main() {
     UiNode description, {
     UiEvent? onEvent,
   }) async {
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: UiSurface(description: description, onEvent: onEvent),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UiSurface(description: description, onEvent: onEvent),
+        ),
       ),
-    ));
+    );
   }
 
   group('a description becomes widgets', () {
@@ -22,30 +24,44 @@ void main() {
     });
 
     testWidgets('a row is a Row and a column is a Column', (tester) async {
-      await show(tester, const UiNode(type: 'row', children: [
-        UiNode(type: 'text', text: 'a'),
-        UiNode(type: 'text', text: 'b'),
-      ]));
+      await show(
+        tester,
+        const UiNode(
+          type: 'row',
+          children: [
+            UiNode(type: 'text', text: 'a'),
+            UiNode(type: 'text', text: 'b'),
+          ],
+        ),
+      );
       expect(find.byType(Row), findsOneWidget);
 
-      await show(tester, const UiNode(type: 'column', children: [
-        UiNode(type: 'text', text: 'a'),
-        UiNode(type: 'text', text: 'b'),
-      ]));
+      await show(
+        tester,
+        const UiNode(
+          type: 'column',
+          children: [
+            UiNode(type: 'text', text: 'a'),
+            UiNode(type: 'text', text: 'b'),
+          ],
+        ),
+      );
       expect(find.byType(Column), findsWidgets);
     });
 
-    testWidgets('a gap goes between children, not around them',
-        (tester) async {
-      await show(tester, const UiNode(
-        type: 'row',
-        classes: 'gap-4',
-        children: [
-          UiNode(type: 'text', text: 'a'),
-          UiNode(type: 'text', text: 'b'),
-          UiNode(type: 'text', text: 'c'),
-        ],
-      ));
+    testWidgets('a gap goes between children, not around them', (tester) async {
+      await show(
+        tester,
+        const UiNode(
+          type: 'row',
+          classes: 'gap-4',
+          children: [
+            UiNode(type: 'text', text: 'a'),
+            UiNode(type: 'text', text: 'b'),
+            UiNode(type: 'text', text: 'c'),
+          ],
+        ),
+      );
 
       final row = tester.widget<Row>(find.byType(Row));
       // Three children and two gaps: the first and last stay flush with the
@@ -53,42 +69,52 @@ void main() {
       expect(row.children.length, 5);
     });
 
-    testWidgets('a class list reaches the widgets it describes',
-        (tester) async {
-      await show(tester, const UiNode(
-        type: 'box',
-        classes: 'p-4 bg-slate-800 rounded-lg',
-        children: [UiNode(type: 'text', text: 'inside')],
-      ));
+    testWidgets('a class list reaches the widgets it describes', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        const UiNode(
+          type: 'box',
+          classes: 'p-4 bg-slate-800 rounded-lg',
+          children: [UiNode(type: 'text', text: 'inside')],
+        ),
+      );
 
       final padding = tester.widget<Padding>(find.byType(Padding).first);
       expect(padding.padding, const EdgeInsets.all(16));
 
-      final decorated =
-          tester.widget<DecoratedBox>(find.byType(DecoratedBox).first);
+      final decorated = tester.widget<DecoratedBox>(
+        find.byType(DecoratedBox).first,
+      );
       final decoration = decorated.decoration as BoxDecoration;
       expect(decoration.color, isNotNull);
       expect(decoration.borderRadius, BorderRadius.circular(10));
     });
 
-    testWidgets('lining up on the baseline does not need to be told twice',
-        (tester) async {
+    testWidgets('lining up on the baseline does not need to be told twice', (
+      tester,
+    ) async {
       // Flutter asserts if a baseline alignment arrives without a baseline,
       // and a script asking for one should not be the thing that takes the
       // frame down.
-      await show(tester, const UiNode(
-        type: 'row',
-        classes: 'items-baseline',
-        children: [
-          UiNode(type: 'text', text: 'Score'),
-          UiNode(type: 'text', classes: 'text-2xl', text: '1840'),
-        ],
-      ));
+      await show(
+        tester,
+        const UiNode(
+          type: 'row',
+          classes: 'items-baseline',
+          children: [
+            UiNode(type: 'text', text: 'Score'),
+            UiNode(type: 'text', classes: 'text-2xl', text: '1840'),
+          ],
+        ),
+      );
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('nothing in a description can throw a frame away',
-        (tester) async {
+    testWidgets('nothing in a description can throw a frame away', (
+      tester,
+    ) async {
       // Half-written trees are the normal case: script is reloaded on save,
       // so an element with no type and a child that is not a map arrive
       // regularly while somebody is typing.
@@ -169,12 +195,14 @@ void main() {
       expect(UiNode.decode('"just words"').text, 'just words');
     });
 
-    test('something that is not a description says so rather than throwing',
-        () {
-      final node = UiNode.decode('{oh dear');
-      expect(node.type, 'text');
-      expect(node.text, contains('could not be read'));
-    });
+    test(
+      'something that is not a description says so rather than throwing',
+      () {
+        final node = UiNode.decode('{oh dear');
+        expect(node.type, 'text');
+        expect(node.text, contains('could not be read'));
+      },
+    );
 
     test('a description survives a round trip', () {
       const node = UiNode(

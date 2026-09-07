@@ -187,8 +187,8 @@ class UiCss {
         return value == 'italic'
             ? const UiStyle(italic: true)
             : value == 'normal'
-                ? const UiStyle(italic: false)
-                : null;
+            ? const UiStyle(italic: false)
+            : null;
       case 'letter-spacing':
         return _one(value, (v) => UiStyle(letterSpacing: v));
       case 'line-height':
@@ -217,7 +217,9 @@ class UiCss {
         // Only how far it is thrown; the rest of the syntax describes a
         // shadow model this does not have.
         final lengths = _lengths(value);
-        return lengths.isEmpty ? const UiStyle(shadow: 8) : UiStyle(shadow: lengths.last);
+        return lengths.isEmpty
+            ? const UiStyle(shadow: 8)
+            : UiStyle(shadow: lengths.last);
     }
     return null;
   }
@@ -293,7 +295,9 @@ class UiCss {
 
     for (final unit in const ['px', 'rem', 'em', 'pt']) {
       if (!text.endsWith(unit)) continue;
-      final number = double.tryParse(text.substring(0, text.length - unit.length));
+      final number = double.tryParse(
+        text.substring(0, text.length - unit.length),
+      );
       if (number == null) return null;
       return switch (unit) {
         'rem' || 'em' => number * theme.step * 4,

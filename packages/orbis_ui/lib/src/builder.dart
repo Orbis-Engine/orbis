@@ -26,11 +26,8 @@ typedef UiEvent = void Function(String handler, Object? payload);
 /// stripped out at build time, it was never built. That is the difference
 /// between a canvas you can see while you work and one that shows up in a
 /// screenshot.
-typedef UiDecorator = Widget Function(
-  UiNode node,
-  List<int> path,
-  Widget built,
-);
+typedef UiDecorator =
+    Widget Function(UiNode node, List<int> path, Widget built);
 
 /// Builds real Flutter widgets from a description.
 ///
@@ -45,9 +42,10 @@ class UiBuilder {
     this.onEvent,
     this.fontFamily,
     this.decorate,
-  })  : theme = theme ?? const UiTheme(),
-        _utilities = UiUtilities(theme: theme ?? const UiTheme()),
-        _css = UiCss(theme: theme ?? const UiTheme());
+    this.width,
+  }) : theme = theme ?? const UiTheme(),
+       _utilities = UiUtilities(theme: theme ?? const UiTheme()),
+       _css = UiCss(theme: theme ?? const UiTheme());
 
   final UiTheme theme;
 
@@ -60,13 +58,24 @@ class UiBuilder {
   /// Called for every element, when a host wants to wrap them. Null in a game.
   final UiDecorator? decorate;
 
+  /// The width the whole interface is being laid out at, when the caller knows
+  /// it. What the prefixed classes are resolved against.
+  ///
+  /// One width for the tree rather than one per element: `md:` means "on a
+  /// screen this wide", and an element that answered to the box it happened to
+  /// be in would read one way in a sidebar and another in the middle of the
+  /// same screen.
+  final double? width;
+
   final UiUtilities _utilities;
   final UiCss _css;
 
   /// The style a node adds up to: its classes, then its CSS over the top.
   UiStyle styleOf(UiNode node) {
     var style = UiStyle.none;
-    if (node.classes.isNotEmpty) style = style.merge(_utilities.parse(node.classes));
+    if (node.classes.isNotEmpty) {
+      style = style.merge(_utilities.parse(node.classes, width: width));
+    }
     if (node.css.isNotEmpty) style = style.merge(_css.parse(node.css));
     return style;
   }
@@ -82,7 +91,10 @@ class UiBuilder {
   ];
 
   /// Builds one node and everything under it.
-  Widget build(UiNode node, [List<int> path = const []]) {
+  ///
+  /// [canGrow] false when the parent has worked out that it cannot hand out
+  /// the space a `flex-1` asks for — see [_container].
+  Widget build(UiNode node, [List<int> path = const [], bool canGrow = true]) {
     final style = styleOf(node);
     final inherited = TextStyle(
       color: style.colour,
@@ -100,8 +112,11 @@ class UiBuilder {
       'field' => _field(node, style, inherited),
       'image' => _image(node, style),
       'spacer' => const Spacer(),
-      'row' || 'column' || 'stack' || 'box' || _ =>
-        _container(node, style, path),
+      'row' ||
+      'column' ||
+      'stack' ||
+      'box' ||
+      _ => _container(node, style, path),
     };
 
     widget = _decorate(widget, style, node);
@@ -115,7 +130,7 @@ class UiBuilder {
     // Growing is a thing the *parent* does with a child, so it is applied
     // here rather than inside the child's own layout.
     final grow = style.grow;
-    if (grow != null && grow > 0) {
+    if (canGrow && grow != null && grow > 0) {
       widget = Expanded(flex: grow.round().clamp(1, 1000), child: widget);
     }
 
@@ -231,7 +246,8 @@ class UiBuilder {
   }
 
   Widget _container(UiNode node, UiStyle style, [List<int> path = const []]) {
-    final direction = style.direction ??
+    final direction =
+        style.direction ??
         switch (node.type) {
           'row' => 'row',
           'stack' => 'stack',
@@ -239,44 +255,92 @@ class UiBuilder {
           _ => node.children.length > 1 ? 'column' : 'none',
         };
 
-    final children = [
-      for (var i = 0; i < node.children.length; i++)
-        build(node.children[i], [...path, i]),
-    ];
-
-    if (children.isEmpty) return const SizedBox.shrink();
+    if (node.children.isEmpty) return const SizedBox.shrink();
 
     if (direction == 'stack') {
       return Stack(
         clipBehavior: (style.clip ?? false) ? Clip.hardEdge : Clip.none,
-        children: children,
+        children: [
+          for (var i = 0; i < node.children.length; i++)
+            build(node.children[i], [...path, i]),
+        ],
       );
     }
 
-    if (direction == 'none' && children.length == 1) return children.single;
+    if (direction == 'none' && node.children.length == 1) {
+      return build(node.children.single, [...path, 0]);
+    }
 
-    final spaced = _spaced(children, style.gap ?? 0, direction == 'row');
+    // A child asking to grow is asking for a share of space its parent may
+    // not have. A row inside a stack with only a `left` is handed no width at
+    // all, and a flex with a flexible child and nothing to divide does not lay
+    // out badly — it throws, and the rest of the frame's layout is abandoned
+    // with it. Somebody who split a container into four columns and got a
+    // blank canvas met exactly that.
+    //
+    // So it is measured first, and the children keep their natural size when
+    // there is nothing to share. What that shows is a row that did not
+    // stretch: wrong, but legible, and fixable by whoever is looking at it.
+    final wantsToGrow = node.children.any(
+      (child) => (styleOf(child).grow ?? 0) > 0,
+    );
+    if (!wantsToGrow) return _flex(node, style, path, direction == 'row', true);
+
+    return LayoutBuilder(
+      builder: (context, constraints) => _flex(
+        node,
+        style,
+        path,
+        direction == 'row',
+        direction == 'row'
+            ? constraints.hasBoundedWidth
+            : constraints.hasBoundedHeight,
+      ),
+    );
+  }
+
+  /// The row or column itself, with its children built to suit.
+  Widget _flex(
+    UiNode node,
+    UiStyle style,
+    List<int> path,
+    bool horizontal,
+    bool canGrow,
+  ) {
+    final children = [
+      for (var i = 0; i < node.children.length; i++)
+        build(node.children[i], [...path, i], canGrow),
+    ];
+
+    final spaced = _spaced(children, style.gap ?? 0, horizontal);
     final scroll = style.scroll;
 
     // Lining up on the baseline needs to be told which baseline, and Flutter
     // asserts rather than guessing. A script asking for it should not be the
     // thing that takes the frame down, so the answer is supplied here.
-    final baseline =
-        style.crossAxis == 'baseline' ? TextBaseline.alphabetic : null;
+    final baseline = style.crossAxis == 'baseline'
+        ? TextBaseline.alphabetic
+        : null;
 
-    final flex = direction == 'row'
+    // Shrink-wrapped when there is nothing to fill: filling a maximum that is
+    // infinite is the same unbounded problem one step along.
+    final mainSize = scroll == null && canGrow
+        ? MainAxisSize.max
+        : MainAxisSize.min;
+
+    final flex = horizontal
         ? Row(
             mainAxisAlignment: _main(style.mainAxis),
             crossAxisAlignment: _cross(style.crossAxis),
             textBaseline: baseline,
-            mainAxisSize: scroll == null ? MainAxisSize.max : MainAxisSize.min,
+            mainAxisSize: mainSize,
             children: spaced,
           )
         : Column(
             mainAxisAlignment: _main(style.mainAxis),
             crossAxisAlignment: _cross(style.crossAxis),
             textBaseline: baseline,
-            mainAxisSize: scroll == null ? MainAxisSize.max : MainAxisSize.min,
+            mainAxisSize: mainSize,
             children: spaced,
           );
 
@@ -297,10 +361,12 @@ class UiBuilder {
     final spaced = <Widget>[];
     for (var i = 0; i < children.length; i++) {
       if (i > 0) {
-        spaced.add(SizedBox(
-          width: horizontal ? gap : null,
-          height: horizontal ? null : gap,
-        ));
+        spaced.add(
+          SizedBox(
+            width: horizontal ? gap : null,
+            height: horizontal ? null : gap,
+          ),
+        );
       }
       spaced.add(children[i]);
     }
@@ -322,8 +388,12 @@ class UiBuilder {
     );
   }
 
-  Widget _button(UiNode node, UiStyle style, TextStyle inherited,
-      List<int> path) {
+  Widget _button(
+    UiNode node,
+    UiStyle style,
+    TextStyle inherited,
+    List<int> path,
+  ) {
     final handler = node.handlerFor('onPressed') ?? node.handlerFor('onTap');
     final label = node.text ?? '';
 
