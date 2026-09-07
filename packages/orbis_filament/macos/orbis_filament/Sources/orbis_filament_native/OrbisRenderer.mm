@@ -545,6 +545,18 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// object's index points into. Rebuilt each publish; never outlives one.
   std::vector<filament::MaterialInstance *> _materialOrder;
 
+  /// Which of them were built afresh this publish, so the objects wearing
+  /// them are re-dressed rather than left pointing at what was destroyed.
+  std::vector<bool> _materialRebuilt;
+
+  /// Instances no material needs any more.
+  ///
+  /// Destroyed at the start of the *next* publish rather than this one. An
+  /// object still wearing one is not put right until objects are applied,
+  /// which happens after materials — so destroying them here would leave a
+  /// renderable pointing at freed memory for the rest of the call.
+  std::vector<filament::MaterialInstance *> _materialsSpent;
+
   /// Images loaded for materials, by path and colour space — the same file
   /// read as sRGB and as linear is two textures, and asking for one when the
   /// other is loaded would be a silent wrong answer.
@@ -553,6 +565,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// Whether any of those are still decoding, so the queue is only polled
   /// while there is something in it.
   int _texturesPending;
+
+  /// How many frames the decoders have been asked and given nothing back.
+  int _pollsWithoutProgress;
 
   /// One white pixel, standing in for every map a material does not set.
   filament::Texture *_blankTexture;
@@ -1401,6 +1416,17 @@ static constexpr NSUInteger kMaxPostParams = 128;
 /// Takes an object out of the scene, keeping whatever can be used again.
 - (void)recycle:(Drawn &)drawn {
   if (drawn.instance != nullptr) {
+    // Back onto the materials the file brought with it, before it goes in the
+    // pool. An instance pooled while still pointing at an overriding material
+    // outlives that material — the material is swept the moment nothing is
+    // made of it — and the next object to take the instance out draws with a
+    // pointer to something destroyed. Which is a crash, and the way to get
+    // one is to turn a material off and on again.
+    if (!drawn.ownMaterials.empty()) {
+      [self dress:drawn withMaterial:-1];
+      drawn.ownMaterials.clear();
+    }
+    drawn.surface = -2;
     _scene->removeEntities(drawn.instance->getEntities(),
                            drawn.instance->getEntityCount());
     auto found = _meshes.find(drawn.path);
@@ -1987,11 +2013,27 @@ static constexpr NSUInteger kMaxPostParams = 128;
 /// nothing is — which is every frame after the first few.
 - (void)pollTextures {
   if (_texturesPending == 0) return;
+
   _ownStbTextures->updateQueue();
   _ownKtxTextures->updateQueue();
-  while (_ownStbTextures->popTexture() != nullptr) _texturesPending--;
-  while (_ownKtxTextures->popTexture() != nullptr) _texturesPending--;
+
+  int popped = 0;
+  while (_ownStbTextures->popTexture() != nullptr) popped++;
+  while (_ownKtxTextures->popTexture() != nullptr) popped++;
+  _texturesPending -= popped;
   if (_texturesPending < 0) _texturesPending = 0;
+
+  // An image that never finishes would otherwise have this polling both
+  // decoders for the life of the application. A decode takes a handful of
+  // frames; six hundred is ten seconds of them, and past that the answer is
+  // that it is not coming.
+  _pollsWithoutProgress = popped > 0 ? 0 : _pollsWithoutProgress + 1;
+  if (_pollsWithoutProgress > 600) {
+    NSLog(@"[orbis] %d texture(s) never finished decoding; giving up polling",
+          _texturesPending);
+    _texturesPending = 0;
+    _pollsWithoutProgress = 0;
+  }
 }
 
 /// Builds the sampler a material's wrap and filter settings describe.
@@ -2421,9 +2463,17 @@ static constexpr NSUInteger kMaxPostParams = 128;
                  count:(uint32_t)count {
   if (_disposed) return;
 
+  // Last publish's leavings, now that everything has been re-dressed.
+  for (MaterialInstance *spent : _materialsSpent) {
+    _engine->destroy(spent);
+  }
+  _materialsSpent.clear();
+
   const uint64_t generation = ++_materialGeneration;
   _materialOrder.clear();
   _materialOrder.reserve(count);
+  _materialRebuilt.clear();
+  _materialRebuilt.reserve(count);
 
   for (uint32_t i = 0; i < count; i++) {
     Surfaced &surface = _materials[keys[i]];
@@ -2440,7 +2490,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
         [self surfaceIndexFor:surface.flags] != wanted ||
         surface.flags == -1;
     if (rebuild) {
-      if (surface.instance != nullptr) _engine->destroy(surface.instance);
+      if (surface.instance != nullptr) {
+        _materialsSpent.push_back(surface.instance);
+      }
       surface.instance = [self surfaceAt:wanted]->createInstance();
       if ((flags[i] & 3) == 0) [self setDefaultsOn:surface.instance];
       surface.written = false;
@@ -2474,6 +2526,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
     }
 
     _materialOrder.push_back(surface.instance);
+    _materialRebuilt.push_back(rebuild);
   }
 
   // A material nothing is made of any more. Its instance goes; the textures
@@ -2484,7 +2537,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
       ++it;
       continue;
     }
-    if (it->second.instance != nullptr) _engine->destroy(it->second.instance);
+    if (it->second.instance != nullptr) {
+      _materialsSpent.push_back(it->second.instance);
+    }
     it = _materials.erase(it);
   }
 }
@@ -2630,9 +2685,17 @@ static constexpr NSUInteger kMaxPostParams = 128;
     // primitive it has and a model can have hundreds. The instance behind the
     // index may have changed underneath, but that is a change to the material
     // and the renderable is already pointing at it.
-    if (materials[i] != drawn.surface) {
-      drawn.surface = materials[i];
-      [self dress:drawn withMaterial:materials[i]];
+    // Re-dressed when the index moved, and also when the material at that
+    // index was built afresh: the renderable holds the instance, not the
+    // material, so a material that changed its blend mode is a new instance
+    // and the old one is about to go.
+    const int32_t wearing = materials[i];
+    const bool remade = wearing >= 0 &&
+                        wearing < static_cast<int32_t>(_materialRebuilt.size()) &&
+                        _materialRebuilt[wearing];
+    if (wearing != drawn.surface || remade) {
+      drawn.surface = wearing;
+      [self dress:drawn withMaterial:wearing];
     }
   }
 
@@ -3625,8 +3688,13 @@ static constexpr NSUInteger kMaxPostParams = 128;
   for (auto &entry : _materials) {
     if (entry.second.instance != nullptr) _engine->destroy(entry.second.instance);
   }
+  for (MaterialInstance *spent : _materialsSpent) {
+    _engine->destroy(spent);
+  }
+  _materialsSpent.clear();
   _materials.clear();
   _materialOrder.clear();
+  _materialRebuilt.clear();
   for (auto &entry : _ownTextures) {
     if (entry.second != nullptr) _engine->destroy(entry.second);
   }
