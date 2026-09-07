@@ -37,6 +37,7 @@
 #include <ktxreader/Ktx1Reader.h>
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
+#include <utils/Panic.h>
 
 #include <map>
 #include <string>
@@ -934,7 +935,19 @@ static constexpr NSUInteger kMaxPostParams = 128;
   return self;
 }
 
+/// Says why Filament is about to abort.
+///
+/// Its preconditions throw, and the throw cannot be caught from here — not by
+/// type and not by `...` — so the process goes down with only a stack to show
+/// for it. This runs *before* the throw, which is the one place the reason
+/// can be read.
+static void orbisReportPanic(void *user, const utils::Panic &panic) {
+  NSLog(@"[orbis] Filament refused: %s\n  at %s (%s:%d)", panic.getReason(),
+        panic.getFunction(), panic.getFile(), panic.getLine());
+}
+
 - (void)startWithWidth:(uint32_t)width height:(uint32_t)height {
+  utils::Panic::setPanicHandler(orbisReportPanic, nullptr);
   _width = MAX(width, 1u);
   _height = MAX(height, 1u);
   _pendingWidth = _width;
@@ -1750,14 +1763,27 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
 /// Takes a population apart. Every buffer it holds is its own.
 - (void)clearPopulation:(Grown &)grown {
-  if (grown.book != nullptr) _engine->destroy(grown.book);
-  grown.book = nullptr;
-  for (auto *material : grown.materials) _engine->destroy(material);
+  // Order matters, and getting it wrong is fatal rather than untidy.
+  //
+  // A renderable holds its material instance and a material instance holds
+  // the book it samples, so they have to go in that order: the renderables
+  // first, then the instances nothing is wearing any more, then the texture
+  // nothing is sampling. Destroying an instance while a renderable still
+  // uses it trips a Filament precondition, and a precondition here is not an
+  // error code — it aborts the process.
+  //
+  // It went the other way round, so a population large enough to leave a
+  // window between the two took the app down whenever one was cleared: on a
+  // change of size, on leaving the example, on the sweep that drops a
+  // population the scene has stopped mentioning.
   for (auto entity : grown.entities) {
     _scene->remove(entity);
     _engine->destroy(entity);
     utils::EntityManager::get().destroy(entity);
   }
+  for (auto *material : grown.materials) _engine->destroy(material);
+  if (grown.book != nullptr) _engine->destroy(grown.book);
+  grown.book = nullptr;
   grown.materials.clear();
   grown.entities.clear();
   grown.count = 0;
