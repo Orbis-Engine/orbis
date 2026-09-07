@@ -35,6 +35,10 @@ private final class Viewport {
   /// What a frame usually costs this viewport's GPU, in milliseconds.
   var gpuMilliseconds: Double { renderer.gpuMilliseconds() }
 
+  /// What each pass of the last frame cost, and how much it drew — two
+  /// numbers per pass, in the order they ran.
+  var passTimings: [NSNumber] { renderer.passTimings }
+
   func start() {
     // CVDisplayLink is soft-deprecated on recent macOS in favour of the
     // NSView-attached variant, but that needs a view we do not own — Flutter
@@ -101,6 +105,28 @@ private final class Viewport {
     let meshes = scene.count == 0 ? [Int32(-1)] : scene.meshes
     let flags = scene.count == 0 ? [Int32(0)] : scene.flags
     let objectMaterials = scene.count == 0 ? [Int32(-1)] : scene.objectMaterials
+
+    // The place before anything in it, so that the first frame drawn with a
+    // new environment is lit by it rather than by the one before.
+    renderer.setEnvironmentRadiance(scene.environmentRadiance,
+                                    skybox: scene.environmentSkybox,
+                                    params: scene.environmentParams)
+
+    // The graph next: a material may sample what a pass drew, and a target
+    // that does not exist yet reads as a texture that failed to load.
+    let graphPasses = scene.graphPasses.isEmpty ? [Float(0)] : scene.graphPasses
+    let graphTargets =
+      scene.graphTargets.isEmpty ? [Float(0)] : scene.graphTargets
+    graphPasses.withUnsafeBufferPointer { passPointer in
+      graphTargets.withUnsafeBufferPointer { targetPointer in
+        renderer.setRenderGraph(
+          passPointer.baseAddress!,
+          count: UInt32(scene.graphPasses.count / 12),
+          targets: targetPointer.baseAddress!,
+          targetCount: UInt32(scene.graphTargets.count / 6),
+          names: scene.graphTargetNames)
+      }
+    }
 
     // Videos before materials before objects, each because the next one may
     // point at it and a thing that does not exist yet reads as a thing that
@@ -333,6 +359,18 @@ private struct Scene {
   let postParams: [Float]
   let pipelineParams: [Float]
 
+  /// The place the scene is standing in: a baked cubemap for the light, one
+  /// for the backdrop, and how bright and how turned they are.
+  let environmentRadiance: String
+  let environmentSkybox: String
+  let environmentParams: [Float]
+
+  /// How the frame is put together: the passes, already in the order they
+  /// run, the targets between them, and what those targets are called.
+  let graphPasses: [Float]
+  let graphTargets: [Float]
+  let graphTargetNames: [String]
+
   /// The application's own clock, in seconds, when this scene was worked out.
   let at: Double
   let orthographic: Bool
@@ -357,6 +395,12 @@ private struct Scene {
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
   private static let lightStride = 18
+
+  /// How many floats a graph pass and a graph target take. Must match
+  /// OrbisRenderGraph on the Dart side and the constants in the renderer.
+  fileprivate static let environmentStride = 4
+  fileprivate static let passStride = 12
+  fileprivate static let targetStride = 6
   private static let materialStride = 19
   private static let materialMaps = 5
   private static let videoStride = 4
@@ -423,6 +467,48 @@ private struct Scene {
       (arguments["postParams"] as? FlutterStandardTypedData)?.floats ?? []
     self.pipelineParams =
       (arguments["pipelineParams"] as? FlutterStandardTypedData)?.floats ?? []
+
+    // An environment is optional, and a short params array is a read past the
+    // end in C++ rather than a dimmer scene here.
+    let environmentParams =
+      (arguments["environmentParams"] as? FlutterStandardTypedData)?.floats ?? []
+    if environmentParams.count == Scene.environmentStride {
+      self.environmentRadiance = arguments["environmentRadiance"] as? String ?? ""
+      self.environmentSkybox = arguments["environmentSkybox"] as? String ?? ""
+      self.environmentParams = environmentParams
+    } else {
+      self.environmentRadiance = ""
+      self.environmentSkybox = ""
+      self.environmentParams = [30000, 0, 1, 0]
+    }
+
+    // The graph is optional in exactly the same way. What does have to hold
+    // is that the rows are whole and that every target index a pass names is
+    // one that exists: both are subscripts in C++, and a short row or a stray
+    // index is a read past the end there rather than a wrong picture here.
+    let passes =
+      (arguments["graphPasses"] as? FlutterStandardTypedData)?.floats ?? []
+    let targets =
+      (arguments["graphTargets"] as? FlutterStandardTypedData)?.floats ?? []
+    let targetNames = arguments["graphTargetNames"] as? [String] ?? []
+    let targetCount = targets.count / Scene.targetStride
+    let passCount = passes.count / Scene.passStride
+    if passes.count == passCount * Scene.passStride,
+       targets.count == targetCount * Scene.targetStride,
+       targetNames.count == targetCount,
+       (0..<passCount).allSatisfy({
+         Int(passes[$0 * Scene.passStride + 1]) < targetCount
+       }) {
+      self.graphPasses = passes
+      self.graphTargets = targets
+      self.graphTargetNames = targetNames
+    } else {
+      // A graph that does not add up is no graph: the ordinary frame, which
+      // is what a host gets before it has said anything about passes at all.
+      self.graphPasses = []
+      self.graphTargets = []
+      self.graphTargetNames = []
+    }
 
     // Materials are optional the same way, so a host that never names one
     // sends nothing rather than an empty array of everything. What arrives
@@ -670,7 +756,13 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
         result(nil)
         return
       }
-      result(["gpuMilliseconds": viewport.gpuMilliseconds])
+      // What each pass cost as well as what the whole frame did. Two numbers
+      // per pass in the order they ran; the names stay on the other side,
+      // where they already are.
+      result([
+        "gpuMilliseconds": viewport.gpuMilliseconds,
+        "passTimings": viewport.passTimings,
+      ])
 
     case "dispose":
       guard let args = call.arguments as? [String: Any],

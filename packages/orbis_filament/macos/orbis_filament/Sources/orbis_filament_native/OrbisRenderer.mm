@@ -14,6 +14,7 @@
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
 #include <filament/RenderableManager.h>
+#include <filament/RenderTarget.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/Skybox.h>
@@ -32,6 +33,8 @@
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/TextureProvider.h>
 #include <gltfio/materials/uberarchive.h>
+#include <image/Ktx1Bundle.h>
+#include <ktxreader/Ktx1Reader.h>
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
 
@@ -360,8 +363,38 @@ constexpr int32_t kVisible = 4;
 /// Hiding is a layer the view does not draw rather than a removal from the
 /// scene: the object keeps its entity, its material and its instance, so
 /// showing it again is one byte written instead of a rebuild.
+///
+/// The low seven bits are the author's own layers, one bit each, and the top
+/// one is hidden. That split is why an object that has never heard of layers
+/// still lands on bit nought and is still drawn by a pass that asks for
+/// everything: what used to be "the visible layer" is now "layer nought", and
+/// the two are the same byte.
 constexpr uint8_t kVisibleLayer = 0x01;
-constexpr uint8_t kHiddenLayer = 0x02;
+constexpr uint8_t kHiddenLayer = 0x80;
+constexpr uint8_t kAllLayers = 0x7F;
+constexpr int32_t kLayerShift = 8;
+constexpr int32_t kLayerMask = 0x07;
+
+/// The layer bit an object's flags ask for.
+inline uint8_t layerBitOf(int32_t flags) {
+  return static_cast<uint8_t>(1u << ((flags >> kLayerShift) & kLayerMask));
+}
+
+/// How many floats a pass and a target take on the wire. Must match
+/// OrbisRenderGraph on the Dart side.
+constexpr uint32_t kPassStride = 12;
+constexpr uint32_t kTargetStride = 6;
+
+/// How many passes a frame may have. Matches OrbisRenderGraph.maxPasses; a
+/// graph past it has run away rather than grown.
+constexpr uint32_t kMaxPasses = 32;
+
+/// What a pass is for. Matches OrbisPassKind.
+constexpr int kPassScene = 0;
+constexpr int kPassReflection = 1;
+
+/// Where a material's texture says it comes from a pass rather than a file.
+static const char *const kTargetScheme = "orbis:target/";
 
 /// How many punctual lights Filament shades in one view before it starts
 /// dropping the ones furthest from the camera. Worth saying out loud: a light
@@ -470,6 +503,92 @@ CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
   return result == kCVReturnSuccess ? buffer : nullptr;
 }
 
+/// One image a pass draws into, and everything needed to keep it.
+///
+/// Rebuilt when its size changes and not otherwise: a render target is a
+/// texture, a depth buffer and a piece of driver state, and reallocating all
+/// three on a frame where nothing moved is the sort of cost that only shows
+/// up as a stutter while somebody drags a window.
+struct GraphTarget {
+  std::string name;
+  uint32_t width = 0;   // zero follows the view
+  uint32_t height = 0;
+  float scale = 1.0f;
+  bool keepsDepth = true;
+  bool keepsColour = true;
+
+  filament::Texture *colour = nullptr;
+  filament::Texture *depth = nullptr;
+  filament::RenderTarget *target = nullptr;
+  uint32_t builtWidth = 0;
+  uint32_t builtHeight = 0;
+};
+
+/// One material sampler that reads what a pass drew.
+///
+/// Kept so the renderer can put it right by itself. A target that follows the
+/// view is a new texture every time the window changes, and a host is under
+/// no obligation to publish again afterwards — a static scene never does. The
+/// binding has to be renewed by whoever rebuilt the texture.
+struct TargetBinding {
+  filament::MaterialInstance *instance = nullptr;
+  std::string parameter;
+  std::string target;
+};
+
+/// A target texture that is no longer wanted but may still be bound.
+struct RetiredTexture {
+  filament::Texture *texture = nullptr;
+  uint64_t afterGeneration = 0;
+};
+
+/// One step of a frame, as the renderer holds it.
+struct GraphPass {
+  int kind = kPassScene;
+  int into = -1;  // an index into the targets, or -1 for the frame
+  uint8_t layers = kAllLayers;
+  bool clears = true;
+  float plane[4] = {0.0f, 1.0f, 0.0f, 0.0f};
+
+  /// The view this pass renders through, for a pass that draws into a target.
+  /// The frame pass uses the renderer's own view.
+  filament::View *view = nullptr;
+  filament::Camera *camera = nullptr;
+  utils::Entity cameraEntity;
+
+  /// What it cost last frame, in milliseconds, and how much it drew.
+  double milliseconds = 0;
+  int drawn = 0;
+};
+
+/// The matrix that mirrors the world in a plane.
+///
+/// `n` is the plane's normal and `d` its distance from the origin, so that a
+/// point on it satisfies dot(n, p) + d = 0. Reflecting about it is what turns
+/// a camera into the camera behind the glass, which is the whole of how a
+/// planar reflection is drawn: the same scene, the same lights, one matrix
+/// different.
+inline filament::math::mat4f reflectionAbout(const float plane[4]) {
+  using filament::math::float3;
+  using filament::math::float4;
+  using filament::math::mat4f;
+
+  float3 n{plane[0], plane[1], plane[2]};
+  const float length = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+  // A plane with no normal is not a plane. Standing the camera still is a
+  // reflection of nothing, which is visibly wrong and does not divide by zero.
+  if (length < 1e-6f) return mat4f();
+  n = n / length;
+  const float d = plane[3] / length;
+
+  mat4f mirror;
+  mirror[0] = float4{1 - 2 * n.x * n.x, -2 * n.x * n.y, -2 * n.x * n.z, 0};
+  mirror[1] = float4{-2 * n.x * n.y, 1 - 2 * n.y * n.y, -2 * n.y * n.z, 0};
+  mirror[2] = float4{-2 * n.x * n.z, -2 * n.y * n.z, 1 - 2 * n.z * n.z, 0};
+  mirror[3] = float4{-2 * n.x * d, -2 * n.y * d, -2 * n.z * d, 1};
+  return mirror;
+}
+
 }  // namespace
 
 @interface OrbisRenderer ()
@@ -576,6 +695,60 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// yet. Filament wants every sampler bound whether the shader reads it or
   /// not, and a screen showing nothing is a legitimate state to be in.
   filament::Texture *_blankExternal;
+
+  /// How the frame is put together, already in the order it runs.
+  ///
+  /// Empty until a host says otherwise, which is read as the ordinary frame:
+  /// one pass, every layer, straight into the picture. Empty rather than a
+  /// default row, so that "nobody has said" and "somebody asked for exactly
+  /// this" are not the same state.
+  std::vector<GraphPass> _passes;
+  std::vector<GraphTarget> _targets;
+
+  /// Target textures given up but not yet destroyed, with the material
+  /// generation they were given up in.
+  std::vector<RetiredTexture> _retiredTextures;
+
+  /// Every material sampler currently reading a pass, rebuilt on each
+  /// publish and replayed whenever a target is rebuilt.
+  std::vector<TargetBinding> _targetBindings;
+
+  /// The place the scene is standing in, when a host has named one.
+  ///
+  /// Held apart from the flat ambient rather than replacing it, so that
+  /// clearing an environment puts back the sky the day cycle had been
+  /// writing rather than leaving the scene unlit.
+  filament::IndirectLight *_environmentLight;
+  filament::Texture *_environmentRadiance;
+  filament::Texture *_environmentSkyTexture;
+  filament::Skybox *_environmentSkybox;
+
+  /// Whether the environment's backdrop is the one in the scene, so the
+  /// procedural sky knows to stay out of the way.
+  bool _showingEnvironmentSkybox;
+  std::string _environmentRadiancePath;
+  std::string _environmentSkyboxPath;
+  float _environmentParams[4];
+
+  /// The diffuse harmonics read off the radiance cubemap, kept because
+  /// Filament does not hand them back and the bundle they came from is freed
+  /// as soon as the driver has taken the pixels. Turning an environment or
+  /// dimming it rebuilds the light, and a rebuild without these is an
+  /// environment that lights reflections and nothing matte.
+  float3 _environmentHarmonics[9];
+  bool _environmentHasHarmonics;
+
+  /// The last flat ambient asked for, kept so it can be put back when an
+  /// environment is cleared. The day cycle writes this on every frame and
+  /// would otherwise have to be waited for.
+  float3 _ambientColour;
+  float _ambientIntensity;
+
+  /// The graph as last received, so a scene republished sixty times a second
+  /// only rebuilds views and render targets when something in it moved.
+  std::vector<float> _graphPassParams;
+  std::vector<float> _graphTargetParams;
+  std::vector<std::string> _graphTargetNames;
 
   /// The last pipeline settings applied, so a scene republished sixty times
   /// a second only reconfigures the view when something actually moved.
@@ -772,7 +945,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
   // One layer is drawn and one is not, which is what hiding an object means
   // here. Later work — render layers a host can name — widens this mask; the
   // two-state version costs the same and is the half that is needed now.
-  _view->setVisibleLayers(0xFF, kVisibleLayer);
+  // Every author layer, and not the hidden one. A pass narrows this; a frame
+  // with no graph never does.
+  _view->setVisibleLayers(0xFF, kAllLayers);
 
   const float defaultSky[3] = {kDefaultAmbient.x, kDefaultAmbient.y,
                                kDefaultAmbient.z};
@@ -1124,6 +1299,12 @@ static constexpr NSUInteger kMaxPostParams = 128;
 }
 
 - (void)setSkyEnabled:(BOOL)enabled params:(const float *)params {
+  // The third thing that wants to be the backdrop. An environment's cubemap
+  // is behind everything; this dome is geometry in front of it, so leaving it
+  // on hides a photographed sky completely — and there is nothing on screen
+  // to say which of the two is winning.
+  if (_showingEnvironmentSkybox) enabled = NO;
+
   if (_disposed) return;
 
   const bool showing = enabled;
@@ -1289,6 +1470,15 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
 - (void)setAmbientColour:(float3)colour intensity:(float)intensity {
   if (_disposed) return;
+
+  // Recorded whatever happens, so clearing an environment puts back the sky
+  // the day cycle has been writing all along rather than an unlit scene.
+  _ambientColour = colour;
+  _ambientIntensity = intensity;
+
+  // An environment is already lighting this. Two indirect lights is one
+  // scene lit twice, and the flat one is the half that flattens it.
+  if (_environmentLight != nullptr) return;
 
   // Replaced rather than mutated: an IndirectLight's irradiance is fixed at
   // build time.
@@ -1469,8 +1659,8 @@ static constexpr NSUInteger kMaxPostParams = 128;
   if (!instance) return;
   renderables.setCastShadows(instance, (flags & kCastsShadows) != 0);
   renderables.setReceiveShadows(instance, (flags & kReceivesShadows) != 0);
-  renderables.setLayerMask(instance, 0xFF,
-                           (flags & kVisible) ? kVisibleLayer : kHiddenLayer);
+  renderables.setLayerMask(
+      instance, 0xFF, (flags & kVisible) ? layerBitOf(flags) : kHiddenLayer);
 }
 
 /// Applies them to a whole object, which for a mesh is every part of it.
@@ -1976,6 +2166,16 @@ static constexpr NSUInteger kMaxPostParams = 128;
 /// it were a colour bends every normal towards flat.
 - (Texture *)textureAtPath:(NSString *)path srgb:(bool)srgb {
   std::string identity = std::string(path.UTF8String) + (srgb ? "|s" : "|l");
+
+  // What a pass drew, rather than a file. Looked up every time rather than
+  // cached: the target behind a name is rebuilt whenever the view is resized,
+  // and a material still holding the old texture would be sampling something
+  // the engine has destroyed.
+  const std::string wanted(path.UTF8String);
+  if (wanted.rfind(kTargetScheme, 0) == 0) {
+    return [self targetTextureNamed:wanted.substr(strlen(kTargetScheme))];
+  }
+
   auto found = _ownTextures.find(identity);
   if (found != _ownTextures.end()) return found->second;
 
@@ -2096,6 +2296,12 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   instance->setParameter("baseColor",
                          float4{params[0], params[1], params[2], params[3]});
+  if (unlit) {
+    // Projected from the camera rather than wrapped on the surface, which is
+    // what makes a reflection target a mirror instead of a decal.
+    instance->setParameter("screenMapped",
+                           ((surface.flags >> 13) & 1) != 0);
+  }
   instance->setParameter("emissive", float3{params[7], params[8], params[9]});
   instance->setParameter("emissiveIntensity", params[10]);
   instance->setParameter(
@@ -2119,18 +2325,39 @@ static constexpr NSUInteger kMaxPostParams = 128;
       "hasBaseColorMap", "hasNormalMap", "hasMetallicRoughnessMap",
       "hasOcclusionMap", "hasEmissiveMap"};
 
+  // What a pass drew has one level and is never tiled, so it is bound with a
+  // sampler of its own rather than the material's.
+  //
+  // Not a nicety. The ordinary sampler asks for LINEAR_MIPMAP_LINEAR, and
+  // minifying a texture that has no mips through it is undefined — which on
+  // Metal comes out as flat magenta across the whole surface, with nothing
+  // logged. A mirror that is entirely the missing-texture colour is a long
+  // afternoon if the sampler is not the first place you look.
+  const TextureSampler drawn(TextureSampler::MinFilter::LINEAR,
+                             TextureSampler::MagFilter::LINEAR,
+                             TextureSampler::WrapMode::CLAMP_TO_EDGE);
+
   const size_t count = unlit ? 1 : kMaterialMaps;
   for (size_t i = 0; i < count; i++) {
     Texture *texture = nullptr;
+    bool fromPass = false;
     const int32_t index = maps[i];
     if (index >= 0 && index < static_cast<int32_t>(texturePaths.count)) {
+      fromPass = [texturePaths[index] hasPrefix:@(kTargetScheme)];
       texture = [self textureAtPath:texturePaths[index]
                                srgb:textureSrgb[index] != 0];
     }
     const bool present = texture != nullptr;
-    instance->setParameter(kMapNames[i], present ? texture : [self blankTexture],
-                           sampler);
+    instance->setParameter(kMapNames[i],
+                           present ? texture : [self blankTexture],
+                           present && fromPass ? drawn : sampler);
     instance->setParameter(kMapFlags[i], present);
+
+    if (fromPass) {
+      const std::string path(texturePaths[index].UTF8String);
+      _targetBindings.push_back({instance, kMapNames[i],
+                                 path.substr(strlen(kTargetScheme))});
+    }
   }
 }
 
@@ -2258,6 +2485,505 @@ static constexpr NSUInteger kMaxPostParams = 128;
 /// configures the view or is remembered for the lights, which read it when
 /// they set their own shadow options — a cascade count is a property of the
 /// light that casts, but nobody wants to set it per light.
+/// Reads a cubemap `cmgen` baked, and the harmonics it wrote beside it.
+///
+/// Returns null and says why rather than throwing: an environment is an asset
+/// somebody typed a path to, and a scene that refuses to draw because the
+/// path was wrong is worse than one drawn by its lights alone.
+- (Texture *)cubemapAtPath:(NSString *)path
+                  harmonics:(float3 *)harmonics
+                   hasThose:(bool *)hasThose
+                       note:(NSString *)note {
+  *hasThose = false;
+
+  NSData *data = [NSData dataWithContentsOfFile:path];
+  if (data == nil) {
+    _assetNotes[note] = [NSString stringWithFormat:@"%@ could not be read.",
+                                          path.lastPathComponent];
+    return nullptr;
+  }
+
+  // The bundle owns the pixels and has to outlive the upload, so it is handed
+  // to createTexture along with the callback that frees it once the driver has
+  // taken a copy. Freeing it here would be a race with the render thread.
+  auto *bundle = new image::Ktx1Bundle(
+      static_cast<const uint8_t *>(data.bytes),
+      static_cast<uint32_t>(data.length));
+
+  if (!bundle->isCubemap()) {
+    _assetNotes[note] = [NSString
+        stringWithFormat:
+            @"%@ is not a cubemap. cmgen writes one; a flat image will not do.",
+            path.lastPathComponent];
+    delete bundle;
+    return nullptr;
+  }
+
+  *hasThose = bundle->getSphericalHarmonics(harmonics);
+
+  Texture *texture = ktxreader::Ktx1Reader::createTexture(
+      _engine, *bundle, false,
+      [](void *userdata) {
+        delete static_cast<image::Ktx1Bundle *>(userdata);
+      },
+      bundle);
+  if (texture == nullptr) {
+    _assetNotes[note] =
+        [NSString stringWithFormat:@"%@ is not a KTX this build can read.",
+                                   path.lastPathComponent];
+    delete bundle;
+  }
+  return texture;
+}
+
+- (void)setEnvironmentRadiance:(NSString *)radiance
+                        skybox:(NSString *)skybox
+                        params:(const float *)params {
+  if (_disposed || _engine == nullptr) return;
+
+  const std::string wantedRadiance(radiance.UTF8String);
+  const std::string wantedSkybox(skybox.UTF8String);
+  const bool sameFiles = wantedRadiance == _environmentRadiancePath &&
+                         wantedSkybox == _environmentSkyboxPath;
+
+  // The numbers can move without the files changing — an environment being
+  // turned, or brought up and down — and rebuilding a cubemap for that would
+  // be reading a file off disk on every frame of a drag.
+  if (sameFiles &&
+      memcmp(params, _environmentParams, sizeof(_environmentParams)) == 0) {
+    return;
+  }
+
+  const bool onlyNumbersMoved = sameFiles && _environmentRadiance != nullptr;
+  memcpy(_environmentParams, params, sizeof(_environmentParams));
+
+  if (onlyNumbersMoved) {
+    [self rebuildEnvironmentLight];
+    if (_environmentSkybox != nullptr) {
+      _showingEnvironmentSkybox = params[2] != 0.0f;
+      _scene->setSkybox(_showingEnvironmentSkybox ? _environmentSkybox
+                                                  : _skybox);
+    }
+    return;
+  }
+
+  [self releaseEnvironment];
+  _environmentRadiancePath = wantedRadiance;
+  _environmentSkyboxPath = wantedSkybox;
+
+  if (!wantedRadiance.empty()) {
+    float3 harmonics[9];
+    bool hasHarmonics = false;
+    _environmentRadiance = [self cubemapAtPath:radiance
+                                     harmonics:harmonics
+                                      hasThose:&hasHarmonics
+                                          note:@"environment"];
+    if (_environmentRadiance != nullptr) {
+      auto builder = IndirectLight::Builder();
+      builder.reflections(_environmentRadiance);
+      _environmentHasHarmonics = hasHarmonics;
+      if (hasHarmonics) {
+        for (int i = 0; i < 9; i++) _environmentHarmonics[i] = harmonics[i];
+        // Three bands, which is what cmgen writes and what a diffuse
+        // response actually needs: nine coefficients describe every low
+        // frequency a matte surface can tell apart.
+        builder.irradiance(3, harmonics);
+      } else {
+        _assetNotes[@"environment"] =
+            @"This cubemap has no baked harmonics, so nothing matte is lit by "
+            @"it. Bake it with cmgen rather than converting it by hand.";
+      }
+      _environmentLight = builder.intensity(_environmentParams[0])
+                              .rotation(mat3f::rotation(_environmentParams[1],
+                                                        float3{0, 1, 0}))
+                              .build(*_engine);
+    }
+  }
+
+  if (!wantedSkybox.empty()) {
+    float3 unused[9];
+    bool ignored = false;
+    _environmentSkyTexture = [self cubemapAtPath:skybox
+                                       harmonics:unused
+                                        hasThose:&ignored
+                                            note:@"skybox"];
+    if (_environmentSkyTexture != nullptr) {
+      _environmentSkybox = Skybox::Builder()
+                               .environment(_environmentSkyTexture)
+                               .showSun(false)
+                               .build(*_engine);
+      if (_environmentSkybox == nullptr) {
+        _assetNotes[@"skybox"] =
+            @"The cubemap loaded but no backdrop could be built from it.";
+      }
+    }
+
+  }
+
+  if (_environmentLight != nullptr) {
+    // The flat ambient steps aside rather than being blended with: a scene
+    // lit by a photograph of a room and by an even wash is lit twice.
+    if (_ambient != nullptr) {
+      _engine->destroy(_ambient);
+      _ambient = nullptr;
+    }
+    _scene->setIndirectLight(_environmentLight);
+  } else {
+    // Nothing loaded, so the sky the day cycle has been writing goes back.
+    [self setAmbientColour:_ambientColour intensity:_ambientIntensity];
+  }
+
+  _showingEnvironmentSkybox =
+      _environmentSkybox != nullptr && _environmentParams[2] != 0.0f;
+
+  if (_showingEnvironmentSkybox) {
+    _scene->setSkybox(_environmentSkybox);
+  } else if (_skybox != nullptr) {
+    _scene->setSkybox(_skybox);
+  }
+}
+
+/// Builds the indirect light again for a change of brightness or rotation.
+///
+/// Rather than mutated: an IndirectLight's intensity and rotation are fixed
+/// when it is built. The cubemap behind it is not rebuilt, which is the
+/// expensive half.
+- (void)rebuildEnvironmentLight {
+  if (_environmentRadiance == nullptr) return;
+
+  IndirectLight *previous = _environmentLight;
+
+  auto builder = IndirectLight::Builder();
+  builder.reflections(_environmentRadiance);
+  // From the copy kept when the file was read. The bundle is long gone and
+  // Filament does not hand harmonics back, so this is the only place they
+  // survive.
+  if (_environmentHasHarmonics) {
+    builder.irradiance(3, _environmentHarmonics);
+  }
+
+  IndirectLight *rebuilt =
+      builder.intensity(_environmentParams[0])
+          .rotation(mat3f::rotation(_environmentParams[1], float3{0, 1, 0}))
+          .build(*_engine);
+
+  _scene->setIndirectLight(rebuilt);
+  if (previous != nullptr) _engine->destroy(previous);
+  _environmentLight = rebuilt;
+}
+
+/// Gives back everything an environment was holding.
+- (void)releaseEnvironment {
+  if (_engine == nullptr) return;
+
+  if (_environmentLight != nullptr) {
+    _scene->setIndirectLight(nullptr);
+    _engine->destroy(_environmentLight);
+    _environmentLight = nullptr;
+  }
+  if (_environmentSkybox != nullptr) {
+    if (_skybox != nullptr) _scene->setSkybox(_skybox);
+    _engine->destroy(_environmentSkybox);
+    _environmentSkybox = nullptr;
+  }
+  _showingEnvironmentSkybox = false;
+  if (_environmentRadiance != nullptr) {
+    _engine->destroy(_environmentRadiance);
+    _environmentRadiance = nullptr;
+  }
+  if (_environmentSkyTexture != nullptr) {
+    _engine->destroy(_environmentSkyTexture);
+    _environmentSkyTexture = nullptr;
+  }
+  _environmentRadiancePath.clear();
+  _environmentSkyboxPath.clear();
+  _environmentHasHarmonics = false;
+}
+
+- (void)setRenderGraph:(const float *)passes
+                 count:(uint32_t)count
+               targets:(const float *)targets
+           targetCount:(uint32_t)targetCount
+                 names:(NSArray<NSString *> *)names {
+  if (_disposed || _engine == nullptr) return;
+  if (count > kMaxPasses) count = kMaxPasses;
+
+  std::vector<float> passParams(passes, passes + count * kPassStride);
+  std::vector<float> targetParams(targets,
+                                  targets + targetCount * kTargetStride);
+  std::vector<std::string> targetNames;
+  targetNames.reserve(names.count);
+  for (NSString *name in names) targetNames.emplace_back(name.UTF8String);
+
+  // A graph arrives on every frame like everything else, and rebuilding views
+  // and render targets sixty times a second to say nothing changed is the
+  // whole cost of the feature paid for nothing.
+  if (passParams == _graphPassParams && targetParams == _graphTargetParams &&
+      targetNames == _graphTargetNames) {
+    return;
+  }
+  _graphPassParams = std::move(passParams);
+  _graphTargetParams = std::move(targetParams);
+  _graphTargetNames = std::move(targetNames);
+
+  [self releaseGraph];
+  [self releaseEnvironment];
+
+  // Nothing is bound to anything any more, so whatever is still retired can
+  // go — and has to, because Filament asserts on a texture outliving its
+  // engine.
+  for (const RetiredTexture &retired : _retiredTextures) {
+    _engine->destroy(retired.texture);
+  }
+  _retiredTextures.clear();
+  _targetBindings.clear();
+
+  _targets.resize(targetCount);
+  for (uint32_t i = 0; i < targetCount; i++) {
+    GraphTarget &target = _targets[i];
+    const float *row = targets + i * kTargetStride;
+    target.name =
+        i < _graphTargetNames.size() ? _graphTargetNames[i] : std::string();
+    target.width = static_cast<uint32_t>(std::max(0.0f, row[0]));
+    target.height = static_cast<uint32_t>(std::max(0.0f, row[1]));
+    target.scale = row[2] > 0.0f ? row[2] : 1.0f;
+    target.keepsDepth = row[3] != 0.0f;
+    target.keepsColour = row[4] != 0.0f;
+  }
+
+  _passes.resize(count);
+  for (uint32_t i = 0; i < count; i++) {
+    GraphPass &pass = _passes[i];
+    const float *row = passes + i * kPassStride;
+    pass.kind = static_cast<int>(row[0]);
+    pass.into = static_cast<int>(row[1]);
+    if (pass.into >= static_cast<int>(targetCount)) pass.into = -1;
+    // The top bit is hiding, and a pass is not allowed to ask for it: an
+    // object switched off should stay off however the graph is written.
+    pass.layers = static_cast<uint8_t>(static_cast<int>(row[2])) & kAllLayers;
+    pass.clears = row[3] != 0.0f;
+    for (int p = 0; p < 4; p++) pass.plane[p] = row[8 + p];
+  }
+
+  // Built here rather than only at the top of the frame, because materials
+  // are bound straight after this and a material sampling a target that does
+  // not exist yet gets the blank white texture instead. That is not a
+  // rendering fault anybody can see the cause of — it is a mirror that is
+  // simply white, on the first frame and every frame after, because nothing
+  // re-binds it.
+  [self prepareTargets];
+}
+
+/// Makes sure every target a pass writes exists at the right size.
+///
+/// Called at the top of a frame rather than when the graph arrives, because
+/// a target that follows the view has no size until the view has one — and
+/// the view's size changes on a window drag, which is not when a graph is
+/// sent.
+- (void)prepareTargets {
+  [self sweepRetiredTextures];
+
+  bool rebuilt = false;
+  for (GraphTarget &target : _targets) {
+    uint32_t wide = target.width;
+    uint32_t tall = target.height;
+    if (wide == 0 || tall == 0) {
+      wide = static_cast<uint32_t>(std::lround(_width * target.scale));
+      tall = static_cast<uint32_t>(std::lround(_height * target.scale));
+    }
+    wide = std::max(1u, wide);
+    tall = std::max(1u, tall);
+
+    if (target.target != nullptr && target.builtWidth == wide &&
+        target.builtHeight == tall) {
+      continue;
+    }
+
+    [self releaseTarget:target];
+
+    auto builder = RenderTarget::Builder();
+    if (target.keepsColour) {
+      // Sixteen bits a channel because what a pass draws is linear light
+      // that another pass will sample and light with. Eight bits would clip
+      // every highlight in a reflection to white.
+      target.colour = Texture::Builder()
+                          .width(wide)
+                          .height(tall)
+                          .levels(1)
+                          .usage(Texture::Usage::COLOR_ATTACHMENT |
+                                 Texture::Usage::SAMPLEABLE)
+                          .format(Texture::InternalFormat::RGBA16F)
+                          .build(*_engine);
+      builder.texture(RenderTarget::AttachmentPoint::COLOR, target.colour);
+    }
+    if (target.keepsDepth) {
+      target.depth = Texture::Builder()
+                         .width(wide)
+                         .height(tall)
+                         .levels(1)
+                         .usage(Texture::Usage::DEPTH_ATTACHMENT)
+                         .format(Texture::InternalFormat::DEPTH32F)
+                         .build(*_engine);
+      builder.texture(RenderTarget::AttachmentPoint::DEPTH, target.depth);
+    }
+
+    // Neither colour nor depth is a target that cannot be drawn into. Left
+    // null rather than half-built: a pass writing it is skipped and named,
+    // which is a legible failure.
+    if (target.colour == nullptr && target.depth == nullptr) continue;
+
+    target.target = builder.build(*_engine);
+    target.builtWidth = wide;
+    target.builtHeight = tall;
+
+    rebuilt = true;
+  }
+
+  // A texture cannot be resized, so a target that follows the view is a new
+  // texture every time the window changes — and every material sampling the
+  // old one is left pointing at a texture nothing writes to any more. What
+  // that looks like is the missing-texture magenta, for ever, because a host
+  // showing a scene that does not change never publishes again and nothing
+  // asks for the binding a second time.
+  //
+  // So it is renewed here, by whoever rebuilt it.
+  if (rebuilt) [self rebindTargets];
+}
+
+/// Points every material sampler that reads a pass at the texture that pass
+/// now draws into.
+- (void)rebindTargets {
+  const TextureSampler drawn(TextureSampler::MinFilter::LINEAR,
+                             TextureSampler::MagFilter::LINEAR,
+                             TextureSampler::WrapMode::CLAMP_TO_EDGE);
+
+  for (const TargetBinding &binding : _targetBindings) {
+    Texture *texture = [self targetTextureNamed:binding.target];
+    if (texture == nullptr) continue;
+    binding.instance->setParameter(binding.parameter.c_str(), texture, drawn);
+  }
+}
+
+/// The view a pass draws through, made on first use and kept.
+- (View *)viewForPass:(GraphPass &)pass {
+  if (pass.view != nullptr) return pass.view;
+
+  pass.view = _engine->createView();
+  pass.view->setScene(_scene);
+
+  pass.cameraEntity = utils::EntityManager::get().create();
+  pass.camera = _engine->createCamera(pass.cameraEntity);
+  pass.view->setCamera(pass.camera);
+
+  // No post on an off-screen pass. What another pass will sample has to stay
+  // linear light: tone-mapping it here would bake a display curve into a
+  // reflection and then light the scene with it.
+  pass.view->setPostProcessingEnabled(false);
+  return pass.view;
+}
+
+/// Points a pass's camera where it should be looking.
+- (void)aimPass:(GraphPass &)pass wide:(uint32_t)wide tall:(uint32_t)tall {
+  const double aspect = double(wide) / double(std::max(1u, tall));
+  mat4 model = _camera->getModelMatrix();
+
+  if (pass.kind == kPassReflection) {
+    model = mat4(reflectionAbout(pass.plane)) * model;
+    // Mirroring the world turns every triangle inside out, so what was the
+    // front face is now the back. Without this a reflection is a view of the
+    // insides of everything in it.
+    pass.view->setFrontFaceWindingInverted(true);
+  } else {
+    pass.view->setFrontFaceWindingInverted(false);
+  }
+
+  pass.camera->setModelMatrix(mat4f(model));
+  pass.camera->setProjection(_fieldOfView > 0 ? _fieldOfView : 50.0, aspect,
+                             0.1, 1000.0);
+  pass.camera->setExposure(_camera->getAperture(), _camera->getShutterSpeed(),
+                           _camera->getSensitivity());
+}
+
+/// Gives up a target's render target now and its textures later.
+///
+/// Later because a material may be sampling one. A window being dragged
+/// rebuilds every target that follows the view, and the materials pointing at
+/// them are not re-bound until the host publishes again — so destroying the
+/// texture here would leave the driver reading freed memory for however many
+/// frames that takes. The same pattern the spent material instances use, and
+/// for the same reason.
+- (void)releaseTarget:(GraphTarget &)target {
+  if (_engine == nullptr) return;
+  if (target.target != nullptr) {
+    // Nothing samples a render target, only the textures behind it, so this
+    // one can go immediately.
+    _engine->destroy(target.target);
+    target.target = nullptr;
+  }
+  if (target.colour != nullptr) {
+    _retiredTextures.push_back({target.colour, _materialGeneration});
+    target.colour = nullptr;
+  }
+  if (target.depth != nullptr) {
+    _retiredTextures.push_back({target.depth, _materialGeneration});
+    target.depth = nullptr;
+  }
+  target.builtWidth = 0;
+  target.builtHeight = 0;
+}
+
+/// Destroys the textures nothing can still be bound to.
+///
+/// A texture retired before the last publish has had a publish to re-bind
+/// every material that was sampling it, so nothing points at it any more.
+/// One retired *during* the current publish has not, and waits.
+- (void)sweepRetiredTextures {
+  if (_engine == nullptr) return;
+  auto it = _retiredTextures.begin();
+  while (it != _retiredTextures.end()) {
+    if (it->afterGeneration < _materialGeneration) {
+      _engine->destroy(it->texture);
+      it = _retiredTextures.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+/// Gives back every view, camera and target the graph was holding.
+- (void)releaseGraph {
+  if (_engine == nullptr) {
+    _passes.clear();
+    _targets.clear();
+    return;
+  }
+
+  for (GraphPass &pass : _passes) {
+    if (pass.view != nullptr) {
+      _engine->destroy(pass.view);
+      pass.view = nullptr;
+    }
+    if (!pass.cameraEntity.isNull()) {
+      _engine->destroyCameraComponent(pass.cameraEntity);
+      utils::EntityManager::get().destroy(pass.cameraEntity);
+      pass.cameraEntity = utils::Entity();
+      pass.camera = nullptr;
+    }
+  }
+  for (GraphTarget &target : _targets) [self releaseTarget:target];
+
+  _passes.clear();
+  _targets.clear();
+}
+
+/// The texture a pass drew, by the name the graph gave it.
+- (Texture *)targetTextureNamed:(const std::string &)name {
+  for (GraphTarget &target : _targets) {
+    if (target.name == name) return target.colour;
+  }
+  return nullptr;
+}
+
 - (void)setPipeline:(const float *)params count:(NSUInteger)count {
   if (_disposed || _view == nullptr) return;
   if (count > 32) count = 32;
@@ -2478,6 +3204,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   const uint64_t generation = ++_materialGeneration;
   _materialOrder.clear();
+  // Rebuilt by the writes below, so an instance that has gone does not
+  // outlive its entry here.
+  _targetBindings.clear();
   _materialOrder.reserve(count);
   _materialRebuilt.clear();
   _materialRebuilt.reserve(count);
@@ -3147,7 +3876,11 @@ static constexpr NSUInteger kMaxPostParams = 128;
                   .color({sky.x, sky.y, sky.z, 1.0f})
                   .showSun(showBody)
                   .build(*_engine);
-    _scene->setSkybox(_skybox);
+    // Kept, but not shown over an environment that is already the backdrop.
+    // This runs after the environment on every publish, so installing it
+    // unconditionally is a photographed sky replaced by a flat colour on the
+    // frame after it loads — with nothing in the notes to say why.
+    if (!_showingEnvironmentSkybox) _scene->setSkybox(_skybox);
     _skyShowsBody = showBody;
   } else if (!sameColour) {
     _skybox->setColor({sky.x, sky.y, sky.z, 1.0f});
@@ -3449,6 +4182,60 @@ static constexpr NSUInteger kMaxPostParams = 128;
   [_presentLock unlock];
 }
 
+/// Draws every pass of the frame, in the order the graph put them in.
+///
+/// A graph nobody set is one pass, every layer, into the picture — which is
+/// the frame this drew before there were passes at all, and is why a host
+/// that has never heard of a graph pays nothing for one.
+- (void)renderPasses {
+  if (_passes.empty()) {
+    _view->setVisibleLayers(0xFF, kAllLayers);
+    _renderer->render(_view);
+    return;
+  }
+
+  [self prepareTargets];
+
+  for (GraphPass &pass : _passes) {
+    const CFAbsoluteTime began = CFAbsoluteTimeGetCurrent();
+
+    if (pass.into < 0) {
+      _view->setVisibleLayers(0xFF, pass.layers);
+      _renderer->render(_view);
+    } else {
+      GraphTarget &into = _targets[pass.into];
+      // A target that could not be built is a pass that does not run. The
+      // frame still draws, which is the difference between one broken
+      // reflection and a black window.
+      if (into.target != nullptr) {
+        View *view = [self viewForPass:pass];
+        view->setRenderTarget(into.target);
+        view->setViewport({0, 0, into.builtWidth, into.builtHeight});
+        view->setVisibleLayers(0xFF, pass.layers);
+        [self aimPass:pass wide:into.builtWidth tall:into.builtHeight];
+        _renderer->render(view);
+      }
+    }
+
+    pass.milliseconds = (CFAbsoluteTimeGetCurrent() - began) * 1000.0;
+  }
+}
+
+/// What each pass of the last frame cost, and how much it drew.
+///
+/// Read off the frame that has already happened rather than measured on
+/// demand: asking a renderer to time itself when somebody looks changes what
+/// is being timed.
+- (NSArray<NSNumber *> *)passTimings {
+  NSMutableArray<NSNumber *> *out =
+      [NSMutableArray arrayWithCapacity:_passes.size() * 2];
+  for (const GraphPass &pass : _passes) {
+    [out addObject:@(pass.milliseconds)];
+    [out addObject:@(pass.drawn)];
+  }
+  return out;
+}
+
 - (void)renderAtTime:(double)time {
   if (_disposed) return;
   try {
@@ -3510,7 +4297,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
   [self pumpVideos];
 
   if (!_renderer->beginFrame(target)) return;
-  _renderer->render(_view);
+  [self renderPasses];
   _renderer->endFrame();
 
   // Flutter may sample the moment this returns, so the frame has to be on the
@@ -3677,6 +4464,11 @@ static constexpr NSUInteger kMaxPostParams = 128;
   // Filament asserts on anything still alive when the engine goes down, so the
   // teardown mirrors construction in reverse.
   [self removeEverything];
+
+  // The graph's own views, cameras and targets, before the scene they point
+  // at goes. _disposed is already set, so releaseGraph has to be able to run
+  // afterwards — it checks the engine rather than that flag for exactly this.
+  [self releaseGraph];
 
   for (auto &pair : _meshes) {
     if (pair.second.asset) _assetLoader->destroyAsset(pair.second.asset);

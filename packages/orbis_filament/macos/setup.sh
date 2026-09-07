@@ -79,9 +79,14 @@ if [ ! -d "$XCFRAMEWORK" ]; then
 
   # The dozen the renderer actually needs, in the order the podspec lists
   # them. The SDK ships thirty.
+  #
+  # `image` is easy to leave out and hard to notice missing: nothing needs it
+  # until something reads a KTX, and then it is not a compile error but a
+  # link error naming a symbol nobody wrote — image::Ktx1Bundle, referenced by
+  # ktxreader, which is in the list and useless without it.
   LIBS=(
     filament backend bluegl bluevk filabridge filaflat
-    utils geometry smol-v ibl abseil zstd
+    utils geometry smol-v ibl image abseil zstd
     gltfio_core uberarchive uberzlib dracodec meshoptimizer ktxreader
     stb basis_transcoder mikktspace
   )

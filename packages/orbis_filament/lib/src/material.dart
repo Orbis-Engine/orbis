@@ -106,8 +106,33 @@ enum OrbisFilter {
 class OrbisTexture {
   const OrbisTexture(this.path, {this.srgb = true});
 
-  /// Absolute path to the image.
+  /// What a pass drew, sampled as a texture.
+  ///
+  /// This is what makes a render target worth writing. A mirror is a pass
+  /// that draws the scene from behind the glass into a target and a material
+  /// that samples it; a portal, a security monitor and a rear-view mirror are
+  /// the same two halves. Without this a target is a picture nothing can
+  /// look at.
+  ///
+  /// Addressed as a path with a scheme rather than through a second field:
+  /// a texture is already "where the image comes from", and one more place it
+  /// can come from is a different answer to the same question rather than a
+  /// different question. Never sRGB — what a pass drew is already linear, and
+  /// decoding it again would darken every reflection in the scene.
+  factory OrbisTexture.ofTarget(String target) =>
+      OrbisTexture('$targetScheme$target', srgb: false);
+
+  /// What a target's path starts with.
+  static const String targetScheme = 'orbis:target/';
+
+  /// Absolute path to the image, or `orbis:target/<name>` for what a pass
+  /// drew.
   final String path;
+
+  /// The pass target this samples, or null if it is an image on disk.
+  String? get target => path.startsWith(targetScheme)
+      ? path.substring(targetScheme.length)
+      : null;
 
   /// Whether the file's numbers are sRGB and need decoding to linear.
   ///
@@ -159,6 +184,7 @@ class OrbisMaterial {
     this.wrap = OrbisWrap.repeat,
     this.filter = OrbisFilter.smooth,
     this.video,
+    this.screenMapped = false,
     this.baseColourMap,
     this.normalMap,
     this.metallicRoughnessMap,
@@ -264,6 +290,20 @@ class OrbisMaterial {
   /// Ignored by every other shading model.
   final int? video;
 
+  /// Whether [baseColourMap] is projected from the camera rather than wrapped
+  /// onto the surface.
+  ///
+  /// What turns a reflection target into a mirror. A reflection is drawn from
+  /// a camera behind the glass and belongs in the frame wherever the glass is
+  /// on screen, so it has to be sampled by where a pixel *is*. Sampled by the
+  /// surface's own coordinates it is a decal — the reflected world lying flat
+  /// on the floor, sliding about as the camera turns.
+  ///
+  /// Only [OrbisShading.unlit] honours it. A mirror carries its lighting in
+  /// the reflection it is showing, and lighting that a second time is lighting
+  /// it twice.
+  final bool screenMapped;
+
   /// Multiplied into [baseColour]. sRGB.
   final OrbisTexture? baseColourMap;
 
@@ -309,7 +349,8 @@ class OrbisMaterial {
       ((doubleSided ? 1 : 0) << 8) |
       ((depthWrite ? 1 : 0) << 9) |
       (wrap.index << 10) |
-      (filter.index << 12);
+      (filter.index << 12) |
+      (screenMapped ? 1 << 13 : 0);
 
   /// Writes this material's numbers into [out] at [at], in the fixed order
   /// the renderer reads them back.

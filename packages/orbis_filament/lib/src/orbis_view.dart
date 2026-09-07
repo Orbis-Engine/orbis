@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
+import 'graph.dart';
 import 'scene.dart';
 
 /// A Filament-rendered surface, laid out and composited like any other widget.
@@ -45,6 +46,38 @@ class OrbisView extends StatefulWidget {
         .invokeMapMethod<String, Object?>('stats', {'textureId': textureId});
     final cost = stats?['gpuMilliseconds'];
     return cost is num ? cost.toDouble() : 0;
+  }
+
+  /// What each pass of the last frame cost, in the order they ran.
+  ///
+  /// The point of declaring passes rather than hard-coding them: which passes
+  /// ran, in what order, and what each cost are the three questions asked of a
+  /// renderer that is too slow, and a fixed pipeline cannot answer any of them
+  /// without being instrumented by hand every time somebody asks.
+  ///
+  /// [passNames] is [OrbisScene.passNames] for the scene that was drawn. The
+  /// names never cross the channel: they are already on this side, and sending
+  /// the same strings sixty times a second to label numbers that arrive in a
+  /// known order is work for nothing. A scene whose graph has changed since
+  /// the last frame gets a capture labelled with the graph it asked about,
+  /// which is why the names come from the caller rather than from a field.
+  static Future<OrbisFrameCapture> capture(
+    int textureId,
+    List<String> passNames,
+  ) async {
+    final stats = await _OrbisViewState._channel
+        .invokeMapMethod<String, Object?>('stats', {'textureId': textureId});
+
+    final timings = stats?['passTimings'];
+    if (timings is! List) return const OrbisFrameCapture();
+
+    return OrbisFrameCapture.from(
+      Float32List.fromList([
+        for (final value in timings)
+          if (value is num) value.toDouble(),
+      ]),
+      passNames,
+    );
   }
 
   @override
