@@ -18,8 +18,31 @@
 library;
 
 export 'src/actions.dart' show MeshActions, MeshEdge, edgeOf;
-export 'src/edits.dart' show MeshEdits, MeshHandles;
+export 'src/cut.dart'
+    show
+        AlongEdge,
+        AtCorner,
+        InsideFace,
+        MeshCut,
+        OnFace,
+        flattenFace,
+        pointInsideOutline,
+        signedLoopArea;
+export 'src/drawn.dart'
+    show
+        PolyShape,
+        closesOutline,
+        distanceToSegment,
+        isNewPoint,
+        outlineCrosses,
+        signedAreaOf,
+        turnBetween;
+export 'src/edits.dart' show MeshEdits, MeshHandles, MeshShell;
+export 'src/export.dart'
+    show MeshExport, MeshFormat, Written, boundsOfGlb;
 export 'src/mesh.dart' show Face, Mesh;
 export 'src/shapes.dart' show Shape, ShapeKind;
+export 'src/uv.dart' show FaceUv, UvFit;
+export 'src/uv_edits.dart' show MeshUvs;
 export 'src/triangles.dart'
-    show GlbMaterial, MeshGlb, MeshTriangles, Triangles, angleBetween;
+    show GlbMaterial, MeshGlb, MeshTriangles, Triangles, angleBetween, cutUp;
