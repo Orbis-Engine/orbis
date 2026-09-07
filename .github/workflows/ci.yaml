@@ -4,13 +4,33 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Flutter's stable and master disagree often enough that a build breaking on
+  # one is worth being able to check on the other without pushing a commit.
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Flutter channel to build against'
+        required: false
+        default: stable
+        type: choice
+        options: [stable, beta, master]
+
+# A second push to a branch makes the first one's answer worthless, and the
+# macOS runners are the expensive part of this file.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FLUTTER_CHANNEL: ${{ inputs.channel || 'stable' }}
 
 jobs:
-  # Everything that does not need a window. The renderer needs Flutter, a macOS
-  # host and a Filament download, so it is checked separately rather than made
-  # a gate on every change to the parts that do not touch it.
+  # Everything that needs neither Flutter nor a window: the simulation, the
+  # geometry, the rig, the noise, and the core's own C++ checks.
   check:
+    name: Dart packages
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
@@ -19,9 +39,26 @@ jobs:
       - name: Analyze and test
         run: ./tool/check.sh
 
+  # The packages that resolve against Flutter. None of them draw, so this runs
+  # on Linux: the renderer's tests check the buffers and bindings it builds,
+  # not the picture.
+  flutter:
+    name: Flutter packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+      - name: Analyze and test
+        run: ./tool/check_flutter.sh
+
   # Formatting is its own job so a formatting failure never hides a real one.
   format:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
@@ -30,3 +67,61 @@ jobs:
           # stable turns an unrelated SDK bump into a red build on every file.
           sdk: 3.13.0
       - run: ./tool/format.sh --check
+
+  # Compiles the renderer.
+  #
+  # OrbisRenderer.mm is the largest and least type-checked thing in the
+  # repository, and nothing above touches it: a Dart test can exercise the
+  # bindings without the native side existing at all. Compiling it needs a
+  # macOS host and an application to build it into, so this checks out the
+  # viewport example and builds that — the smallest app that links the whole
+  # renderer.
+  renderer:
+    name: Renderer (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orbis
+      - uses: actions/checkout@v4
+        with:
+          repository: Orbis-Engine/orbis-examples
+          path: orbis-examples
+          token: ${{ secrets.ORBIS_ENGINE_TOKEN }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      # The SDK is a 300MB download and a fixed version, so it is worth
+      # keeping between runs. Keyed on the version in setup.sh, so bumping
+      # Filament fetches the new one rather than building against a stale
+      # cache that happens to still be there.
+      - name: Cache Filament SDK
+        uses: actions/cache@v4
+        with:
+          path: orbis/packages/orbis_filament/macos/third_party
+          key: filament-${{ runner.os }}-${{ hashFiles('orbis/packages/orbis_filament/macos/setup.sh') }}
+
+      # One repository, not three: the viewport depends on the renderer and
+      # nothing else, so link_local.sh wires it and skips the apps whose
+      # other checkouts are absent.
+      - name: Link the engine checkout
+        working-directory: orbis-examples
+        run: ./tool/link_local.sh ../orbis
+
+      - name: Build the viewport
+        working-directory: orbis-examples/viewport
+        run: flutter build macos --debug
+
+      # A build proves it compiles and links. Running it proves the renderer
+      # reaches the point of handing Flutter a frame, which is a different
+      # claim and the one that has actually broken: a Filament precondition
+      # aborts at runtime, not at link time.
+      - name: Draw a frame
+        working-directory: orbis-examples/viewport
+        env:
+          ORBIS_DUMP_FRAME: 30
+        run: ../../orbis/tool/ci_draw_frame.sh build/macos/Build/Products/Debug/orbis_viewport.app
