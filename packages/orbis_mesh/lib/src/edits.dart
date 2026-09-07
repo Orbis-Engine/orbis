@@ -385,3 +385,65 @@ extension MeshHandles on Mesh {
     return sum.normalized();
   }
 }
+
+
+/// Growing a shape outwards.
+///
+/// For a boundary that has to sit a little outside the thing it belongs to —
+/// which is nearly always what a collision shape wants, because a character
+/// standing exactly on a surface is a character intersecting it half the time.
+extension MeshShell on Mesh {
+  /// A copy with every face moved [by] metres along its own normal.
+  ///
+  /// Corners move further than faces do, and by exactly the right amount: a
+  /// corner of a cube pushed a metre along its diagonal would only move each
+  /// of its three faces out by a bit over half a metre. So each corner is
+  /// pushed along the average of the faces meeting there, scaled by how far
+  /// off square that average is — which puts every face exactly [by] out and
+  /// keeps the corner sharp.
+  ///
+  /// Faces, corners and everything a face wears are unchanged; only the
+  /// positions move. A negative distance shrinks, which is legitimate and is
+  /// how somebody makes a boundary that sits inside a decorative shell.
+  Mesh grown(double by) {
+    final out = copy();
+    if (by == 0 || positions.isEmpty) return out;
+
+    // Which faces meet at each corner, and which way each of them points.
+    final meeting = <int, List<Vector3>>{};
+    for (final face in faces) {
+      if (face.vertices.length < 3) continue;
+      final normal = normalOf(face);
+      for (final index in face.vertices) {
+        if (index < 0 || index >= positions.length) continue;
+        (meeting[index] ??= []).add(normal);
+      }
+    }
+
+    for (final entry in meeting.entries) {
+      final normals = entry.value;
+      final average = Vector3.zero();
+      for (final one in normals) {
+        average.add(one);
+      }
+      // Corners of a shape folded back on itself can cancel out. Leaving
+      // those where they are keeps the shape closed, which matters more than
+      // moving them somewhere arbitrary.
+      if (average.length2 < 1e-12) continue;
+      average.normalize();
+
+      // The face most side-on to the average decides the scale, so no face
+      // ends up further out than asked for. Clamped, because a corner where
+      // two faces nearly double back is a scale that runs away.
+      var least = 1.0;
+      for (final one in normals) {
+        final along = average.dot(one);
+        if (along < least) least = along;
+      }
+      final scale = least < 0.2 ? 5.0 : 1 / least;
+
+      out.positions[entry.key] = positions[entry.key] + average * (by * scale);
+    }
+    return out;
+  }
+}

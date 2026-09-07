@@ -37,7 +37,7 @@ export 'src/drawn.dart'
         outlineCrosses,
         signedAreaOf,
         turnBetween;
-export 'src/edits.dart' show MeshEdits, MeshHandles;
+export 'src/edits.dart' show MeshEdits, MeshHandles, MeshShell;
 export 'src/export.dart'
     show MeshExport, MeshFormat, Written, boundsOfGlb;
 export 'src/mesh.dart' show Face, Mesh;
