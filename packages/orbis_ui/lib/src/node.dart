@@ -104,16 +104,15 @@ class UiNode {
     Map<String, Object?>? props,
     List<UiNode>? children,
     String? key,
-  }) =>
-      UiNode(
-        type: type ?? this.type,
-        classes: classes ?? this.classes,
-        css: css ?? this.css,
-        text: text ?? this.text,
-        props: props ?? this.props,
-        children: children ?? this.children,
-        key: key ?? this.key,
-      );
+  }) => UiNode(
+    type: type ?? this.type,
+    classes: classes ?? this.classes,
+    css: css ?? this.css,
+    text: text ?? this.text,
+    props: props ?? this.props,
+    children: children ?? this.children,
+    key: key ?? this.key,
+  );
 
   // ---- editing ----
   //
@@ -247,6 +246,23 @@ class UiNode {
         'top: ${_pixels(top, round)}px',
       ].join('; '),
     );
+  }
+
+  /// This element with no place of its own.
+  ///
+  /// For moving something out of a stack and into a row or a column, where the
+  /// parent decides where things go. Not tidiness: an element still carrying
+  /// `left` and `top` becomes a `Positioned`, and a `Positioned` that is not
+  /// in a `Stack` does not lay out badly, it throws — one element keeping a
+  /// position it no longer uses takes the whole interface down.
+  UiNode get unplaced {
+    final rest = [
+      for (final declaration in css.split(';'))
+        if (declaration.trim().isNotEmpty)
+          if (!_names(declaration, const {'left', 'top', 'right', 'bottom'}))
+            declaration.trim(),
+    ];
+    return copyWith(css: rest.join('; '));
   }
 
   /// A length as the file writes it: whole when it can be, and at most two

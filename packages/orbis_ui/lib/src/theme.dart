@@ -1,5 +1,7 @@
 import 'dart:ui' show Color;
 
+import 'responsive.dart';
+
 /// The scales a class name is measured in.
 ///
 /// One place for the numbers, because the whole point of a utility vocabulary
@@ -28,6 +30,7 @@ class UiTheme {
       'full': 9999,
     },
     this.palette = defaultPalette,
+    this.breakpoints = const UiBreakpoints(),
   });
 
   /// What one unit of spacing is worth, in logical pixels.
@@ -45,6 +48,33 @@ class UiTheme {
 
   /// Named colours, as family and shade.
   final Map<String, Color> palette;
+
+  /// The widths a prefixed class starts applying at.
+  final UiBreakpoints breakpoints;
+
+  /// The same scales, multiplied.
+  ///
+  /// What makes a television show a bigger interface rather than the same one
+  /// with more room around it. Everything measured in the vocabulary moves
+  /// together — `p-4`, `gap-2`, `text-3xl` and a corner radius all grow by the
+  /// same factor — because a design whose text grew and whose padding did not
+  /// is a design that stopped being the one somebody laid out.
+  ///
+  /// Only the vocabulary scales. A measurement written in real pixels, in
+  /// brackets or in CSS, is an escape hatch somebody reached for on purpose,
+  /// and quietly multiplying it would take the hatch away.
+  UiTheme scaled(double factor) {
+    if (!factor.isFinite || factor <= 0 || factor == 1) return this;
+    return UiTheme(
+      step: step * factor,
+      text: {for (final entry in text.entries) entry.key: entry.value * factor},
+      radius: {
+        for (final entry in radius.entries) entry.key: entry.value * factor,
+      },
+      palette: palette,
+      breakpoints: breakpoints,
+    );
+  }
 
   double spacing(String value) {
     final number = double.tryParse(value);

@@ -8,6 +8,16 @@ import 'node.dart';
 /// the pixels, and an interface authored once has to arrive on all of them.
 /// The choice is which dimension is allowed to be the one that fits.
 enum CanvasFit {
+  /// Not scaled — laid out at whatever size the screen is.
+  ///
+  /// The reference size stops being what ships and becomes what somebody
+  /// designed against: a phone lays the same interface out in its own width,
+  /// the prefixed classes decide what changes on the way, and text and spacing
+  /// grow with the screen rather than the whole picture being magnified. For
+  /// anything that has to look right on a handheld and a television, which is
+  /// most of an interface.
+  responsive('Responsive'),
+
   /// Scaled so the reference width fills the screen. Height overflows or falls
   /// short. For an interface anchored to the sides — a toolbar, a HUD strip.
   width('Match width'),
@@ -50,6 +60,10 @@ class UiCanvas {
     this.height = 1080,
     this.fit = CanvasFit.contain,
     this.safeArea = 0.05,
+    this.columns = 12,
+    this.gutter = 24,
+    this.minScale = 0.8,
+    this.maxScale = 1.5,
   });
 
   /// What it was laid out at.
@@ -67,18 +81,108 @@ class UiCanvas {
   /// to.
   final double safeArea;
 
+  /// How many columns the layout grid is divided into.
+  ///
+  /// A grid is a decision made once and then obeyed: twelve columns is the one
+  /// every layout tool settled on because it divides by two, three, four and
+  /// six, which is every split anybody actually asks for. Drawn in the editor
+  /// and nowhere else — it positions nothing by itself, it is what somebody
+  /// positions things against.
+  final int columns;
+
+  /// The space between two columns, in canvas pixels.
+  final double gutter;
+
+  /// How far the fluid scale is allowed to go, on a narrow screen and a wide
+  /// one.
+  ///
+  /// Unclamped, a phone showing an interface designed at 1920 would set it in
+  /// four-point type and a television would set it in headlines. The clamp is
+  /// what turns "scale with the screen" into something shippable: below the
+  /// floor a phone stops shrinking and starts scrolling, above the ceiling a
+  /// big screen stops magnifying and starts showing more.
+  final double minScale;
+  final double maxScale;
+
   double get aspect => height == 0 ? 1 : width / height;
+
+  /// How much bigger everything measured in the vocabulary gets, on a screen
+  /// [atWidth] wide.
+  ///
+  /// One for every fit but [CanvasFit.responsive], where the whole canvas is
+  /// already being scaled and scaling the text inside it again would compound.
+  double fluidScale(double atWidth) {
+    if (fit != CanvasFit.responsive) return 1;
+    if (width <= 0 || atWidth <= 0 || !atWidth.isFinite) return 1;
+    return (atWidth / width).clamp(minScale, maxScale);
+  }
+
+  /// Where the grid starts and stops across a canvas [ofWidth] wide.
+  ///
+  /// Inside the safe area rather than edge to edge, because the outer margin a
+  /// grid needs and the edge a television eats are the same measurement, and
+  /// two numbers for one distance is one of them being wrong.
+  ({double left, double right}) gridSpanAcross(double ofWidth) =>
+      (left: ofWidth * safeArea, right: ofWidth * (1 - safeArea));
+
+  /// Every column, left and right, across a canvas [ofWidth] wide.
+  ///
+  /// Empty when the numbers do not leave room for a column, which is what a
+  /// twelve-column grid on a narrow phone with a wide gutter comes to. An
+  /// empty list draws nothing and snaps to nothing, rather than drawing
+  /// columns of negative width.
+  List<({double left, double right})> columnsAcross(double ofWidth) {
+    if (columns <= 0 || ofWidth <= 0) return const [];
+
+    final span = gridSpanAcross(ofWidth);
+    final each = (span.right - span.left - gutter * (columns - 1)) / columns;
+    if (each <= 0) return const [];
+
+    return [
+      for (var i = 0; i < columns; i++)
+        (
+          left: span.left + i * (each + gutter),
+          right: span.left + i * (each + gutter) + each,
+        ),
+    ];
+  }
+
+  /// The column edge nearest [x], or null if none is close enough.
+  ///
+  /// What makes the grid a thing somebody lays out against rather than a
+  /// picture of one. [within] is in canvas pixels: far enough that a hand
+  /// aiming at a column lands on it, near enough that something deliberately
+  /// placed between two columns stays there.
+  double? snapAcross(double x, double ofWidth, {double within = 8}) {
+    double? nearest;
+    var closest = within;
+
+    for (final column in columnsAcross(ofWidth)) {
+      for (final edge in [column.left, column.right]) {
+        final distance = (x - edge).abs();
+        if (distance <= closest) {
+          closest = distance;
+          nearest = edge;
+        }
+      }
+    }
+    return nearest;
+  }
 
   /// How much to scale by to put this canvas on a screen of [intoWidth] by
   /// [intoHeight].
   double scaleFor(double intoWidth, double intoHeight) {
     if (width <= 0 || height <= 0) return 1;
     return switch (fit) {
+      // Nothing is scaled: the interface is laid out at the size it is being
+      // shown at, which is the whole of what responsive means here.
+      CanvasFit.responsive => 1,
       CanvasFit.width => intoWidth / width,
       CanvasFit.height => intoHeight / height,
-      CanvasFit.contain => intoWidth / width < intoHeight / height
-          ? intoWidth / width
-          : intoHeight / height,
+      CanvasFit.contain =>
+        intoWidth / width < intoHeight / height
+            ? intoWidth / width
+            : intoHeight / height,
       CanvasFit.none => 1,
     };
   }
@@ -88,20 +192,31 @@ class UiCanvas {
     double? height,
     CanvasFit? fit,
     double? safeArea,
-  }) =>
-      UiCanvas(
-        width: width ?? this.width,
-        height: height ?? this.height,
-        fit: fit ?? this.fit,
-        safeArea: safeArea ?? this.safeArea,
-      );
+    int? columns,
+    double? gutter,
+    double? minScale,
+    double? maxScale,
+  }) => UiCanvas(
+    width: width ?? this.width,
+    height: height ?? this.height,
+    fit: fit ?? this.fit,
+    safeArea: safeArea ?? this.safeArea,
+    columns: columns ?? this.columns,
+    gutter: gutter ?? this.gutter,
+    minScale: minScale ?? this.minScale,
+    maxScale: maxScale ?? this.maxScale,
+  );
 
   Map<String, Object?> toJson() => {
-        'width': width,
-        'height': height,
-        'fit': fit.name,
-        'safeArea': safeArea,
-      };
+    'width': width,
+    'height': height,
+    'fit': fit.name,
+    'safeArea': safeArea,
+    'columns': columns,
+    'gutter': gutter,
+    'minScale': minScale,
+    'maxScale': maxScale,
+  };
 
   static UiCanvas fromJson(Object? value) {
     if (value is! Map) return const UiCanvas();
@@ -114,6 +229,12 @@ class UiCanvas {
       height: number('height', 1080),
       fit: CanvasFit.named(map['fit']),
       safeArea: number('safeArea', 0.05).clamp(0, 0.45),
+      columns: map['columns'] is num
+          ? (map['columns']! as num).round().clamp(1, 24)
+          : 12,
+      gutter: number('gutter', 24).clamp(0, 400),
+      minScale: number('minScale', 0.8).clamp(0.1, 1),
+      maxScale: number('maxScale', 1.5).clamp(1, 8),
     );
   }
 }
@@ -156,26 +277,30 @@ class UiDocument {
   /// is still a column; the choice is per container rather than for the whole
   /// document.
   factory UiDocument.blank(String name) => UiDocument(
-        name: name,
-        root: const UiNode(
-          type: 'stack',
-          classes: 'w-full h-full',
-          children: [
-            UiNode(
-              type: 'text',
-              classes: 'text-3xl font-bold text-white',
-              css: 'left: 96px; top: 84px',
-              text: 'Title',
-            ),
-            UiNode(
-              type: 'text',
-              classes: 'text-base text-slate-300',
-              css: 'left: 96px; top: 136px',
-              text: 'Say what this screen is for.',
-            ),
-          ],
+    name: name,
+    // Responsive from the first frame. A canvas that starts fixed and has
+    // to be made responsive later is one where every position already
+    // assumes a width, and the conversion is the whole layout again.
+    canvas: const UiCanvas(fit: CanvasFit.responsive),
+    root: const UiNode(
+      type: 'stack',
+      classes: 'w-full h-full',
+      children: [
+        UiNode(
+          type: 'text',
+          classes: 'text-3xl font-bold text-white',
+          css: 'left: 96px; top: 84px',
+          text: 'Title',
         ),
-      );
+        UiNode(
+          type: 'text',
+          classes: 'text-base text-slate-300',
+          css: 'left: 96px; top: 136px',
+          text: 'Say what this screen is for.',
+        ),
+      ],
+    ),
+  );
 
   UiDocument copyWith({UiCanvas? canvas, UiNode? root, String? name}) =>
       UiDocument(
@@ -184,13 +309,8 @@ class UiDocument {
         name: name ?? this.name,
       );
 
-  String toText() => '${const JsonEncoder.withIndent('  ').convert({
-        'kind': marker,
-        'formatVersion': formatVersion,
-        'name': name,
-        'canvas': canvas.toJson(),
-        'root': root.toJson(),
-      })}\n';
+  String toText() =>
+      '${const JsonEncoder.withIndent('  ').convert({'kind': marker, 'formatVersion': formatVersion, 'name': name, 'canvas': canvas.toJson(), 'root': root.toJson()})}\n';
 
   /// Reads one, or null if it is not an interface.
   ///
@@ -204,7 +324,8 @@ class UiDocument {
     } on FormatException {
       return null;
     }
-    if (parsed is! Map<String, Object?> || parsed['kind'] != marker) return null;
+    if (parsed is! Map<String, Object?> || parsed['kind'] != marker)
+      return null;
 
     return UiDocument(
       name: parsed['name'] is String ? parsed['name']! as String : 'Interface',

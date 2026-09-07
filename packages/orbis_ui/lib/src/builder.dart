@@ -26,11 +26,8 @@ typedef UiEvent = void Function(String handler, Object? payload);
 /// stripped out at build time, it was never built. That is the difference
 /// between a canvas you can see while you work and one that shows up in a
 /// screenshot.
-typedef UiDecorator = Widget Function(
-  UiNode node,
-  List<int> path,
-  Widget built,
-);
+typedef UiDecorator =
+    Widget Function(UiNode node, List<int> path, Widget built);
 
 /// Builds real Flutter widgets from a description.
 ///
@@ -45,9 +42,10 @@ class UiBuilder {
     this.onEvent,
     this.fontFamily,
     this.decorate,
-  })  : theme = theme ?? const UiTheme(),
-        _utilities = UiUtilities(theme: theme ?? const UiTheme()),
-        _css = UiCss(theme: theme ?? const UiTheme());
+    this.width,
+  }) : theme = theme ?? const UiTheme(),
+       _utilities = UiUtilities(theme: theme ?? const UiTheme()),
+       _css = UiCss(theme: theme ?? const UiTheme());
 
   final UiTheme theme;
 
@@ -60,13 +58,24 @@ class UiBuilder {
   /// Called for every element, when a host wants to wrap them. Null in a game.
   final UiDecorator? decorate;
 
+  /// The width the whole interface is being laid out at, when the caller knows
+  /// it. What the prefixed classes are resolved against.
+  ///
+  /// One width for the tree rather than one per element: `md:` means "on a
+  /// screen this wide", and an element that answered to the box it happened to
+  /// be in would read one way in a sidebar and another in the middle of the
+  /// same screen.
+  final double? width;
+
   final UiUtilities _utilities;
   final UiCss _css;
 
   /// The style a node adds up to: its classes, then its CSS over the top.
   UiStyle styleOf(UiNode node) {
     var style = UiStyle.none;
-    if (node.classes.isNotEmpty) style = style.merge(_utilities.parse(node.classes));
+    if (node.classes.isNotEmpty) {
+      style = style.merge(_utilities.parse(node.classes, width: width));
+    }
     if (node.css.isNotEmpty) style = style.merge(_css.parse(node.css));
     return style;
   }
@@ -100,8 +109,11 @@ class UiBuilder {
       'field' => _field(node, style, inherited),
       'image' => _image(node, style),
       'spacer' => const Spacer(),
-      'row' || 'column' || 'stack' || 'box' || _ =>
-        _container(node, style, path),
+      'row' ||
+      'column' ||
+      'stack' ||
+      'box' ||
+      _ => _container(node, style, path),
     };
 
     widget = _decorate(widget, style, node);
@@ -231,7 +243,8 @@ class UiBuilder {
   }
 
   Widget _container(UiNode node, UiStyle style, [List<int> path = const []]) {
-    final direction = style.direction ??
+    final direction =
+        style.direction ??
         switch (node.type) {
           'row' => 'row',
           'stack' => 'stack',
@@ -261,8 +274,9 @@ class UiBuilder {
     // Lining up on the baseline needs to be told which baseline, and Flutter
     // asserts rather than guessing. A script asking for it should not be the
     // thing that takes the frame down, so the answer is supplied here.
-    final baseline =
-        style.crossAxis == 'baseline' ? TextBaseline.alphabetic : null;
+    final baseline = style.crossAxis == 'baseline'
+        ? TextBaseline.alphabetic
+        : null;
 
     final flex = direction == 'row'
         ? Row(
@@ -297,10 +311,12 @@ class UiBuilder {
     final spaced = <Widget>[];
     for (var i = 0; i < children.length; i++) {
       if (i > 0) {
-        spaced.add(SizedBox(
-          width: horizontal ? gap : null,
-          height: horizontal ? null : gap,
-        ));
+        spaced.add(
+          SizedBox(
+            width: horizontal ? gap : null,
+            height: horizontal ? null : gap,
+          ),
+        );
       }
       spaced.add(children[i]);
     }
@@ -322,8 +338,12 @@ class UiBuilder {
     );
   }
 
-  Widget _button(UiNode node, UiStyle style, TextStyle inherited,
-      List<int> path) {
+  Widget _button(
+    UiNode node,
+    UiStyle style,
+    TextStyle inherited,
+    List<int> path,
+  ) {
     final handler = node.handlerFor('onPressed') ?? node.handlerFor('onTap');
     final label = node.text ?? '';
 

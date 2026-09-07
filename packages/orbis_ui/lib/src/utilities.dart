@@ -21,12 +21,33 @@ class UiUtilities {
   final UiTheme theme;
 
   /// The style a space-separated class list adds up to.
-  UiStyle parse(String classes) {
+  ///
+  /// Pass [width] to resolve the prefixed classes — `md:text-xl`, `lg:row` —
+  /// against the width the interface is actually being drawn at. Without it
+  /// only the unprefixed classes apply, which is what a caller that does not
+  /// know its own width should get: the layout somebody wrote for the
+  /// narrowest case, rather than a guess at which screen this is.
+  ///
+  /// The layers go on narrowest first, whatever order they were typed in. A
+  /// class list is written by hand and a cascade that depended on the order of
+  /// the words in it would mean `lg:text-3xl md:text-xl` and `md:text-xl
+  /// lg:text-3xl` being two different designs.
+  UiStyle parse(String classes, {double? width}) {
+    final names = classes.split(RegExp(r'\s+'));
+    final layers = <String>[
+      '',
+      if (width != null) ...theme.breakpoints.activeAt(width),
+    ];
+
     var style = UiStyle.none;
-    for (final name in classes.split(RegExp(r'\s+'))) {
-      if (name.isEmpty) continue;
-      final rule = _rule(name);
-      if (rule != null) style = style.merge(rule);
+    for (final layer in layers) {
+      for (final name in names) {
+        if (name.isEmpty) continue;
+        final colon = name.indexOf(':');
+        if ((colon < 0 ? '' : name.substring(0, colon)) != layer) continue;
+        final rule = _rule(colon < 0 ? name : name.substring(colon + 1));
+        if (rule != null) style = style.merge(rule);
+      }
     }
     return style;
   }
@@ -34,11 +55,21 @@ class UiUtilities {
   /// The classes in [classes] that mean nothing here.
   ///
   /// For a linter, an editor's squiggle, or a test that wants to know a name
-  /// it relies on still exists.
+  /// it relies on still exists. A prefixed class is judged on both halves and
+  /// at every width: `md:text-xl` is a real class whether or not this screen
+  /// is wide enough for it, and `hover:text-xl` is not one at any width.
   List<String> unknownIn(String classes) => [
     for (final name in classes.split(RegExp(r'\s+')))
-      if (name.isNotEmpty && _rule(name) == null) name,
+      if (name.isNotEmpty && !_knows(name)) name,
   ];
+
+  /// Whether a class name means something, prefix and all.
+  bool _knows(String name) {
+    final colon = name.indexOf(':');
+    if (colon < 0) return _rule(name) != null;
+    return theme.breakpoints.knows(name.substring(0, colon)) &&
+        _rule(name.substring(colon + 1)) != null;
+  }
 
   UiStyle? _rule(String name) {
     // Layout ------------------------------------------------------------
@@ -81,15 +112,26 @@ class UiUtilities {
     // Alignment ---------------------------------------------------------
     if (name.startsWith('items-')) {
       final how = name.substring(6);
-      return const {'start', 'center', 'end', 'stretch', 'baseline'}
-              .contains(how)
+      return const {
+            'start',
+            'center',
+            'end',
+            'stretch',
+            'baseline',
+          }.contains(how)
           ? UiStyle(crossAxis: how)
           : null;
     }
     if (name.startsWith('justify-')) {
       final how = name.substring(8);
-      return const {'start', 'center', 'end', 'between', 'around', 'evenly'}
-              .contains(how)
+      return const {
+            'start',
+            'center',
+            'end',
+            'between',
+            'around',
+            'evenly',
+          }.contains(how)
           ? UiStyle(mainAxis: how)
           : null;
     }
@@ -141,7 +183,9 @@ class UiUtilities {
     if (name.startsWith('opacity-')) {
       final number = double.tryParse(name.substring(8));
       // Stated as a percentage, the way every such scale is.
-      return number == null ? null : UiStyle(opacity: (number / 100).clamp(0, 1));
+      return number == null
+          ? null
+          : UiStyle(opacity: (number / 100).clamp(0, 1));
     }
 
     // Spacing and size --------------------------------------------------
@@ -292,8 +336,9 @@ Color? parseColour(String value) {
   if (text.startsWith('#')) {
     final digits = text.substring(1);
     final expanded = switch (digits.length) {
-      3 => 'FF${digits[0]}${digits[0]}${digits[1]}${digits[1]}'
-          '${digits[2]}${digits[2]}',
+      3 =>
+        'FF${digits[0]}${digits[0]}${digits[1]}${digits[1]}'
+            '${digits[2]}${digits[2]}',
       6 => 'FF$digits',
       // CSS puts the alpha last and Dart puts it first.
       8 => '${digits.substring(6)}${digits.substring(0, 6)}',
