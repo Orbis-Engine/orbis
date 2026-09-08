@@ -460,17 +460,31 @@ class BistroExteriorExample extends BistroExample {
               drawn: !hasEnvironment,
             ),
       pipeline: OrbisPipeline(
+        // Holds the frame rate rather than the pixel count. What is in view
+        // changes enormously as the walk turns — a wall a metre away, or a
+        // hundred and seventy metres of street — and a fixed resolution means
+        // the cost changes with it. A frame arriving at an uneven rate judders
+        // however smooth the camera's own motion is, and this example exists
+        // to be looked at while it moves.
+        resolution: OrbisResolution(adaptive: true, minScale: 0.6),
         shadows: OrbisShadows(
           kind: OrbisShadowKind.soft,
-          cascades: 4,
-          mapSize: 2048,
+          // Three at a thousand, not four at two thousand, which is what this
+          // asked for before anybody measured it. Four cascades of two
+          // thousand square is sixteen million shadow texels redrawn every
+          // frame; with a fixed camera looking down the street it came to
+          // thirty-eight milliseconds, and the fourth cascade covers ground
+          // nothing is ever close enough to see the shadows on.
+          cascades: 3,
+          mapSize: 1024,
           // A hundred and seventy metres of street, so the shadows are told
           // to reach across it rather than left at the default.
           distance: 120,
-          // Contact shadows. A cascaded map cannot resolve where a chair leg
-          // meets the cobbles, so without these everything fine-grained
-          // floats a few centimetres above the ground.
-          contact: true,
+          // Contact shadows are off here, and it is the single biggest thing
+          // in the frame: twenty-four milliseconds on their own. They resolve
+          // where a chair leg meets the cobbles, which is worth having in a
+          // room and is not worth a third of the frame in a street nobody
+          // stands still in. The interior keeps them.
           softness: 1.2,
         ),
         // Four samples. A street full of railings, shutters and thin lamp

@@ -77,6 +77,79 @@ private final class FrameClock {
   #endif
 }
 
+/// The one thread the engine is allowed to be spoken to from.
+///
+/// Filament's job system only accepts work from threads it has adopted, and
+/// the thread that creates the engine is the one it adopts. Everything after
+/// that — every frame, every scene, every model read from disk — has to come
+/// from the same thread or it aborts inside the job system.
+///
+/// That thread used to be the main one, which meant a model's half second of
+/// reading and uploading was half a second of frozen application: no cursor,
+/// no menus, no repaint. It is what "the scene takes a moment to load" was.
+///
+/// A `Thread` rather than a `DispatchQueue`, and the distinction is the whole
+/// point: a serial queue promises the blocks do not overlap, not that they run
+/// on the same thread, and Filament is asking about the thread. A queue would
+/// work until the day the pool handed a block to a different worker, which is
+/// the kind of fault that appears once a fortnight in someone else's build.
+private final class EngineThread {
+  private let thread: Thread
+  private let ready = DispatchSemaphore(value: 0)
+  private var loop: CFRunLoop?
+
+  init() {
+    var made: CFRunLoop?
+    let start = DispatchSemaphore(value: 0)
+    thread = Thread {
+      made = CFRunLoopGetCurrent()
+      start.signal()
+      // A source that is never signalled, so the loop has something to wait
+      // on and does not return the moment it is entered.
+      let keep = CFRunLoopSourceContext()
+      var context = keep
+      let source = CFRunLoopSourceCreate(nil, 0, &context)
+      CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+      CFRunLoopRun()
+    }
+    thread.name = "orbis.engine"
+    // Above the default, below the display link's. This thread is what draws.
+    thread.qualityOfService = .userInteractive
+    thread.start()
+    start.wait()
+    loop = made
+    ready.signal()
+  }
+
+  /// Runs `work` on the engine's thread and comes back when it is done.
+  ///
+  /// For the calls whose answer the caller needs: creating a viewport, asking
+  /// what a frame cost, tearing one down.
+  func sync<T>(_ work: @escaping () -> T) -> T {
+    if Thread.current === thread { return work() }
+    var answer: T!
+    let done = DispatchSemaphore(value: 0)
+    post { answer = work(); done.signal() }
+    done.wait()
+    return answer
+  }
+
+  /// Runs `work` on the engine's thread and returns immediately.
+  ///
+  /// For everything else, which is most of it: a frame, a scene, a resize.
+  /// The caller has nothing to wait for and waiting is the thing being
+  /// removed.
+  func async(_ work: @escaping () -> Void) {
+    post(work)
+  }
+
+  private func post(_ work: @escaping () -> Void) {
+    guard let loop else { return }
+    CFRunLoopPerformBlock(loop, CFRunLoopMode.commonModes.rawValue, work)
+    CFRunLoopWakeUp(loop)
+  }
+}
+
 /// One 3D surface: a renderer, the texture Flutter samples, and the display
 /// link driving it.
 ///
@@ -88,23 +161,26 @@ private final class Viewport {
   let textureId: Int64
   private let renderer: OrbisRenderer
   private let registry: FlutterTextureRegistry
+  private let engine: EngineThread
   private let clock = FrameClock()
   private let startedAt = CFAbsoluteTimeGetCurrent()
   private let frameLock = NSLock()
   private var framePending = false
 
-  init(textureId: Int64, renderer: OrbisRenderer, registry: FlutterTextureRegistry) {
+  init(textureId: Int64, renderer: OrbisRenderer,
+       registry: FlutterTextureRegistry, engine: EngineThread) {
     self.textureId = textureId
     self.renderer = renderer
     self.registry = registry
+    self.engine = engine
   }
 
   /// What a frame usually costs this viewport's GPU, in milliseconds.
-  var gpuMilliseconds: Double { renderer.gpuMilliseconds() }
+  var gpuMilliseconds: Double { engine.sync { self.renderer.gpuMilliseconds() } }
 
   /// What each pass of the last frame cost, and how much it drew — two
   /// numbers per pass, in the order they ran.
-  var passTimings: [NSNumber] { renderer.passTimings }
+  var passTimings: [NSNumber] { engine.sync { self.renderer.passTimings } }
 
   func start() {
     clock.start { [weak self] in self?.tick() }
@@ -129,7 +205,7 @@ private final class Viewport {
     frameLock.unlock()
 
     let time = CFAbsoluteTimeGetCurrent() - startedAt
-    DispatchQueue.main.async { [weak self] in
+    engine.async { [weak self] in
       guard let self else { return }
       self.renderer.render(atTime: time)
       self.registry.textureFrameAvailable(self.textureId)
@@ -140,15 +216,33 @@ private final class Viewport {
   }
 
   func resize(width: UInt32, height: UInt32) {
-    renderer.resize(toWidth: width, height: height)
+    engine.async { self.renderer.resize(toWidth: width, height: height) }
   }
 
   /// Applies a scene sent from Dart.
   ///
-  /// Safe to call straight from the channel handler: channel calls and the
-  /// frame both run on the main thread, so a scene can never be swapped out
-  /// from under a render in progress.
-  func apply(scene: Scene) {
+  /// Handed to the engine's thread rather than done here. A scene can name a
+  /// model that is not loaded yet, and loading one is half a second of reading
+  /// and uploading — on the thread the channel call arrives on, that is half a
+  /// second of frozen application. It is also the only thread Filament will
+  /// accept the work from, so this is not a choice between two places to do
+  /// it: it is the place.
+  ///
+  /// Scenes cannot overtake one another, because the engine's thread runs one
+  /// block at a time and a frame is posted to the same queue — a scene is
+  /// never swapped out from under a render in progress.
+  /// [answered] is called on the main thread with whatever the renderer has
+  /// to say, once the scene is actually in. Waiting for it here instead would
+  /// put the load back on the thread this is trying to keep free.
+  func apply(scene: Scene, answered: @escaping ([String: String]) -> Void) {
+    engine.async {
+      self.write(scene: scene)
+      let notes = self.renderer.notes
+      DispatchQueue.main.async { answered(notes) }
+    }
+  }
+
+  private func write(scene: Scene) {
     // An empty Swift array's base address is nil, and the renderer's pointers
     // are not nullable. Nothing is read through them when the count is zero,
     // so an empty scene borrows a valid address it will not touch.
@@ -349,11 +443,12 @@ private final class Viewport {
   }
 
   /// What the scene asked for that could not be given, and why.
-  var notes: [String: String] { renderer.notes }
-
   func dispose() {
+    // Stopped first, so no frame is posted after the engine has gone; and the
+    // teardown itself waits, because the caller unregisters the texture as
+    // soon as this returns and the renderer is still holding its buffers.
     clock.stop()
-    renderer.dispose()
+    engine.sync { self.renderer.dispose() }
   }
 }
 
@@ -731,6 +826,16 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
   private let registry: FlutterTextureRegistry
   private var viewports: [Int64: Viewport] = [:]
 
+  /// One thread for every viewport in the process.
+  ///
+  /// Shared rather than one each, because Filament adopts the thread that
+  /// creates an engine and a second engine created on a different thread
+  /// would be a second set of rules to keep. An editor with four viewports
+  /// draws them one after another on this thread, which is what it did on the
+  /// main thread anyway — the difference is which thread is not free while it
+  /// happens.
+  private let engineThread = EngineThread()
+
   init(registry: FlutterTextureRegistry) {
     self.registry = registry
   }
@@ -762,7 +867,12 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
                             details: nil))
         return
       }
-      guard let renderer = OrbisRenderer(width: UInt32(width), height: UInt32(height)) else {
+      // On the engine's thread, because Filament adopts whichever thread
+      // creates it and every call after this has to come from the same one.
+      let made = engineThread.sync {
+        OrbisRenderer(width: UInt32(width), height: UInt32(height))
+      }
+      guard let renderer = made else {
         result(FlutterError(code: "no-renderer",
                             message: "Filament could not start. Metal may be unavailable.",
                             details: nil))
@@ -770,7 +880,8 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
       }
       let texture = OrbisTexture(renderer: renderer)
       let textureId = registry.register(texture)
-      let viewport = Viewport(textureId: textureId, renderer: renderer, registry: registry)
+      let viewport = Viewport(textureId: textureId, renderer: renderer,
+                              registry: registry, engine: engineThread)
       viewports[textureId] = viewport
       viewport.start()
       result(textureId)
@@ -802,11 +913,15 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
         result(nil)
         return
       }
-      viewport.apply(scene: scene)
       // Returned rather than logged: an editor can name the asset it could not
       // load, or the light it had to drop, instead of drawing something quietly
       // wrong and leaving somebody guessing.
-      result(viewport.notes)
+      //
+      // Answered when the scene is in rather than when it is asked for. Dart
+      // is waiting on this call, but the platform thread is not, which is the
+      // whole point: a model that takes half a second to read no longer takes
+      // the application with it.
+      viewport.apply(scene: scene) { notes in result(notes) }
 
     case "stats":
       guard let arguments = call.arguments as? [String: Any],

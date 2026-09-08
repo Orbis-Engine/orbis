@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.8.0
+
+- The engine has a thread of its own, and the application no longer stops
+  while a model loads. Everything Filament does — every frame, every scene,
+  every model read from disk — used to happen on the main thread, so half a
+  second of reading and uploading was half a second with no cursor, no menus
+  and no repaint. That is what "the scene takes a moment to load" was. A
+  `Thread` rather than a queue, because Filament adopts the thread that
+  creates the engine and a serial queue promises only that its blocks do not
+  overlap, not that they run on the same thread.
+- `setScene` answers when the scene is in rather than when it is asked for.
+  Dart still waits; the thread the call arrived on does not.
+- A model's files are read all at once and handed to the loader, rather than
+  opened by it one at a time as it reaches them. The Bistro exterior's
+  blocking load goes from 1853 ms to about 540 ms. Two separate things:
+  handing them over at all turns four hundred seeks braided into decoding
+  into one pass, and reading them concurrently rather than in turn takes that
+  pass from 340 ms to about 150 ms — a disk can serve many files at once and
+  a loop asks it for one. Read rather than memory-mapped: a mapping looks
+  frugal, but every page then arrives as a fault when the decoder touches it,
+  which measured 2226 ms — worse than doing nothing at all.
+- A model says what its load cost, in the three parts it is made of: reading
+  the file, parsing it, and handing its files over. "It takes a few seconds"
+  is not something anybody can act on — those are different costs with
+  different fixes, and the first version of this report had the boundaries in
+  the wrong places and blamed the parse for two seconds that were not its.
+  The parse is 20 ms.
+
 ## 0.7.1
 
 - An object drawn without a material no longer leaves two samplers unbound.

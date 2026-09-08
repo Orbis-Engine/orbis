@@ -42,7 +42,6 @@
 #include <utils/Panic.h>
 
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -300,6 +299,62 @@ constexpr size_t kMaterialMaps = 7;
 /// blend maps came to be missing from one of them: a material that had never
 /// been given them left two samplers unset, which Filament reports on every
 /// draw. Hundreds of lines a second, for a surface that was drawing correctly.
+/// One of a model's files: what the glTF calls it, where it is, and its bytes
+/// once they have been read.
+struct Wanted {
+  const char *uri;
+  NSString *path;
+  void *bytes;
+  size_t size;
+};
+
+/// Reads one file whole, or leaves it null.
+///
+/// Null is not an error here — it is the answer to "is this file there",
+/// which is what the caller is asking. A model that names four hundred
+/// textures and finds none of them still loads, and still draws, in black.
+///
+/// Read, not mapped. Mapping looks like the frugal choice — the pages are
+/// backed by the file and the system can evict them — but every page then
+/// arrives as a fault when the decoder touches it, and paging four hundred
+/// files in sixteen kilobytes at a time measured 2226 ms against 542 ms for
+/// reading them. This data is read once, immediately, in full: the access
+/// pattern a plain read is for.
+static void readWholeFile(Wanted &one) {
+  const int file = open(one.path.fileSystemRepresentation, O_RDONLY);
+  if (file < 0) return;
+
+  struct stat facts;
+  if (fstat(file, &facts) != 0 || facts.st_size <= 0) {
+    close(file);
+    return;
+  }
+
+  const size_t size = (size_t)facts.st_size;
+  void *bytes = malloc(size);
+  if (bytes == nullptr) {
+    close(file);
+    return;
+  }
+
+  // In a loop, because a read is allowed to return early and a texture that
+  // is nine tenths of itself decodes into something worse than a missing one.
+  size_t got = 0;
+  while (got < size) {
+    const ssize_t some = read(file, (char *)bytes + got, size - got);
+    if (some <= 0) break;
+    got += (size_t)some;
+  }
+  close(file);
+
+  if (got != size) {
+    free(bytes);
+    return;
+  }
+  one.bytes = bytes;
+  one.size = size;
+}
+
 constexpr const char *kMapNames[kMaterialMaps] = {
     "baseColorMap", "normalMap",         "metallicRoughnessMap",
     "occlusionMap", "emissiveMap",       "blendBaseColorMap",
@@ -795,6 +850,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// Whether any asset is still decoding its textures. An ivar block takes
   /// no initialiser, so this is zeroed by the runtime like the rest.
   bool _loadingResources;
+  /// What the load in flight is, and when it started, for the timing report.
+  NSString *_loadingName;
+  size_t _loadingResourceCount;
+  double _loadingFrom;
 
   /// Loaded glTF files, by path. Kept for the life of the renderer: a scene
   /// arrives on every drag, and the parse is the expensive part.
@@ -962,6 +1021,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 }
 
 - (void)startWithWidth:(uint32_t)width height:(uint32_t)height {
+  const double startedFrom = CFAbsoluteTimeGetCurrent();
   utils::Panic::setPanicHandler(orbisReportPanic, nullptr);
   _width = MAX(width, 1u);
   _height = MAX(height, 1u);
@@ -1034,6 +1094,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
                          0,     -0.6f, -1.0f, -0.8f,     0,     0,
                          0,     0.53f, 0.1f,  10.0f,     80.0f, 0};
   [self applyLights:sunKey kinds:sunKind flags:sunFlags params:sun count:1];
+
+  NSLog(@"[orbis] engine ready in %.0f ms",
+        (CFAbsoluteTimeGetCurrent() - startedFrom) * 1000);
 }
 
 - (void)buildGeometry {
@@ -1591,6 +1654,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   Mesh &entry = _meshes[path];
 
   NSString *native = [NSString stringWithUTF8String:path.c_str()];
+  const double readFrom = CFAbsoluteTimeGetCurrent();
   NSData *data = [NSData dataWithContentsOfFile:native];
   if (data == nil) {
     NSLog(@"[orbis] mesh unreadable: %@", native);
@@ -1598,6 +1662,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     return nullptr;
   }
 
+  const double parsedFrom = CFAbsoluteTimeGetCurrent();
   gltfio::FilamentInstance *first = nullptr;
   entry.asset = _assetLoader->createInstancedAsset(
       static_cast<const uint8_t *>(data.bytes),
@@ -1609,6 +1674,8 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     _assetNotes[native] = @"This is not a glTF file that Filament can read.";
     return nullptr;
   }
+
+  const double providedFrom = CFAbsoluteTimeGetCurrent();
 
   // The glTF's own path, so it can find the .bin and the textures sitting
   // beside it. A .glb carries everything and does not need it.
@@ -1652,6 +1719,15 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     const size_t count = entry.asset->getResourceUriCount();
     NSMutableArray<NSString *> *sample = [NSMutableArray array];
     size_t missing = 0;
+
+    // Which files this model names, resolved to where they are.
+    //
+    // Worked out first and read second, because reading four hundred files
+    // one after another spends nearly all of its time waiting: the disk can
+    // serve many at once and a single-file-at-a-time loop asks it for one.
+    NSString *beside = [native stringByDeletingLastPathComponent];
+    std::vector<Wanted> wanted;
+    wanted.reserve(count);
     for (size_t i = 0; i < count; i++) {
       if (uris[i] == nullptr) continue;
       NSString *uri = @(uris[i]);
@@ -1664,17 +1740,40 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       // name nothing on disk has — and the answer would be "missing", which
       // is the one kind of wrong that sounds authoritative.
       NSString *name = [uri stringByRemovingPercentEncoding] ?: uri;
-      // Relative to the glTF, which is what a glTF URI is relative to.
-      NSString *full = [[native stringByDeletingLastPathComponent]
-          stringByAppendingPathComponent:name];
+      wanted.push_back(
+          {uris[i], [beside stringByAppendingPathComponent:name], nullptr, 0});
+    }
 
-      if (![self provideResource:full as:uris[i]]) {
+    // Read them all at once. The reads touch nothing shared — each writes
+    // only its own slot — so this needs no lock, and the files come back in
+    // whatever order the disk finds convenient.
+    if (!wanted.empty()) {
+      // The block captures the pointer, not the vector: capturing the vector
+      // copies it, and a copy is not where the bytes are wanted.
+      Wanted *slots = wanted.data();
+      dispatch_apply(wanted.size(),
+                     dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+                     ^(size_t i) { readWholeFile(slots[i]); });
+    }
+
+    // Handed over one at a time, because Filament is not being called from
+    // several threads at once and this is not where the time was.
+    for (const Wanted &one : wanted) {
+      if (one.bytes == nullptr) {
         missing++;
         // A few names, not four hundred. The count is the number that
         // matters and the names are only there to recognise them by.
-        if (sample.count < 3) [sample addObject:name.lastPathComponent];
+        if (sample.count < 3) {
+          [sample addObject:one.path.lastPathComponent];
+        }
+        continue;
       }
+      _resourceLoader->addResourceData(
+          one.uri, filament::backend::BufferDescriptor(
+                       one.bytes, one.size,
+                       [](void *buffer, size_t, void *) { free(buffer); }));
     }
+
     if (missing > 0) {
       _assetNotes[native] = [NSString
           stringWithFormat:@"%lu of its %lu files are missing, starting with "
@@ -1690,6 +1789,22 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     _assetNotes[native] = @"Its geometry or textures could not be loaded.";
   } else {
     _loadingResources = true;
+    // What the load cost, in the three parts it is actually made of.
+    //
+    // "It takes a few seconds" is not a thing anybody can act on: reading the
+    // file, parsing it, and decoding its textures are three different costs
+    // with three different fixes, and until they are separated the only
+    // available move is to guess. Printed rather than measured on request
+    // because a load happens once and the number is wanted the first time,
+    // not after somebody has reproduced it.
+    _loadingName = native;
+    _loadingResourceCount = entry.asset->getResourceUriCount();
+    _loadingFrom = CFAbsoluteTimeGetCurrent();
+    NSLog(@"[orbis] %@: read %.0f ms, parsed %.0f ms, %zu files handed over "
+          @"in %.0f ms",
+          native.lastPathComponent, (parsedFrom - readFrom) * 1000,
+          (providedFrom - parsedFrom) * 1000, _loadingResourceCount,
+          (_loadingFrom - providedFrom) * 1000);
   }
 
   // Deliberately not calling releaseSourceData: more instances can only be
@@ -1698,55 +1813,6 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   entry.all.push_back(first);
   entry.spare.push_back(first);
   return &entry;
-}
-
-/// Hands one of a model's files to the loader, mapped rather than read.
-///
-/// Returns whether the file was there, which is the question the caller is
-/// asking — a model that names four hundred textures and finds none of them
-/// still loads, and still draws, in black.
-///
-/// Two reasons to do this rather than let the loader open the file itself.
-/// The first is that opening it itself is deprecated, and says so once per
-/// resource: four hundred lines of it for one scene, which buries whatever
-/// the log was actually for. The second is that this is where the file name
-/// is already being resolved to check it exists, so the bytes are free.
-///
-/// Mapped, not read. The alternative is `addResourceData` over four hundred
-/// files that come to three hundred and fifty megabytes, all of it held at
-/// once because every resource has to be handed over before the load begins —
-/// and that is dirty memory the system cannot reclaim. A mapping is backed by
-/// the file: the kernel pages in what the decoder touches and evicts it again
-/// under pressure, so the cost is the pages in flight rather than the whole
-/// asset.
-- (BOOL)provideResource:(NSString *)path as:(const char *)uri {
-  const int file = open(path.fileSystemRepresentation, O_RDONLY);
-  if (file < 0) return NO;
-
-  struct stat facts;
-  if (fstat(file, &facts) != 0 || facts.st_size <= 0) {
-    close(file);
-    return NO;
-  }
-
-  const size_t size = (size_t)facts.st_size;
-  void *pages = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, file, 0);
-  // The mapping keeps its own reference to the file, so the descriptor is not
-  // needed past this point whether or not the mapping worked.
-  close(file);
-  if (pages == MAP_FAILED) return NO;
-
-  // Sequentially, once: this is a decoder reading a texture from front to
-  // back and never coming back to it, which is the one access pattern where
-  // saying so is worth the call.
-  madvise(pages, size, MADV_SEQUENTIAL);
-
-  _resourceLoader->addResourceData(
-      uri,
-      filament::backend::BufferDescriptor(
-          pages, size,
-          [](void *buffer, size_t length, void *) { munmap(buffer, length); }));
-  return YES;
 }
 
 /// A copy of a mesh to give an object, from the pool if one is spare.
@@ -4494,6 +4560,12 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     _resourceLoader->asyncUpdateLoad();
     if (_resourceLoader->asyncGetLoadProgress() >= 1.0f) {
       _loadingResources = false;
+      if (_loadingFrom > 0) {
+        NSLog(@"[orbis] %@: %zu files decoded in %.0f ms",
+              _loadingName.lastPathComponent, _loadingResourceCount,
+              (CFAbsoluteTimeGetCurrent() - _loadingFrom) * 1000);
+        _loadingFrom = 0;
+      }
     }
   }
 
