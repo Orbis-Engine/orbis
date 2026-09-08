@@ -1619,6 +1619,45 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // there on the next frame and the textures arrive over the following ones,
   // which is a scene assembling itself rather than an application that has
   // hung.
+  // Which of the files it names are actually there.
+  //
+  // Worth doing before the load rather than trusting the result of it: the
+  // loader reports success whether or not a texture opened. A scene of four
+  // hundred images once failed every one of them — the base path was wrong by
+  // a directory — and still returned true, so the geometry appeared with no
+  // colour on it and nothing anywhere said why. Two hours of that is what
+  // this loop is for.
+  {
+    const char *const *uris = entry.asset->getResourceUris();
+    const size_t count = entry.asset->getResourceUriCount();
+    NSMutableArray<NSString *> *sample = [NSMutableArray array];
+    size_t missing = 0;
+    for (size_t i = 0; i < count; i++) {
+      if (uris[i] == nullptr) continue;
+      NSString *uri = @(uris[i]);
+      // Data URIs carry their own bytes and embedded resources have no URI at
+      // all; only a file on disk can be missing.
+      if ([uri hasPrefix:@"data:"]) continue;
+      // Relative to the glTF, which is what a glTF URI is relative to.
+      NSString *full = [[native stringByDeletingLastPathComponent]
+          stringByAppendingPathComponent:uri];
+      if (![[NSFileManager defaultManager] fileExistsAtPath:full]) {
+        missing++;
+        // A few names, not four hundred. The count is the number that
+        // matters and the names are only there to recognise them by.
+        if (sample.count < 3) [sample addObject:uri.lastPathComponent];
+      }
+    }
+    if (missing > 0) {
+      _assetNotes[native] = [NSString
+          stringWithFormat:@"%lu of its %lu files are missing, starting with "
+                           @"%@. It will draw untextured.",
+                           (unsigned long)missing, (unsigned long)count,
+                           [sample componentsJoinedByString:@", "]];
+      NSLog(@"[orbis] %@: %@", native, _assetNotes[native]);
+    }
+  }
+
   if (!_resourceLoader->asyncBeginLoad(entry.asset)) {
     NSLog(@"[orbis] mesh resources failed: %@", native);
     _assetNotes[native] = @"Its geometry or textures could not be loaded.";

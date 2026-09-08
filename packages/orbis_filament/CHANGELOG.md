@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- A model whose files are missing says so. The resource loader reports
+  success whether or not a texture opened, so a scene could lose all four
+  hundred of its images and still load "fine", drawing untextured with
+  nothing anywhere explaining why. The files a model names are now checked
+  before the load and the count comes back through `onSceneNotes`.
+
 ## 0.4.0
 
 - A shadow distance of zero no longer blacks out the scene. The cascade
