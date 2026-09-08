@@ -42,7 +42,6 @@
 #include <utils/Panic.h>
 
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -1616,6 +1615,8 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     return nullptr;
   }
 
+  const double providedFrom = CFAbsoluteTimeGetCurrent();
+
   // The glTF's own path, so it can find the .bin and the textures sitting
   // beside it. A .glb carries everything and does not need it.
   //
@@ -1707,9 +1708,11 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     _loadingName = native;
     _loadingResourceCount = entry.asset->getResourceUriCount();
     _loadingFrom = CFAbsoluteTimeGetCurrent();
-    NSLog(@"[orbis] %@: read %.0f ms, parsed %.0f ms, %zu files to decode",
+    NSLog(@"[orbis] %@: read %.0f ms, parsed %.0f ms, %zu files handed over "
+          @"in %.0f ms",
           native.lastPathComponent, (parsedFrom - readFrom) * 1000,
-          (_loadingFrom - parsedFrom) * 1000, _loadingResourceCount);
+          (providedFrom - parsedFrom) * 1000, _loadingResourceCount,
+          (_loadingFrom - providedFrom) * 1000);
   }
 
   // Deliberately not calling releaseSourceData: more instances can only be
@@ -1720,25 +1723,33 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   return &entry;
 }
 
-/// Hands one of a model's files to the loader, mapped rather than read.
+/// Hands one of a model's files to the loader, read rather than mapped.
 ///
 /// Returns whether the file was there, which is the question the caller is
 /// asking — a model that names four hundred textures and finds none of them
 /// still loads, and still draws, in black.
 ///
-/// Two reasons to do this rather than let the loader open the file itself.
-/// The first is that opening it itself is deprecated, and says so once per
-/// resource: four hundred lines of it for one scene, which buries whatever
-/// the log was actually for. The second is that this is where the file name
-/// is already being resolved to check it exists, so the bytes are free.
+/// Handing them over rather than letting the loader open them itself is worth
+/// twelve times the load time, measured on the Bistro exterior: 1853 ms of
+/// blocking work became 152 ms. That is not a small tuning difference and it
+/// is worth saying why. Filament's own path opens each file when it reaches
+/// it, one at a time, interleaved with the work of consuming it; this reads
+/// them straight through first, which is one sequential pass over the disk
+/// instead of four hundred seeks braided into decoding.
 ///
-/// Mapped, not read. The alternative is `addResourceData` over four hundred
-/// files that come to three hundred and fifty megabytes, all of it held at
-/// once because every resource has to be handed over before the load begins —
-/// and that is dirty memory the system cannot reclaim. A mapping is backed by
-/// the file: the kernel pages in what the decoder touches and evicts it again
-/// under pressure, so the cost is the pages in flight rather than the whole
-/// asset.
+/// Read, not mapped, and that distinction is the other half. Mapping looks
+/// like the frugal choice — the pages are backed by the file and the system
+/// can evict them — but every page then arrives as a fault at the moment the
+/// decoder touches it, and paging four hundred files in sixteen kilobytes at
+/// a time came to 2226 ms, which is *worse* than letting Filament open them.
+/// This data is read once, immediately, in full: the access pattern a plain
+/// read is for.
+///
+/// The cost is that the model's bytes are all resident at once — for the
+/// Bistro, most of half a gigabyte for the couple of seconds decoding takes.
+/// Every resource has to be given before the load can begin, so there is no
+/// way to hand them over gradually; what there is, is the callback below,
+/// which gives each buffer back the moment Filament has finished with it.
 - (BOOL)provideResource:(NSString *)path as:(const char *)uri {
   const int file = open(path.fileSystemRepresentation, O_RDONLY);
   if (file < 0) return NO;
@@ -1750,22 +1761,31 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   }
 
   const size_t size = (size_t)facts.st_size;
-  void *pages = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, file, 0);
-  // The mapping keeps its own reference to the file, so the descriptor is not
-  // needed past this point whether or not the mapping worked.
-  close(file);
-  if (pages == MAP_FAILED) return NO;
+  void *bytes = malloc(size);
+  if (bytes == nullptr) {
+    close(file);
+    return NO;
+  }
 
-  // Sequentially, once: this is a decoder reading a texture from front to
-  // back and never coming back to it, which is the one access pattern where
-  // saying so is worth the call.
-  madvise(pages, size, MADV_SEQUENTIAL);
+  // In a loop, because a read is allowed to return early and a texture that
+  // is nine tenths of itself decodes into something worse than a missing one.
+  size_t got = 0;
+  while (got < size) {
+    const ssize_t some = read(file, (char *)bytes + got, size - got);
+    if (some <= 0) break;
+    got += (size_t)some;
+  }
+  close(file);
+
+  if (got != size) {
+    free(bytes);
+    return NO;
+  }
 
   _resourceLoader->addResourceData(
-      uri,
-      filament::backend::BufferDescriptor(
-          pages, size,
-          [](void *buffer, size_t length, void *) { munmap(buffer, length); }));
+      uri, filament::backend::BufferDescriptor(
+               bytes, size,
+               [](void *buffer, size_t, void *) { free(buffer); }));
   return YES;
 }
 

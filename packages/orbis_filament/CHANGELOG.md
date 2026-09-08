@@ -2,12 +2,19 @@
 
 ## 0.8.0
 
+- A model's files are read and handed to the loader in one pass, rather than
+  opened by it one at a time as it reaches them. The Bistro exterior's
+  blocking load goes from 1853 ms to about 550 ms — twelve times less on a
+  warm cache — because four hundred seeks braided into decoding become one
+  sequential read. Read rather than memory-mapped: a mapping looks frugal, but
+  every page then arrives as a fault when the decoder touches it, which
+  measured 2226 ms, worse than doing nothing at all.
 - A model says what its load cost, in the three parts it is made of: reading
-  the file, parsing it and building its buffers, and decoding its textures.
-  "It takes a few seconds" is not something anybody can act on — those are
-  three different costs with three different fixes. The Bistro exterior turns
-  out to be 1 ms, 1455 ms and 1933 ms, which says immediately that the file
-  is not the problem and the JSON is not either.
+  the file, parsing it, and handing its files over. "It takes a few seconds"
+  is not something anybody can act on — those are different costs with
+  different fixes, and the first version of this report had the boundaries in
+  the wrong places and blamed the parse for two seconds that were not its.
+  The parse is 20 ms.
 
 ## 0.7.1
 
