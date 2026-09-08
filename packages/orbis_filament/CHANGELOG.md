@@ -2,13 +2,15 @@
 
 ## 0.8.0
 
-- A model's files are read and handed to the loader in one pass, rather than
+- A model's files are read all at once and handed to the loader, rather than
   opened by it one at a time as it reaches them. The Bistro exterior's
-  blocking load goes from 1853 ms to about 550 ms — twelve times less on a
-  warm cache — because four hundred seeks braided into decoding become one
-  sequential read. Read rather than memory-mapped: a mapping looks frugal, but
-  every page then arrives as a fault when the decoder touches it, which
-  measured 2226 ms, worse than doing nothing at all.
+  blocking load goes from 1853 ms to about 540 ms. Two separate things:
+  handing them over at all turns four hundred seeks braided into decoding
+  into one pass, and reading them concurrently rather than in turn takes that
+  pass from 340 ms to about 150 ms — a disk can serve many files at once and
+  a loop asks it for one. Read rather than memory-mapped: a mapping looks
+  frugal, but every page then arrives as a fault when the decoder touches it,
+  which measured 2226 ms — worse than doing nothing at all.
 - A model says what its load cost, in the three parts it is made of: reading
   the file, parsing it, and handing its files over. "It takes a few seconds"
   is not something anybody can act on — those are different costs with

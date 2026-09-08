@@ -299,6 +299,62 @@ constexpr size_t kMaterialMaps = 7;
 /// blend maps came to be missing from one of them: a material that had never
 /// been given them left two samplers unset, which Filament reports on every
 /// draw. Hundreds of lines a second, for a surface that was drawing correctly.
+/// One of a model's files: what the glTF calls it, where it is, and its bytes
+/// once they have been read.
+struct Wanted {
+  const char *uri;
+  NSString *path;
+  void *bytes;
+  size_t size;
+};
+
+/// Reads one file whole, or leaves it null.
+///
+/// Null is not an error here — it is the answer to "is this file there",
+/// which is what the caller is asking. A model that names four hundred
+/// textures and finds none of them still loads, and still draws, in black.
+///
+/// Read, not mapped. Mapping looks like the frugal choice — the pages are
+/// backed by the file and the system can evict them — but every page then
+/// arrives as a fault when the decoder touches it, and paging four hundred
+/// files in sixteen kilobytes at a time measured 2226 ms against 542 ms for
+/// reading them. This data is read once, immediately, in full: the access
+/// pattern a plain read is for.
+static void readWholeFile(Wanted &one) {
+  const int file = open(one.path.fileSystemRepresentation, O_RDONLY);
+  if (file < 0) return;
+
+  struct stat facts;
+  if (fstat(file, &facts) != 0 || facts.st_size <= 0) {
+    close(file);
+    return;
+  }
+
+  const size_t size = (size_t)facts.st_size;
+  void *bytes = malloc(size);
+  if (bytes == nullptr) {
+    close(file);
+    return;
+  }
+
+  // In a loop, because a read is allowed to return early and a texture that
+  // is nine tenths of itself decodes into something worse than a missing one.
+  size_t got = 0;
+  while (got < size) {
+    const ssize_t some = read(file, (char *)bytes + got, size - got);
+    if (some <= 0) break;
+    got += (size_t)some;
+  }
+  close(file);
+
+  if (got != size) {
+    free(bytes);
+    return;
+  }
+  one.bytes = bytes;
+  one.size = size;
+}
+
 constexpr const char *kMapNames[kMaterialMaps] = {
     "baseColorMap", "normalMap",         "metallicRoughnessMap",
     "occlusionMap", "emissiveMap",       "blendBaseColorMap",
@@ -1659,6 +1715,15 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     const size_t count = entry.asset->getResourceUriCount();
     NSMutableArray<NSString *> *sample = [NSMutableArray array];
     size_t missing = 0;
+
+    // Which files this model names, resolved to where they are.
+    //
+    // Worked out first and read second, because reading four hundred files
+    // one after another spends nearly all of its time waiting: the disk can
+    // serve many at once and a single-file-at-a-time loop asks it for one.
+    NSString *beside = [native stringByDeletingLastPathComponent];
+    std::vector<Wanted> wanted;
+    wanted.reserve(count);
     for (size_t i = 0; i < count; i++) {
       if (uris[i] == nullptr) continue;
       NSString *uri = @(uris[i]);
@@ -1671,17 +1736,40 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       // name nothing on disk has — and the answer would be "missing", which
       // is the one kind of wrong that sounds authoritative.
       NSString *name = [uri stringByRemovingPercentEncoding] ?: uri;
-      // Relative to the glTF, which is what a glTF URI is relative to.
-      NSString *full = [[native stringByDeletingLastPathComponent]
-          stringByAppendingPathComponent:name];
+      wanted.push_back(
+          {uris[i], [beside stringByAppendingPathComponent:name], nullptr, 0});
+    }
 
-      if (![self provideResource:full as:uris[i]]) {
+    // Read them all at once. The reads touch nothing shared — each writes
+    // only its own slot — so this needs no lock, and the files come back in
+    // whatever order the disk finds convenient.
+    if (!wanted.empty()) {
+      // The block captures the pointer, not the vector: capturing the vector
+      // copies it, and a copy is not where the bytes are wanted.
+      Wanted *slots = wanted.data();
+      dispatch_apply(wanted.size(),
+                     dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+                     ^(size_t i) { readWholeFile(slots[i]); });
+    }
+
+    // Handed over one at a time, because Filament is not being called from
+    // several threads at once and this is not where the time was.
+    for (const Wanted &one : wanted) {
+      if (one.bytes == nullptr) {
         missing++;
         // A few names, not four hundred. The count is the number that
         // matters and the names are only there to recognise them by.
-        if (sample.count < 3) [sample addObject:name.lastPathComponent];
+        if (sample.count < 3) {
+          [sample addObject:one.path.lastPathComponent];
+        }
+        continue;
       }
+      _resourceLoader->addResourceData(
+          one.uri, filament::backend::BufferDescriptor(
+                       one.bytes, one.size,
+                       [](void *buffer, size_t, void *) { free(buffer); }));
     }
+
     if (missing > 0) {
       _assetNotes[native] = [NSString
           stringWithFormat:@"%lu of its %lu files are missing, starting with "
@@ -1721,72 +1809,6 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   entry.all.push_back(first);
   entry.spare.push_back(first);
   return &entry;
-}
-
-/// Hands one of a model's files to the loader, read rather than mapped.
-///
-/// Returns whether the file was there, which is the question the caller is
-/// asking — a model that names four hundred textures and finds none of them
-/// still loads, and still draws, in black.
-///
-/// Handing them over rather than letting the loader open them itself is worth
-/// twelve times the load time, measured on the Bistro exterior: 1853 ms of
-/// blocking work became 152 ms. That is not a small tuning difference and it
-/// is worth saying why. Filament's own path opens each file when it reaches
-/// it, one at a time, interleaved with the work of consuming it; this reads
-/// them straight through first, which is one sequential pass over the disk
-/// instead of four hundred seeks braided into decoding.
-///
-/// Read, not mapped, and that distinction is the other half. Mapping looks
-/// like the frugal choice — the pages are backed by the file and the system
-/// can evict them — but every page then arrives as a fault at the moment the
-/// decoder touches it, and paging four hundred files in sixteen kilobytes at
-/// a time came to 2226 ms, which is *worse* than letting Filament open them.
-/// This data is read once, immediately, in full: the access pattern a plain
-/// read is for.
-///
-/// The cost is that the model's bytes are all resident at once — for the
-/// Bistro, most of half a gigabyte for the couple of seconds decoding takes.
-/// Every resource has to be given before the load can begin, so there is no
-/// way to hand them over gradually; what there is, is the callback below,
-/// which gives each buffer back the moment Filament has finished with it.
-- (BOOL)provideResource:(NSString *)path as:(const char *)uri {
-  const int file = open(path.fileSystemRepresentation, O_RDONLY);
-  if (file < 0) return NO;
-
-  struct stat facts;
-  if (fstat(file, &facts) != 0 || facts.st_size <= 0) {
-    close(file);
-    return NO;
-  }
-
-  const size_t size = (size_t)facts.st_size;
-  void *bytes = malloc(size);
-  if (bytes == nullptr) {
-    close(file);
-    return NO;
-  }
-
-  // In a loop, because a read is allowed to return early and a texture that
-  // is nine tenths of itself decodes into something worse than a missing one.
-  size_t got = 0;
-  while (got < size) {
-    const ssize_t some = read(file, (char *)bytes + got, size - got);
-    if (some <= 0) break;
-    got += (size_t)some;
-  }
-  close(file);
-
-  if (got != size) {
-    free(bytes);
-    return NO;
-  }
-
-  _resourceLoader->addResourceData(
-      uri, filament::backend::BufferDescriptor(
-               bytes, size,
-               [](void *buffer, size_t, void *) { free(buffer); }));
-  return YES;
 }
 
 /// A copy of a mesh to give an object, from the pool if one is spare.
