@@ -772,6 +772,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   uint64_t _materialGeneration;
   gltfio::TextureProvider *_ktxTextures;
 
+  /// Whether any asset is still decoding its textures. An ivar block takes
+  /// no initialiser, so this is zeroed by the runtime like the rest.
+  bool _loadingResources;
+
   /// Loaded glTF files, by path. Kept for the life of the renderer: a scene
   /// arrives on every drag, and the parse is the expensive part.
   std::map<std::string, Mesh> _meshes;
@@ -1603,9 +1607,23 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       .normalizeSkinningWeights = true,
   });
 
-  if (!_resourceLoader->loadResources(entry.asset)) {
+  // Begun rather than waited for.
+  //
+  // loadResources decodes every texture before it returns, and this scene has
+  // four hundred of them — so the application stopped dead for several seconds
+  // on a mesh that was, geometrically, ready almost at once. Filament will
+  // decode them on its own threads instead, and the frame loop nudges it along
+  // by calling asyncUpdateLoad until it says it is finished.
+  //
+  // What that buys is that the scene appears immediately. The geometry is
+  // there on the next frame and the textures arrive over the following ones,
+  // which is a scene assembling itself rather than an application that has
+  // hung.
+  if (!_resourceLoader->asyncBeginLoad(entry.asset)) {
     NSLog(@"[orbis] mesh resources failed: %@", native);
     _assetNotes[native] = @"Its geometry or textures could not be loaded.";
+  } else {
+    _loadingResources = true;
   }
 
   // Deliberately not calling releaseSourceData: more instances can only be
@@ -4322,6 +4340,17 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 
 - (void)renderAtTime:(double)time {
   if (_disposed) return;
+
+  // Textures still arriving. Filament decodes them off this thread and hands
+  // them over here, so this has to be called until it says it is done —
+  // stopping early leaves an asset permanently half-textured.
+  if (_loadingResources) {
+    _resourceLoader->asyncUpdateLoad();
+    if (_resourceLoader->asyncGetLoadProgress() >= 1.0f) {
+      _loadingResources = false;
+    }
+  }
+
   try {
     [self drawAtTime:time];
   } catch (const std::exception &error) {

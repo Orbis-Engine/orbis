@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- The walk turns round instead of reversing. Four phases on a loop — down the
+  street, turn, back, turn — with the turn eased in and out so it starts and
+  stops at zero speed.
+- Temporal anti-aliasing, screen-space reflections, ACES tone mapping, contact
+  shadows and stronger ambient occlusion.
+
 ## 0.4.0
 
 - A prefiltered environment, built by `cmgen` when the scene is fetched. The

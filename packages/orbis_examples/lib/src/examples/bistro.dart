@@ -195,21 +195,46 @@ class BistroExteriorExample extends BistroExample {
 
   /// Where somebody walking is at `seconds`, and what they are looking at.
   ///
-  /// A walking pace, a little bob at the frequency feet actually hit the
-  /// ground, and a slow sweep of the head — because a person walking a street
-  /// they have not seen before looks at the buildings rather than straight
-  /// ahead, and a camera that only ever looks along its own path is the
-  /// giveaway that nobody is holding it.
+  /// Four phases on a loop: down the street, turn round, back up it, turn
+  /// round again. The turn is the part that matters. Reversing along the path
+  /// and leaving the heading alone — which is what this did first — walks
+  /// somebody backwards up their own street at the same pace they came down
+  /// it, and the moment it changes direction is a jump rather than a
+  /// movement. A person stops, turns, and sets off again, so this does too.
+  ///
+  /// No state between frames: everything is a function of `seconds`, so the
+  /// walk is the same walk however the frames happen to fall, and scrubbing
+  /// to a moment gives that moment. Same reason the effects and the sequencer
+  /// work that way.
   (Vector3, Vector3) _walk(double seconds) {
     const pace = 1.3; // metres a second
+    const turnTime = 2.6; // long enough to read as a turn, not a spin
+
     var total = 0.0;
     for (var i = 0; i < _path.length - 1; i++) {
       total += (_path[i + 1] - _path[i]).length;
     }
-    // There and back, so it never cuts from the far end to the near one.
-    final cycle = total / pace * 2;
-    var travelled = (seconds % cycle) * pace;
-    if (travelled > total) travelled = total * 2 - travelled;
+    final walkTime = total / pace;
+    final cycle = (walkTime + turnTime) * 2;
+    final t = seconds % cycle;
+
+    // Where along the path, and which way round.
+    final double travelled;
+    var backwards = false;
+    var turning = 0.0; // 0 to 1 through a turn
+    if (t < walkTime) {
+      travelled = t * pace;
+    } else if (t < walkTime + turnTime) {
+      travelled = total;
+      turning = (t - walkTime) / turnTime;
+    } else if (t < walkTime * 2 + turnTime) {
+      travelled = total - (t - walkTime - turnTime) * pace;
+      backwards = true;
+    } else {
+      travelled = 0;
+      backwards = true;
+      turning = (t - walkTime * 2 - turnTime) / turnTime;
+    }
 
     var along = 0.0;
     var at = _path.first;
@@ -217,8 +242,9 @@ class BistroExteriorExample extends BistroExample {
     for (var i = 0; i < _path.length - 1; i++) {
       final leg = _path[i + 1] - _path[i];
       final length = leg.length;
-      if (travelled <= along + length) {
-        at = _path[i] + leg * ((travelled - along) / length);
+      if (travelled <= along + length || i == _path.length - 2) {
+        final f = ((travelled - along) / length).clamp(0.0, 1.0);
+        at = _path[i] + leg * f;
         heading = leg;
         break;
       }
@@ -226,24 +252,35 @@ class BistroExteriorExample extends BistroExample {
     }
     heading = heading.normalized();
 
+    // Which way the body faces: along the path, or back down it.
+    var facing = math.atan2(heading.z, heading.x);
+    if (backwards) facing += math.pi;
+
+    // And through a turn, half a rotation eased in and out — a turn that
+    // starts and stops at zero speed, which is what makes it read as a person
+    // rather than a tripod being swung.
+    if (turning > 0) {
+      final eased = turning * turning * (3 - 2 * turning); // smoothstep
+      facing += math.pi * (backwards ? eased - 1 : eased);
+    }
+
+    // Looking about, on top of where the body is pointed. Two slow waves so
+    // it never repeats in an obvious rhythm.
+    final sweep =
+        math.sin(seconds * 0.19) * 0.5 + math.sin(seconds * 0.081) * 0.22;
+    final yaw = facing + sweep;
+
     // The bob. Two steps a second at a walking pace, and a couple of
-    // centimetres — enough to feel, not enough to notice.
-    final bob = math.sin(seconds * math.pi * 2 * 1.8) * 0.022;
+    // centimetres — enough to feel, not enough to notice. It stops during a
+    // turn, because somebody turning on the spot is not taking strides.
+    final walkingNow = turning == 0 ? 1.0 : 0.0;
+    final bob = math.sin(seconds * math.pi * 2 * 1.8) * 0.022 * walkingNow;
     final eye = Vector3(at.x, at.y + bob, at.z);
 
-    // Looking about: a slow sweep either side of the way ahead, and a little
-    // up, because the interesting part of this street is above eye level.
-    // Narrower than a real head turn. A wide sweep in a six-metre street
-    // spends half its time looking at a wall a metre away, which reads as
-    // being lost rather than as looking around.
-    final sweep = math.sin(seconds * 0.19) * 0.55 + math.sin(seconds * 0.08) * 0.25;
-    final look = Vector3(
-      heading.x * math.cos(sweep) - heading.z * math.sin(sweep),
-      0,
-      heading.x * math.sin(sweep) + heading.z * math.cos(sweep),
-    );
-    final rise = 0.12 + math.sin(seconds * 0.13) * 0.10;
-    return (eye, eye + Vector3(look.x * 8, rise * 8, look.z * 8));
+    // A little up, because the interesting part of this street is above eye
+    // level — the lamps, the signage, the balconies.
+    final rise = 0.14 + math.sin(seconds * 0.13) * 0.09;
+    return (eye, eye + Vector3(math.cos(yaw) * 8, rise * 8, math.sin(yaw) * 8));
   }
 
   @override
@@ -375,6 +412,11 @@ class BistroExteriorExample extends BistroExample {
           // scene renders black under a hundred thousand lux of sun. This
           // street is a hundred and seventy metres across.
           distance: 120,
+          // Contact shadows. A cascaded map cannot resolve where a chair leg
+          // meets the cobbles, so without these everything fine-grained
+          // floats a few centimetres above the ground.
+          contact: true,
+          softness: 1.2,
         ),
         // Four samples. A street full of railings, shutters and thin lamp
         // posts is nothing but edges, and edges are what a single sample
@@ -387,9 +429,32 @@ class BistroExteriorExample extends BistroExample {
       // darkening that bounced light would give, and without it everything
       // sits on the ground rather than in it.
       post: OrbisPostProcess(
-        antiAliasing: AntiAliasing.fxaa,
+        // Temporal, not FXAA. It resolves an edge by sampling it in different
+        // places on successive frames, which is why it is the best-looking of
+        // the three and why it smears when something moves fast. A camera
+        // walking at one and a third metres a second is exactly the case it
+        // is good at, and a street of railings and shutters and thin lamp
+        // posts is nothing but the edges it fixes.
+        antiAliasing: AntiAliasing.temporal,
         bloom: OrbisBloom(enabled: night, strength: 0.22, levels: 7),
-        occlusion: OrbisOcclusion(enabled: true),
+        // The cheapest stand-in for the contact darkening that bounced light
+        // would give: without it everything sits on the ground rather than in
+        // it.
+        occlusion: OrbisOcclusion(enabled: true, quality: 2, radius: 0.4),
+        // Wet cobbles and shop glass. Screen-space, so it can only reflect
+        // what is already on screen — which is most of what a street reflects
+        // anyway, since the thing above a pavement is usually the building
+        // across from it.
+        reflections: OrbisReflections(enabled: true, maxDistance: 6),
+        // ACES rather than the plain filmic curve. More contrast and more
+        // saturation, and the transform most films are graded through — which
+        // matters most at night, where the difference between a lamp and the
+        // dark it stands in is the whole picture.
+        grading: OrbisGrading(
+          enabled: true,
+          toneMapping: ToneMapping.aces,
+          contrast: night ? 1.06 : 1.0,
+        ),
       ),
     );
   }
@@ -403,10 +468,13 @@ class BistroExteriorExample extends BistroExample {
           contentPadding: EdgeInsets.zero,
           value: walking,
           title: const Text('Walk the street'),
-          subtitle: Text(walking
-              ? 'On foot, looking around'
-              : 'Drag to orbit instead'),
-          onChanged: (value) { walking = value; changed(); },
+          subtitle: Text(
+            walking ? 'On foot, looking around' : 'Drag to orbit instead',
+          ),
+          onChanged: (value) {
+            walking = value;
+            changed();
+          },
         ),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -565,13 +633,18 @@ class BistroInteriorExample extends BistroExample {
           // A room rather than a street, so the shadows only have to reach
           // across it — but not zero, which covers nothing at all.
           distance: 30,
+          contact: true,
         ),
       ),
       post: OrbisPostProcess(
+        antiAliasing: AntiAliasing.temporal,
         bloom: OrbisBloom(enabled: true, strength: 0.1),
-        // Occlusion earns its place indoors. It is the cheapest approximation
-        // of the contact darkening that bounced light would give for free.
-        occlusion: OrbisOcclusion(enabled: true),
+        // Occlusion earns its place indoors more than anywhere. It is the
+        // cheapest approximation of the contact darkening that bounced light
+        // would give for free, and indoors bounced light is most of the
+        // lighting.
+        occlusion: OrbisOcclusion(enabled: true, quality: 2, radius: 0.4),
+        grading: OrbisGrading(enabled: true, toneMapping: ToneMapping.aces),
       ),
     );
   }
