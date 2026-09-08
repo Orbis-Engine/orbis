@@ -1021,6 +1021,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 }
 
 - (void)startWithWidth:(uint32_t)width height:(uint32_t)height {
+  const double startedFrom = CFAbsoluteTimeGetCurrent();
   utils::Panic::setPanicHandler(orbisReportPanic, nullptr);
   _width = MAX(width, 1u);
   _height = MAX(height, 1u);
@@ -1093,6 +1094,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
                          0,     -0.6f, -1.0f, -0.8f,     0,     0,
                          0,     0.53f, 0.1f,  10.0f,     80.0f, 0};
   [self applyLights:sunKey kinds:sunKind flags:sunFlags params:sun count:1];
+
+  NSLog(@"[orbis] engine ready in %.0f ms",
+        (CFAbsoluteTimeGetCurrent() - startedFrom) * 1000);
 }
 
 - (void)buildGeometry {
