@@ -10,6 +10,14 @@
   that in one lookup rather than sixty thousand comparisons. Only blocks with
   air beside them are drawn, which in a world of solid hills is about an
   eighth of them.
+## 0.12.1
+
+- The runner's black shapes were shadows. Three things at once: the track was
+  a twentieth of full brightness, so a shadow on it was simply black; the sky
+  was dim enough that a shadowed surface got almost nothing; and the coins,
+  which are thin discs, cast hard-edged rectangles onto the road with nothing
+  above them to explain the shape. A lighter road, more sky, and coins that
+  float without casting.
 
 ## 0.12.0
 

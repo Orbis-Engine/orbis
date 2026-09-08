@@ -97,8 +97,8 @@ class RunnerExample extends Example {
         transform: Matrix4.identity()
           // Nearer the camera than the middle of the track, so it is a
           // character being followed rather than a speck at the far end.
-          ..setTranslation(Vector3(_runnerLane, 1.0 + _runnerAt, 6.5))
-          ..multiply(Matrix4.diagonal3(Vector3(0.5, 0.8, 0.5))),
+          ..setTranslation(Vector3(_runnerLane, 0.95 + _runnerAt, 4.0))
+          ..multiply(Matrix4.diagonal3(Vector3(0.4, 0.7, 0.4))),
         colour: Vector3(1, 1, 1),
         material: 1,
       ),
@@ -151,6 +151,11 @@ class RunnerExample extends Example {
             ..multiply(Matrix4.diagonal3(Vector3(0.34, 0.34, 0.06))),
           colour: Vector3(1, 1, 1),
           material: 4,
+          // A coin is a disc a few centimetres thick, so its shadow is a
+          // hard-edged rectangle lying on the road with nothing above it to
+          // explain the shape. They float and they glow; they do not need
+          // to be grounded.
+          castShadows: false,
         ),
       );
     }
@@ -189,10 +194,13 @@ class RunnerExample extends Example {
           emissive: Vector3(0.5, 0.18, 0.04),
           emissiveIntensity: 0.5,
         ),
-        // The track: dark, so that everything standing on it reads.
+        // The track. Dark enough that what stands on it reads, light enough
+        // that a shadow on it is shading rather than a hole — at a twentieth
+        // of full brightness the shadowed part of it was simply black, and a
+        // black rectangle on a road looks like a fault, not a shadow.
         OrbisMaterial(
           key: 2,
-          baseColour: Vector4(0.052, 0.058, 0.075, 1),
+          baseColour: Vector4(0.15, 0.16, 0.19, 1),
           roughness: 0.8,
         ),
         // What is jumped over.
@@ -235,7 +243,10 @@ class RunnerExample extends Example {
       sky: OrbisSky(
         zenith: linearOf(const Color(0xFF2B3E63)),
         horizon: linearOf(const Color(0xFFCE7A54)),
-        ambient: 17000,
+        // Enough that the shadowed side of something is dark rather than
+        // gone. A single low sun and almost no sky is how a scene ends up
+        // with black shapes in it.
+        ambient: 30000,
       ),
       pipeline: OrbisPipeline(
         shadows: OrbisShadows(
@@ -356,12 +367,24 @@ final z = -((hazard.along - travelled) % length);
       final along = i / 3 * _spacing;
       for (final side in const [-1.0, 1.0]) {
         if (chance.nextDouble() < 0.35) continue;
-        final out = 4.2 + chance.nextDouble() * 9;
-        final tall = 0.6 + chance.nextDouble() * 5.5;
+
+        // Clear of the road, with a verge. The track is 4.6 either side of
+        // the middle and these used to start at 4.2, so a building could
+        // stand in the third lane — which is what "it keeps generating really
+        // long objects" was: a tower with the road running through it.
+        final out = 7.5 + chance.nextDouble() * 15;
+
+        // Wide as well as tall. Every one of these was the same 1.8 across
+        // and up to eleven high, which is a six-to-one slab — a row of them
+        // beside the camera reads as a wall with slots in it rather than as
+        // a city.
+        final wide = 0.9 + chance.nextDouble() * 2.4;
+        final tall = 0.8 + chance.nextDouble() * 6.5;
+
         transforms.addAll([
-          0.9, 0, 0, 0, //
+          wide, 0, 0, 0, //
           0, tall, 0, 0, //
-          0, 0, 0.9, 0, //
+          0, 0, wide, 0, //
           side * out, tall - 0.2, -(along % length), 1, //
         ]);
         final shade = 0.5 + chance.nextDouble() * 0.4;
