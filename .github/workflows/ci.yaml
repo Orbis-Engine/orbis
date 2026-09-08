@@ -89,6 +89,15 @@ jobs:
           # Pinned: the formatter changes between releases, and tracking
           # stable turns an unrelated SDK bump into a red build on every file.
           sdk: 3.13.0
+      # Flutter as well as Dart, because two of the packages resolve against
+      # it — and the formatter reads a package's language version out of its
+      # resolved package config. Without Flutter here those two stay
+      # unresolved, get formatted as if they were older, and are reported as
+      # needing changes they do not need.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
       - run: ./tool/format.sh --check
 
   # Compiles the renderer.
