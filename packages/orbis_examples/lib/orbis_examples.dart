@@ -32,8 +32,10 @@ export 'src/examples/many.dart' show ManyExample;
 export 'src/examples/materials.dart' show MaterialsExample;
 export 'src/examples/meshes.dart' show MeshesExample;
 export 'src/examples/pipeline.dart' show PipelineExample;
+export 'src/examples/runner.dart' show RunnerExample;
 export 'src/examples/post.dart' show PostExample;
 export 'src/examples/video.dart' show VideoExample;
+export 'src/examples/voxels.dart' show VoxelExample;
 export 'src/examples/weather.dart' show WeatherExample;
 export 'src/examples/surface.dart' show SurfaceExample, linearOf;
 
@@ -49,9 +51,11 @@ import 'src/examples/many.dart';
 import 'src/examples/materials.dart';
 import 'src/examples/meshes.dart';
 import 'src/examples/pipeline.dart';
+import 'src/examples/runner.dart';
 import 'src/examples/post.dart';
 import 'src/examples/surface.dart';
 import 'src/examples/video.dart';
+import 'src/examples/voxels.dart';
 import 'src/examples/weather.dart';
 
 /// Every example that needs nothing but the engine, in the order to show them.
@@ -77,6 +81,8 @@ List<Example> engineExamples() => [
   PipelineExample(),
   PostExample(),
   VideoExample(),
+  VoxelExample(),
+  RunnerExample(),
   BistroExteriorExample(),
   BistroInteriorExample(),
   BenchmarkExample(),

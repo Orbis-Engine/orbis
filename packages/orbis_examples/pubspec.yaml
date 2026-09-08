@@ -2,7 +2,7 @@ name: orbis_examples
 description: >-
   One technique at a time: a scene that shows it, the controls that change it,
   and the lines that do it. Shown by the gallery app and by the editor.
-version: 0.11.0
+version: 0.12.0
 publish_to: none
 
 environment:
@@ -18,6 +18,9 @@ dependencies:
     path: ../orbis_camera
   orbis_weather:
     path: ../orbis_weather
+  # For a landscape that is the same every time it is generated.
+  orbis_noise:
+    path: ../orbis_noise
 
   # For choosing a film to play. A file the person picked is the only kind an
   # example can be sure of: typing a path is a guess, and a guess that fails
