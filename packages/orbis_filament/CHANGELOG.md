@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+- A material can carry a second surface and choose between them per pixel,
+  which is what ground needs: a field that becomes a path, or cobbles going
+  under grass, is not one material, and the alternatives are a seam where two
+  meshes meet or a texture painted for that one patch of world. Three modes,
+  on `OrbisMaterial.blendMode` — `linear` fades everywhere, `masked` follows a
+  mask, and `maskedDepth` reads the same mask as a height, so the low ground
+  fills first and a stone stays stone until it is buried. `blendAmount`,
+  `blendSharpness`, `blendBaseColourMap`, `blendMaskMap` and a `blendTiling`
+  of its own, so the second surface can sit at a different scale from the
+  first.
+- The second surface takes the first one's relief with it. Where it covers,
+  the base normal map is damped by the same amount, so grass grown over
+  cobbles does not show the cobbles bumping through it.
+
 ## 0.5.0
 
 - A model whose files are missing says so. The resource loader reports

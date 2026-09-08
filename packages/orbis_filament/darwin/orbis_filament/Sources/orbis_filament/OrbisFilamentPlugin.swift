@@ -451,8 +451,8 @@ private struct Scene {
   fileprivate static let environmentStride = 4
   fileprivate static let passStride = 12
   fileprivate static let targetStride = 6
-  private static let materialStride = 19
-  private static let materialMaps = 5
+  private static let materialStride = 26
+  private static let materialMaps = 7
   private static let videoStride = 4
   private static let fogStride = 16
   private static let precipitationStride = 12

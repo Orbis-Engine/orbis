@@ -45,7 +45,30 @@ material {
         { type : bool,      name : hasNormalMap },
         { type : bool,      name : hasMetallicRoughnessMap },
         { type : bool,      name : hasOcclusionMap },
-        { type : bool,      name : hasEmissiveMap }
+        { type : bool,      name : hasEmissiveMap },
+
+        // A second surface, mixed into the first.
+        //
+        // What this is for is ground: grass over rock, cobbles over mud, a
+        // path worn through a field. Two materials on one mesh, because the
+        // alternative is either a seam where two meshes meet or a texture
+        // painted for that one patch of world and useful nowhere else.
+        //
+        // Off by default and free when off — blendMode zero skips every
+        // sample below, and a uniform branch costs a scalar test rather than
+        // a divergence.
+        { type : sampler2d, name : blendBaseColorMap },
+        { type : sampler2d, name : blendMaskMap },
+        { type : bool,      name : hasBlendBaseColorMap },
+        { type : bool,      name : hasBlendMaskMap },
+
+        // 0 none, 1 linear, 2 masked, 3 masked depth.
+        { type : int,       name : blendMode },
+        { type : float,     name : blendAmount },
+        { type : float,     name : blendSharpness },
+        // The second layer tiles on its own: rock at one scale under grass
+        // at another is most of what stops tiling from reading as tiling.
+        { type : float4,    name : blendUvTransform }
     ],
 }
 
@@ -54,12 +77,59 @@ fragment {
         vec2 uv = getUV0() * materialParams.uvTransform.xy
                 + materialParams.uvTransform.zw;
 
+        vec2 blendUv = getUV0() * materialParams.blendUvTransform.xy
+                     + materialParams.blendUvTransform.zw;
+
+        // How much of the second surface is showing, worked out before the
+        // normal because the normal is blended too and has to be right
+        // before prepareMaterial reads it.
+        float layer = 0.0;
+        if (materialParams.blendMode > 0) {
+            float amount = clamp(materialParams.blendAmount, 0.0, 1.0);
+            if (materialParams.blendMode == 1) {
+                // Linear. The whole surface, evenly — a wash of one material
+                // over another, and the one to reach for when the mix is a
+                // property of the object rather than of the place on it.
+                layer = amount;
+            } else {
+                float mask = materialParams.hasBlendMaskMap
+                    ? texture(materialParams_blendMaskMap, uv).r
+                    : 1.0;
+                if (materialParams.blendMode == 2) {
+                    // Masked. The mask says where, the amount says how much.
+                    layer = clamp(mask * amount, 0.0, 1.0);
+                } else {
+                    // Masked depth, which is height blending.
+                    //
+                    // The difference is worth stating because it is the whole
+                    // reason this mode exists. A masked blend fades one
+                    // surface into the other, so at fifty per cent every
+                    // cobble is half grass and the ground looks fogged. Read
+                    // as a height instead, the mask decides *which* surface
+                    // wins at each point — so grass fills the mortar between
+                    // the cobbles first and the stones stay stone until they
+                    // are buried. Sharpness is how quickly that happens: high
+                    // is a hard edge following the relief, low is nearly the
+                    // masked blend again.
+                    float sharp = max(materialParams.blendSharpness, 0.0001);
+                    layer = clamp((mask - (1.0 - amount)) * sharp + 0.5,
+                                  0.0, 1.0);
+                }
+            }
+        }
+
         // The normal has to be in before prepareMaterial builds the shading
         // frame from it. Setting it afterwards is silently ignored.
         if (materialParams.hasNormalMap) {
             vec3 packed = texture(materialParams_normalMap, uv).xyz;
             material.normal = packed * 2.0 - 1.0;
-            material.normal.xy *= materialParams.normalScale;
+            // Where the second layer covers, the first layer's relief goes
+            // with it: grass grown over cobbles does not show the cobbles
+            // bumping through it. This is why the layer is worked out above
+            // rather than down with the colour — the shading frame is built
+            // from this normal a few lines further on, and a normal set
+            // after that is quietly ignored.
+            material.normal.xy *= materialParams.normalScale * (1.0 - layer);
         }
 
         prepareMaterial(material);
@@ -67,6 +137,11 @@ fragment {
         vec4 base = materialParams.baseColor;
         if (materialParams.hasBaseColorMap) {
             base *= texture(materialParams_baseColorMap, uv);
+        }
+        if (layer > 0.0 && materialParams.hasBlendBaseColorMap) {
+            vec4 over = materialParams.baseColor
+                      * texture(materialParams_blendBaseColorMap, blendUv);
+            base = mix(base, over, layer);
         }
         material.baseColor = base;
 
