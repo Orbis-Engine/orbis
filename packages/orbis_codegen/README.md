@@ -4,7 +4,7 @@ Turns annotated Dart classes into component registration and a manifest other
 front ends can read without compiling the package that declared them.
 
 Part of [Orbis](https://github.com/Orbis-Engine/orbis), a Dart-first 3D game
-engine. The documentation is at [orbisengine.dev](https://orbisengine.dev).
+engine. The documentation is at [the Orbis documentation]().
 
 ## Using it
 

@@ -3,7 +3,7 @@
 Two dimensions: atlases, sprite animation, parallax layers and tile maps.
 
 Part of [Orbis](https://github.com/Orbis-Engine/orbis), a Dart-first 3D game
-engine. The documentation is at [orbisengine.dev](https://orbisengine.dev).
+engine. The documentation is at [the Orbis documentation]().
 
 ## Using it
 
