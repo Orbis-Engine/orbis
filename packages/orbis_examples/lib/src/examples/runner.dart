@@ -102,6 +102,20 @@ class RunnerExample extends Example {
         colour: Vector3(1, 1, 1),
         material: 1,
       ),
+      // The ground the city stands on.
+      //
+      // Without it the buildings hang in an orange sky, because the only
+      // other thing in the world is the road — and a tower with nothing
+      // under it reads as a bug rather than as distance.
+      OrbisObject(
+        key: 3,
+        transform: Matrix4.identity()
+          ..setTranslation(Vector3(0, -0.9, -length / 2 + 8))
+          ..multiply(Matrix4.diagonal3(Vector3(90, 0.6, length / 2 + 40))),
+        colour: Vector3(1, 1, 1),
+        material: 6,
+        castShadows: false,
+      ),
       // The track: one long slab, moved so its seams pass underneath.
       OrbisObject(
         key: 2,
@@ -214,6 +228,13 @@ class RunnerExample extends Example {
           key: 5,
           baseColour: Vector4(0.44, 0.30, 0.06, 1),
           roughness: 0.55,
+        ),
+        // The ground: darker than the road, so the road still reads as the
+        // thing being run along rather than as a stripe on a floor.
+        OrbisMaterial(
+          key: 6,
+          baseColour: Vector4(0.115, 0.105, 0.15, 1),
+          roughness: 0.9,
         ),
         // The coins, which are the only thing here that gives off light —
         // it is what makes them read as a reward rather than as an obstacle.

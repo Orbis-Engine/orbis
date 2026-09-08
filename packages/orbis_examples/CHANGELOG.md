@@ -2,6 +2,15 @@
 
 ## 0.13.0
 
+- The runner's buildings stood in the road. The track is 4.6 either side of
+  the middle and the scenery started at 4.2, so a tower could be in the third
+  lane — which is what "it keeps generating really long objects" was: a
+  building with the road running through it. They also varied only in height,
+  all of them the same 1.8 across and up to eleven high, which is a six-to-one
+  slab; a row of those beside the camera is a wall with slots in it rather
+  than a city. And there is ground under them now, because a tower with
+  nothing beneath it reads as a bug rather than as distance.
+
 - Blocks is a world you are in rather than one you look at. WASD and space to
   walk and jump, drag to look, click to dig and right-click to put a block
   back. The world is a grid of bytes now instead of a list of what to draw —
