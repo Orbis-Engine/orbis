@@ -28,8 +28,11 @@ void main() {
         final mesh = Shape.of(kind).build();
         expect(mesh.faces, isNotEmpty, reason: kind.name);
         for (final face in mesh.faces) {
-          expect(face.vertices.length, greaterThanOrEqualTo(3),
-              reason: kind.name);
+          expect(
+            face.vertices.length,
+            greaterThanOrEqualTo(3),
+            reason: kind.name,
+          );
         }
       }
     });
@@ -39,8 +42,11 @@ void main() {
         final mesh = Shape.of(kind).build();
         for (final face in mesh.faces) {
           for (final index in face.vertices) {
-            expect(index, inInclusiveRange(0, mesh.positions.length - 1),
-                reason: kind.name);
+            expect(
+              index,
+              inInclusiveRange(0, mesh.positions.length - 1),
+              reason: kind.name,
+            );
           }
         }
       }
@@ -50,8 +56,11 @@ void main() {
       for (final kind in ShapeKind.values) {
         final mesh = Shape.of(kind).build();
         for (final face in mesh.faces) {
-          expect(face.vertices.toSet(), hasLength(face.vertices.length),
-              reason: kind.name);
+          expect(
+            face.vertices.toSet(),
+            hasLength(face.vertices.length),
+            reason: kind.name,
+          );
         }
       }
     });
@@ -75,9 +84,9 @@ void main() {
             kind == ShapeKind.torus) {
           continue;
         }
-        final mesh = Shape.of(kind)
-            .copyWith(width: 3, height: 5, depth: 7)
-            .build();
+        final mesh = Shape.of(
+          kind,
+        ).copyWith(width: 3, height: 5, depth: 7).build();
         final box = mesh.bounds;
         expect(box.max.y - box.min.y, closeTo(5, 0.6), reason: kind.name);
       }
@@ -88,18 +97,23 @@ void main() {
       // somebody wanted, including nought and a hundred thousand.
       for (final kind in ShapeKind.values) {
         for (final sides in [-5, 0, 1, 2, 3, 4096]) {
-          final mesh = Shape.of(kind).copyWith(
-            sides: sides,
-            rings: sides,
-            columns: sides,
-            steps: sides,
-            subdivisions: sides,
-            widthCuts: sides,
-            heightCuts: sides,
-          ).build();
+          final mesh = Shape.of(kind)
+              .copyWith(
+                sides: sides,
+                rings: sides,
+                columns: sides,
+                steps: sides,
+                subdivisions: sides,
+                widthCuts: sides,
+                heightCuts: sides,
+              )
+              .build();
           expect(mesh.faces, isNotEmpty, reason: '${kind.name} × $sides');
-          expect(mesh.positions.every((at) => at.x.isFinite), isTrue,
-              reason: '${kind.name} × $sides');
+          expect(
+            mesh.positions.every((at) => at.x.isFinite),
+            isTrue,
+            reason: '${kind.name} × $sides',
+          );
         }
       }
     });
@@ -133,8 +147,11 @@ void main() {
 
   group('the plane', () {
     test('is a grid, so there are edges to pull on later', () {
-      final mesh =
-          Shape(kind: ShapeKind.plane, widthCuts: 2, heightCuts: 3).build();
+      final mesh = Shape(
+        kind: ShapeKind.plane,
+        widthCuts: 2,
+        heightCuts: 3,
+      ).build();
 
       // Three columns by four rows, from two cuts across and three along.
       expect(mesh.faces, hasLength(12));
@@ -149,8 +166,11 @@ void main() {
     });
 
     test('with no cuts it is one quad', () {
-      final mesh =
-          Shape(kind: ShapeKind.plane, widthCuts: 0, heightCuts: 0).build();
+      final mesh = Shape(
+        kind: ShapeKind.plane,
+        widthCuts: 0,
+        heightCuts: 0,
+      ).build();
       expect(mesh.faces, hasLength(1));
     });
 
@@ -199,16 +219,14 @@ void main() {
     });
 
     test('a wall thicker than the pipe does not turn it inside out', () {
-      final mesh =
-          Shape(kind: ShapeKind.pipe, sides: 8, thickness: 99).build();
+      final mesh = Shape(kind: ShapeKind.pipe, sides: 8, thickness: 99).build();
       expect(mesh.positions.every((at) => at.x.isFinite), isTrue);
       expect(mesh.faces, isNotEmpty);
     });
 
     test('height cuts add rings of faces', () {
       final plain = Shape(kind: ShapeKind.pipe, sides: 8).build();
-      final cut =
-          Shape(kind: ShapeKind.pipe, sides: 8, heightCuts: 2).build();
+      final cut = Shape(kind: ShapeKind.pipe, sides: 8, heightCuts: 2).build();
 
       expect(cut.faces.length, greaterThan(plain.faces.length));
     });
@@ -216,8 +234,7 @@ void main() {
 
   group('the torus', () {
     test('is a closed ring with no border', () {
-      final mesh =
-          Shape(kind: ShapeKind.torus, rings: 12, columns: 8).build();
+      final mesh = Shape(kind: ShapeKind.torus, rings: 12, columns: 8).build();
 
       expect(mesh.faces, hasLength(12 * 8));
       // Closed all the way round, so nothing is on the border.
@@ -262,8 +279,11 @@ void main() {
     });
 
     test('height cuts divide the sides without changing the shape', () {
-      final mesh = Shape(kind: ShapeKind.cylinder, sides: 8, heightCuts: 3)
-          .build();
+      final mesh = Shape(
+        kind: ShapeKind.cylinder,
+        sides: 8,
+        heightCuts: 3,
+      ).build();
 
       // Four rings of eight, plus the two ends.
       expect(mesh.faces, hasLength(8 * 4 + 2));
@@ -271,8 +291,11 @@ void main() {
     });
 
     test('without ends it is a tube', () {
-      final mesh =
-          Shape(kind: ShapeKind.cylinder, sides: 12, capped: false).build();
+      final mesh = Shape(
+        kind: ShapeKind.cylinder,
+        sides: 12,
+        capped: false,
+      ).build();
       expect(mesh.faces, hasLength(12));
       // Every face is on the border, because there are no ends to close it.
       expect(mesh.openFaces, hasLength(12));
@@ -310,8 +333,7 @@ void main() {
     });
 
     test('without a cap it is open underneath', () {
-      final mesh =
-          Shape(kind: ShapeKind.cone, sides: 9, capped: false).build();
+      final mesh = Shape(kind: ShapeKind.cone, sides: 9, capped: false).build();
       expect(mesh.faces, hasLength(9));
     });
   });
@@ -327,8 +349,7 @@ void main() {
       expect(mesh.positions, hasLength(12));
 
       final areas = [for (final face in mesh.faces) mesh.areaOf(face)];
-      expect(areas.reduce(math.max) / areas.reduce(math.min),
-          closeTo(1, 1e-6));
+      expect(areas.reduce(math.max) / areas.reduce(math.min), closeTo(1, 1e-6));
     });
 
     test('each division quadruples the faces', () {
@@ -391,8 +412,12 @@ void main() {
     });
 
     test('climbs by the height it was given', () {
-      final mesh =
-          Shape(kind: ShapeKind.stairs, steps: 4, height: 2, depth: 4).build();
+      final mesh = Shape(
+        kind: ShapeKind.stairs,
+        steps: 4,
+        height: 2,
+        depth: 4,
+      ).build();
       expect(mesh.bounds.max.y, closeTo(2, 1e-9));
       expect(mesh.bounds.max.z - mesh.bounds.min.z, closeTo(4, 1e-9));
     });
@@ -411,8 +436,12 @@ void main() {
       final mesh = Mesh.fromJson({
         'positions': <num>[0, 0, 0, 1, 0, 0, 0, 1, 0],
         'faces': <Map<String, Object?>>[
-          {'v': <int>[0, 1, 2]},
-          {'v': <int>[0, 1, 99]},
+          {
+            'v': <int>[0, 1, 2],
+          },
+          {
+            'v': <int>[0, 1, 99],
+          },
         ],
       })!;
 

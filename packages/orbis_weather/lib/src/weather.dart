@@ -154,19 +154,19 @@ class WeatherState {
     double? lightning,
     double? cloudHeight,
   }) => WeatherState(
-        cloudCover: cloudCover ?? this.cloudCover,
-        fogColour: fogColour ?? this.fogColour,
-        fogDensity: fogDensity ?? this.fogDensity,
-        fogHeight: fogHeight ?? this.fogHeight,
-        fogFalloff: fogFalloff ?? this.fogFalloff,
-        mist: mist ?? this.mist,
-        mistSize: mistSize ?? this.mistSize,
-        windSpeed: windSpeed ?? this.windSpeed,
-        rain: rain ?? this.rain,
-        snow: snow ?? this.snow,
-        lightning: lightning ?? this.lightning,
-        cloudHeight: cloudHeight ?? this.cloudHeight,
-      );
+    cloudCover: cloudCover ?? this.cloudCover,
+    fogColour: fogColour ?? this.fogColour,
+    fogDensity: fogDensity ?? this.fogDensity,
+    fogHeight: fogHeight ?? this.fogHeight,
+    fogFalloff: fogFalloff ?? this.fogFalloff,
+    mist: mist ?? this.mist,
+    mistSize: mistSize ?? this.mistSize,
+    windSpeed: windSpeed ?? this.windSpeed,
+    rain: rain ?? this.rain,
+    snow: snow ?? this.snow,
+    lightning: lightning ?? this.lightning,
+    cloudHeight: cloudHeight ?? this.cloudHeight,
+  );
 
   /// What each condition is made of.
   ///

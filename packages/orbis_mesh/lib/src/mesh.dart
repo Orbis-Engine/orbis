@@ -11,7 +11,7 @@ import 'uv.dart';
 /// the editing works on.
 class Face {
   Face(this.vertices, {this.material = 0, this.smooth = false, FaceUv? uv})
-      : uv = uv ?? const FaceUv();
+    : uv = uv ?? const FaceUv();
 
   /// Indices into the mesh's positions, going round the face.
   ///
@@ -47,11 +47,11 @@ class Face {
       Face([...vertices], material: material, smooth: smooth, uv: uv);
 
   Map<String, Object?> toJson() => {
-        'v': vertices,
-        if (material != 0) 'm': material,
-        if (smooth) 's': true,
-        if (uv.toJson().isNotEmpty) 'uv': uv.toJson(),
-      };
+    'v': vertices,
+    if (material != 0) 'm': material,
+    if (smooth) 's': true,
+    if (uv.toJson().isNotEmpty) 'uv': uv.toJson(),
+  };
 
   static Face? fromJson(Object? value) {
     if (value is! Map) return null;
@@ -80,8 +80,8 @@ class Face {
 /// it can about it.
 class Mesh {
   Mesh({List<Vector3>? positions, List<Face>? faces})
-      : positions = positions ?? [],
-        faces = faces ?? [];
+    : positions = positions ?? [],
+      faces = faces ?? [];
 
   final List<Vector3> positions;
   final List<Face> faces;
@@ -92,15 +92,15 @@ class Mesh {
   bool get isEmpty => faces.isEmpty;
 
   Mesh copy() => Mesh(
-        positions: [for (final at in positions) at.clone()],
-        faces: [for (final face in faces) face.copy()],
-      );
+    positions: [for (final at in positions) at.clone()],
+    faces: [for (final face in faces) face.copy()],
+  );
 
   /// The corners of a face, as points.
   List<Vector3> pointsOf(Face face) => [
-        for (final index in face.vertices)
-          if (index >= 0 && index < positions.length) positions[index],
-      ];
+    for (final index in face.vertices)
+      if (index >= 0 && index < positions.length) positions[index],
+  ];
 
   /// Which way a face points.
   ///
@@ -215,20 +215,22 @@ class Mesh {
       positions.add(at.clone());
     }
     for (final face in other.faces) {
-      faces.add(Face(
-        [for (final index in face.vertices) index + offset],
-        material: face.material,
-        smooth: face.smooth,
-      ));
+      faces.add(
+        Face(
+          [for (final index in face.vertices) index + offset],
+          material: face.material,
+          smooth: face.smooth,
+        ),
+      );
     }
   }
 
   Map<String, Object?> toJson() => {
-        'positions': [
-          for (final at in positions) ...[at.x, at.y, at.z],
-        ],
-        'faces': [for (final face in faces) face.toJson()],
-      };
+    'positions': [
+      for (final at in positions) ...[at.x, at.y, at.z],
+    ],
+    'faces': [for (final face in faces) face.toJson()],
+  };
 
   static Mesh? fromJson(Object? value) {
     if (value is! Map) return null;
@@ -239,11 +241,13 @@ class Mesh {
 
     final positions = <Vector3>[];
     for (var i = 0; i + 2 < raw.length; i += 3) {
-      positions.add(Vector3(
-        (raw[i] as num?)?.toDouble() ?? 0,
-        (raw[i + 1] as num?)?.toDouble() ?? 0,
-        (raw[i + 2] as num?)?.toDouble() ?? 0,
-      ));
+      positions.add(
+        Vector3(
+          (raw[i] as num?)?.toDouble() ?? 0,
+          (raw[i + 1] as num?)?.toDouble() ?? 0,
+          (raw[i + 2] as num?)?.toDouble() ?? 0,
+        ),
+      );
     }
 
     final rawFaces = map['faces'];

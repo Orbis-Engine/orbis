@@ -9,8 +9,11 @@ void main() {
     final mesh = cube();
     for (final face in mesh.faces) {
       final centre = mesh.centreOfPoints(face.vertices)!;
-      expect(centre, mesh.centreOf(face),
-          reason: 'the same answer as asking about the face itself');
+      expect(
+        centre,
+        mesh.centreOf(face),
+        reason: 'the same answer as asking about the face itself',
+      );
     }
     // Every corner of a cube averages to the middle of it, which is the
     // pivot a handle over the whole thing should sit at.
@@ -22,7 +25,11 @@ void main() {
 
   test('the centre of nothing is nothing', () {
     expect(cube().centreOfPoints(const []), isNull);
-    expect(cube().centreOfPoints([99, -3]), isNull, reason: 'and of nothing that is');
+    expect(
+      cube().centreOfPoints([99, -3]),
+      isNull,
+      reason: 'and of nothing that is',
+    );
   });
 
   test('moving corners moves only those corners', () {
@@ -35,8 +42,7 @@ void main() {
     final moved = face.vertices.toSet();
     for (var i = 0; i < mesh.positions.length; i++) {
       final shift = mesh.positions[i] - before[i];
-      expect(shift.y, moved.contains(i) ? 2 : 0,
-          reason: 'vertex $i');
+      expect(shift.y, moved.contains(i) ? 2 : 0, reason: 'vertex $i');
       expect(shift.x, 0);
     }
     expect(mesh.faceCount, 6, reason: 'nothing was created or dropped');
@@ -52,15 +58,20 @@ void main() {
   test('turning about a point leaves that point where it is', () {
     final mesh = cube();
     final about = Vector3(0, 0, 0);
-    final turn = Quaternion.axisAngle(Vector3(0, 1, 0), 3.14159265358979 / 2)
-        .asRotationMatrix();
+    final turn = Quaternion.axisAngle(
+      Vector3(0, 1, 0),
+      3.14159265358979 / 2,
+    ).asRotationMatrix();
     final was = mesh.positions[0].clone();
 
     mesh.turnPoints([0], turn, about);
     final now = mesh.positions[0];
 
-    expect(now.length, closeTo(was.length, 1e-9),
-        reason: 'a rotation about the origin keeps the distance');
+    expect(
+      now.length,
+      closeTo(was.length, 1e-9),
+      reason: 'a rotation about the origin keeps the distance',
+    );
     expect(now.y, closeTo(was.y, 1e-9), reason: 'and the axis it turns about');
     // A quarter turn about +Y takes +X to -Z, which is the sense the object
     // handle turns in. Taking a quaternion here would give the opposite.
@@ -92,10 +103,12 @@ void main() {
     final mesh = cube();
     // The faces whose normals are +X and +Y, whichever way round the cube
     // lists them.
-    Face facing(Vector3 way) => mesh.faces.firstWhere(
-          (face) => mesh.normalOf(face).dot(way) > 0.99,
-        );
-    final across = mesh.normalAcross([facing(Vector3(1, 0, 0)), facing(Vector3(0, 1, 0))])!;
+    Face facing(Vector3 way) =>
+        mesh.faces.firstWhere((face) => mesh.normalOf(face).dot(way) > 0.99);
+    final across = mesh.normalAcross([
+      facing(Vector3(1, 0, 0)),
+      facing(Vector3(0, 1, 0)),
+    ])!;
 
     expect(across.length, closeTo(1, 1e-9), reason: 'normalised');
     expect(across.x, closeTo(across.y, 1e-9), reason: 'evenly between them');
@@ -104,9 +117,8 @@ void main() {
 
   test('two faces back to back have no direction to be pulled along', () {
     final mesh = cube();
-    Face facing(Vector3 way) => mesh.faces.firstWhere(
-          (face) => mesh.normalOf(face).dot(way) > 0.99,
-        );
+    Face facing(Vector3 way) =>
+        mesh.faces.firstWhere((face) => mesh.normalOf(face).dot(way) > 0.99);
     expect(
       mesh.normalAcross([facing(Vector3(1, 0, 0)), facing(Vector3(-1, 0, 0))]),
       isNull,

@@ -81,9 +81,7 @@ extension MeshUvs on Mesh {
         face.uv = face.uv.copyWith(offset: face.uv.offset + by);
         continue;
       }
-      face.uv = face.uv.copyWith(
-        manual: [for (final at in drawn) at + by],
-      );
+      face.uv = face.uv.copyWith(manual: [for (final at in drawn) at + by]);
     }
   }
 

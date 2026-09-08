@@ -44,11 +44,9 @@ class Toolchain {
   /// clang first because it is what macOS ships and what the engine itself is
   /// built with, so a script and the core disagree about the C++ runtime as
   /// rarely as possible.
-  static Toolchain? find({List<String> candidates = const [
-    'clang++',
-    'c++',
-    'g++',
-  ]}) {
+  static Toolchain? find({
+    List<String> candidates = const ['clang++', 'c++', 'g++'],
+  }) {
     for (final candidate in candidates) {
       if (!_onPath(candidate)) continue;
       return Toolchain(
@@ -65,19 +63,18 @@ class Toolchain {
 
   static bool _onPath(String command) {
     try {
-      return Process.runSync(
-        Platform.isWindows ? 'where' : 'which',
-        [command],
-      ).exitCode == 0;
+      return Process.runSync(Platform.isWindows ? 'where' : 'which', [
+            command,
+          ]).exitCode ==
+          0;
     } on ProcessException {
       return false;
     }
   }
 
   /// What a loadable library is called here.
-  static String get librarySuffix => Platform.isMacOS
-      ? '.dylib'
-      : (Platform.isWindows ? '.dll' : '.so');
+  static String get librarySuffix =>
+      Platform.isMacOS ? '.dylib' : (Platform.isWindows ? '.dll' : '.so');
 
   /// Compiles one source file into a loadable library.
   ///

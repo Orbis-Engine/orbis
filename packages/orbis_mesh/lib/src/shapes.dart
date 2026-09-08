@@ -145,52 +145,51 @@ class Shape {
     bool? smooth,
     bool? byCount,
     double? stepHeight,
-  }) =>
-      Shape(
-        kind: kind ?? this.kind,
-        width: width ?? this.width,
-        height: height ?? this.height,
-        depth: depth ?? this.depth,
-        sides: sides ?? this.sides,
-        rings: rings ?? this.rings,
-        columns: columns ?? this.columns,
-        steps: steps ?? this.steps,
-        subdivisions: subdivisions ?? this.subdivisions,
-        widthCuts: widthCuts ?? this.widthCuts,
-        heightCuts: heightCuts ?? this.heightCuts,
-        thickness: thickness ?? this.thickness,
-        tubeRadius: tubeRadius ?? this.tubeRadius,
-        circumference: circumference ?? this.circumference,
-        pedimentHeight: pedimentHeight ?? this.pedimentHeight,
-        sideWidth: sideWidth ?? this.sideWidth,
-        capped: capped ?? this.capped,
-        smooth: smooth ?? this.smooth,
-        byCount: byCount ?? this.byCount,
-        stepHeight: stepHeight ?? this.stepHeight,
-      );
+  }) => Shape(
+    kind: kind ?? this.kind,
+    width: width ?? this.width,
+    height: height ?? this.height,
+    depth: depth ?? this.depth,
+    sides: sides ?? this.sides,
+    rings: rings ?? this.rings,
+    columns: columns ?? this.columns,
+    steps: steps ?? this.steps,
+    subdivisions: subdivisions ?? this.subdivisions,
+    widthCuts: widthCuts ?? this.widthCuts,
+    heightCuts: heightCuts ?? this.heightCuts,
+    thickness: thickness ?? this.thickness,
+    tubeRadius: tubeRadius ?? this.tubeRadius,
+    circumference: circumference ?? this.circumference,
+    pedimentHeight: pedimentHeight ?? this.pedimentHeight,
+    sideWidth: sideWidth ?? this.sideWidth,
+    capped: capped ?? this.capped,
+    smooth: smooth ?? this.smooth,
+    byCount: byCount ?? this.byCount,
+    stepHeight: stepHeight ?? this.stepHeight,
+  );
 
   Map<String, Object?> toJson() => {
-        'kind': kind.name,
-        'width': width,
-        'height': height,
-        'depth': depth,
-        'sides': sides,
-        'rings': rings,
-        'columns': columns,
-        'steps': steps,
-        'subdivisions': subdivisions,
-        'widthCuts': widthCuts,
-        'heightCuts': heightCuts,
-        'thickness': thickness,
-        'tubeRadius': tubeRadius,
-        'circumference': circumference,
-        'pedimentHeight': pedimentHeight,
-        'sideWidth': sideWidth,
-        'capped': capped,
-        'smooth': smooth,
-        'byCount': byCount,
-        'stepHeight': stepHeight,
-      };
+    'kind': kind.name,
+    'width': width,
+    'height': height,
+    'depth': depth,
+    'sides': sides,
+    'rings': rings,
+    'columns': columns,
+    'steps': steps,
+    'subdivisions': subdivisions,
+    'widthCuts': widthCuts,
+    'heightCuts': heightCuts,
+    'thickness': thickness,
+    'tubeRadius': tubeRadius,
+    'circumference': circumference,
+    'pedimentHeight': pedimentHeight,
+    'sideWidth': sideWidth,
+    'capped': capped,
+    'smooth': smooth,
+    'byCount': byCount,
+    'stepHeight': stepHeight,
+  };
 
   static Shape? fromJson(Object? value) {
     if (value is! Map) return null;
@@ -234,14 +233,14 @@ class Shape {
   /// and a sphere wants three divisions. What somebody gets when they ask for
   /// a shape should be the shape, not a starting point they have to correct.
   factory Shape.of(ShapeKind kind) => switch (kind) {
-        ShapeKind.arch => Shape(kind: kind, circumference: 180, thickness: 0.1),
-        ShapeKind.torus => Shape(kind: kind, circumference: 360),
-        ShapeKind.cone => Shape(kind: kind, sides: 6),
-        ShapeKind.sphere => Shape(kind: kind, subdivisions: 3),
-        ShapeKind.pipe => Shape(kind: kind, thickness: 0.25),
-        ShapeKind.plane => Shape(kind: kind, widthCuts: 1, heightCuts: 1),
-        _ => Shape(kind: kind),
-      };
+    ShapeKind.arch => Shape(kind: kind, circumference: 180, thickness: 0.1),
+    ShapeKind.torus => Shape(kind: kind, circumference: 360),
+    ShapeKind.cone => Shape(kind: kind, sides: 6),
+    ShapeKind.sphere => Shape(kind: kind, subdivisions: 3),
+    ShapeKind.pipe => Shape(kind: kind, thickness: 0.25),
+    ShapeKind.plane => Shape(kind: kind, widthCuts: 1, heightCuts: 1),
+    _ => Shape(kind: kind),
+  };
 
   /// The geometry this shape describes.
   ///
@@ -258,26 +257,27 @@ class Shape {
     // one, because a flight of no steps is a gap.
     final flights = byCount
         ? steps.clamp(1, 256)
-        : (height / (stepHeight <= 0.01 ? 0.01 : stepHeight))
-            .round()
-            .clamp(1, 256);
+        : (height / (stepHeight <= 0.01 ? 0.01 : stepHeight)).round().clamp(
+            1,
+            256,
+          );
 
     final mesh = switch (kind) {
       ShapeKind.cube => _cube(),
       // A plane with all three sides at one unit, which is what a sprite is:
       // somewhere to put a picture.
       ShapeKind.sprite => Shape(
-          kind: ShapeKind.plane,
-          width: 1,
-          depth: 1,
-          widthCuts: 0,
-          heightCuts: 0,
-        )._plane(0, 0),
+        kind: ShapeKind.plane,
+        width: 1,
+        depth: 1,
+        widthCuts: 0,
+        heightCuts: 0,
+      )._plane(0, 0),
       ShapeKind.prism => _prism(),
       ShapeKind.plane => _plane(
-          widthCuts.clamp(0, 128),
-          heightCuts.clamp(0, 128),
-        ),
+        widthCuts.clamp(0, 128),
+        heightCuts.clamp(0, 128),
+      ),
       ShapeKind.sphere => _sphere(subdivisions.clamp(1, 5)),
       ShapeKind.cylinder => _cylinder(around, heightCuts.clamp(0, 64)),
       ShapeKind.cone => _cone(around),
@@ -307,11 +307,9 @@ class Shape {
 
     for (var z = 0; z <= rows; z++) {
       for (var x = 0; x <= columns; x++) {
-        mesh.addVertex(Vector3(
-          (x / columns - 0.5) * width,
-          0,
-          (z / rows - 0.5) * depth,
-        ));
+        mesh.addVertex(
+          Vector3((x / columns - 0.5) * width, 0, (z / rows - 0.5) * depth),
+        );
       }
     }
 
@@ -328,16 +326,18 @@ class Shape {
   Mesh _cube() {
     final x = width / 2;
     final z = depth / 2;
-    final mesh = Mesh(positions: [
-      Vector3(-x, 0, -z),
-      Vector3(x, 0, -z),
-      Vector3(x, 0, z),
-      Vector3(-x, 0, z),
-      Vector3(-x, height, -z),
-      Vector3(x, height, -z),
-      Vector3(x, height, z),
-      Vector3(-x, height, z),
-    ]);
+    final mesh = Mesh(
+      positions: [
+        Vector3(-x, 0, -z),
+        Vector3(x, 0, -z),
+        Vector3(x, 0, z),
+        Vector3(-x, 0, z),
+        Vector3(-x, height, -z),
+        Vector3(x, height, -z),
+        Vector3(x, height, z),
+        Vector3(-x, height, z),
+      ],
+    );
 
     // Every one wound counter-clockwise seen from outside, which is what
     // decides whether a face is there or whether the shape has a hole in it.
@@ -355,14 +355,16 @@ class Shape {
   Mesh _prism() {
     final x = width / 2;
     final z = depth / 2;
-    final mesh = Mesh(positions: [
-      Vector3(-x, 0, -z),
-      Vector3(x, 0, -z),
-      Vector3(x, 0, z),
-      Vector3(-x, 0, z),
-      Vector3(0, height, -z),
-      Vector3(0, height, z),
-    ]);
+    final mesh = Mesh(
+      positions: [
+        Vector3(-x, 0, -z),
+        Vector3(x, 0, -z),
+        Vector3(x, 0, z),
+        Vector3(-x, 0, z),
+        Vector3(0, height, -z),
+        Vector3(0, height, z),
+      ],
+    );
 
     mesh
       ..addFace([0, 1, 2, 3]) // bottom
@@ -381,20 +383,44 @@ class Shape {
   Mesh _sphere(int times) {
     // The twelve corners of an icosahedron, from the golden ratio.
     const t = 1.618033988749895;
-    final mesh = Mesh(positions: [
-      Vector3(-1, t, 0), Vector3(1, t, 0), Vector3(-1, -t, 0),
-      Vector3(1, -t, 0),
-      Vector3(0, -1, t), Vector3(0, 1, t), Vector3(0, -1, -t),
-      Vector3(0, 1, -t),
-      Vector3(t, 0, -1), Vector3(t, 0, 1), Vector3(-t, 0, -1),
-      Vector3(-t, 0, 1),
-    ]);
+    final mesh = Mesh(
+      positions: [
+        Vector3(-1, t, 0),
+        Vector3(1, t, 0),
+        Vector3(-1, -t, 0),
+        Vector3(1, -t, 0),
+        Vector3(0, -1, t),
+        Vector3(0, 1, t),
+        Vector3(0, -1, -t),
+        Vector3(0, 1, -t),
+        Vector3(t, 0, -1),
+        Vector3(t, 0, 1),
+        Vector3(-t, 0, -1),
+        Vector3(-t, 0, 1),
+      ],
+    );
 
     for (final face in const [
-      [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-      [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-      [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-      [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+      [0, 11, 5],
+      [0, 5, 1],
+      [0, 1, 7],
+      [0, 7, 10],
+      [0, 10, 11],
+      [1, 5, 9],
+      [5, 11, 4],
+      [11, 10, 2],
+      [10, 7, 6],
+      [7, 1, 8],
+      [3, 9, 4],
+      [3, 4, 2],
+      [3, 2, 6],
+      [3, 6, 8],
+      [3, 8, 9],
+      [4, 9, 5],
+      [2, 4, 11],
+      [6, 2, 10],
+      [8, 6, 7],
+      [9, 8, 1],
     ]) {
       mesh.addFace([...face], smooth: smooth);
     }
@@ -403,9 +429,9 @@ class Shape {
     // out onto the sphere.
     for (var pass = 1; pass < times; pass++) {
       final split = <String, int>{};
-      final grown = Mesh(positions: [
-        for (final at in mesh.positions) at.clone(),
-      ]);
+      final grown = Mesh(
+        positions: [for (final at in mesh.positions) at.clone()],
+      );
 
       int between(int a, int b) {
         final key = a < b ? '$a/$b' : '$b/$a';
@@ -461,8 +487,7 @@ class Shape {
       }
     }
 
-    int at(int segment, int level) =>
-        (segment % around) * (levels + 1) + level;
+    int at(int segment, int level) => (segment % around) * (levels + 1) + level;
 
     for (var i = 0; i < around; i++) {
       for (var level = 0; level < levels; level++) {
@@ -496,11 +521,9 @@ class Shape {
     final tip = mesh.addVertex(Vector3(0, height, 0));
     for (var i = 0; i < around; i++) {
       final angle = i / around * math.pi * 2;
-      mesh.addVertex(Vector3(
-        math.cos(angle) * radiusX,
-        0,
-        math.sin(angle) * radiusZ,
-      ));
+      mesh.addVertex(
+        Vector3(math.cos(angle) * radiusX, 0, math.sin(angle) * radiusZ),
+      );
     }
 
     for (var i = 0; i < around; i++) {
@@ -594,11 +617,13 @@ class Shape {
       for (var column = 0; column < columns; column++) {
         final through = column / columns * math.pi * 2;
         final out = math.cos(through) * tube;
-        mesh.addVertex(Vector3(
-          cos * (ringX + out),
-          math.sin(through) * tube + tube,
-          sin * (ringZ + out),
-        ));
+        mesh.addVertex(
+          Vector3(
+            cos * (ringX + out),
+            math.sin(through) * tube + tube,
+            sin * (ringZ + out),
+          ),
+        );
       }
     }
 
@@ -624,18 +649,8 @@ class Shape {
 
     for (final part in [
       // Left upright, right upright, and the lintel over the gap.
-      (
-        w: side,
-        h: height - pediment,
-        x: -(width - side) / 2,
-        y: 0.0,
-      ),
-      (
-        w: side,
-        h: height - pediment,
-        x: (width - side) / 2,
-        y: 0.0,
-      ),
+      (w: side, h: height - pediment, x: -(width - side) / 2, y: 0.0),
+      (w: side, h: height - pediment, x: (width - side) / 2, y: 0.0),
       (w: width, h: pediment, x: 0.0, y: height - pediment),
     ]) {
       final piece = Shape(
@@ -643,8 +658,7 @@ class Shape {
         width: part.w,
         height: part.h,
         depth: depth,
-      ).build()
-        ..transform(Matrix4.translationValues(part.x, part.y, 0));
+      ).build()..transform(Matrix4.translationValues(part.x, part.y, 0));
       mesh.merge(piece);
     }
     return mesh;
@@ -731,5 +745,4 @@ class Shape {
     }
     return mesh;
   }
-
 }

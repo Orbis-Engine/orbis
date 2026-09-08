@@ -25,9 +25,9 @@ extension MeshActions on Mesh {
 
   /// Which faces use an edge.
   List<Face> facesOn(MeshEdge edge) => [
-        for (final face in faces)
-          if (_hasEdge(face, edge)) face,
-      ];
+    for (final face in faces)
+      if (_hasEdge(face, edge)) face,
+  ];
 
   bool _hasEdge(Face face, MeshEdge edge) {
     final count = face.vertices.length;
@@ -58,9 +58,9 @@ extension MeshActions on Mesh {
 
   /// Which faces touch a point.
   List<Face> facesAt(int vertex) => [
-        for (final face in faces)
-          if (face.vertices.contains(vertex)) face,
-      ];
+    for (final face in faces)
+      if (face.vertices.contains(vertex)) face,
+  ];
 
   // ---- growing and shrinking a selection ----
 
@@ -222,8 +222,8 @@ extension MeshActions on Mesh {
     final at = toFirst
         ? positions[chosen.first].clone()
         : chosen
-            .fold(Vector3.zero(), (sum, i) => sum..add(positions[i]))
-            .scaled(1 / chosen.length);
+              .fold(Vector3.zero(), (sum, i) => sum..add(positions[i]))
+              .scaled(1 / chosen.length);
 
     for (final index in chosen) {
       positions[index].setFrom(at);
@@ -284,8 +284,7 @@ extension MeshActions on Mesh {
 
       while (true) {
         final next = open.firstWhere(
-          (edge) =>
-              !used.contains(edge) && (edge.$1 == at || edge.$2 == at),
+          (edge) => !used.contains(edge) && (edge.$1 == at || edge.$2 == at),
           orElse: () => (-1, -1),
         );
         if (next.$1 < 0) break;
@@ -316,8 +315,9 @@ extension MeshActions on Mesh {
       // of a box they point four different ways and cancel out entirely — so
       // where they say nothing, face away from the middle of the shape, which
       // is what the outside of a closed thing means.
-      final wanted =
-          average.length2 > 1e-12 ? average : centreOf(face) - _centre;
+      final wanted = average.length2 > 1e-12
+          ? average
+          : centreOf(face) - _centre;
       if (normalOf(face).dot(wanted) < 0) flipFaces([face]);
     }
     return made;
@@ -353,10 +353,9 @@ extension MeshActions on Mesh {
 
       if (corners.length == 4) {
         made.add(addFace([corners[0], corners[1], corners[3], corners[2]]));
-        final neighbours = sides.map(normalOf).fold(
-              Vector3.zero(),
-              (sum, normal) => sum..add(normal),
-            );
+        final neighbours = sides
+            .map(normalOf)
+            .fold(Vector3.zero(), (sum, normal) => sum..add(normal));
         if (normalOf(made.last).dot(neighbours) < 0) flipFaces([made.last]);
       }
     }
@@ -372,9 +371,11 @@ extension MeshActions on Mesh {
 
     // Wound so the two edges are traversed in opposite directions, or the
     // face comes out as a bow tie.
-    final near = (positions[a.$1] - positions[b.$1]).length +
+    final near =
+        (positions[a.$1] - positions[b.$1]).length +
         (positions[a.$2] - positions[b.$2]).length;
-    final crossed = (positions[a.$1] - positions[b.$2]).length +
+    final crossed =
+        (positions[a.$1] - positions[b.$2]).length +
         (positions[a.$2] - positions[b.$1]).length;
 
     return crossed < near
@@ -525,11 +526,13 @@ extension MeshActions on Mesh {
         continue;
       }
       for (var i = 1; i + 1 < face.vertices.length; i++) {
-        made.add(addFace(
-          [face.vertices[0], face.vertices[i], face.vertices[i + 1]],
-          material: face.material,
-          smooth: face.smooth,
-        ));
+        made.add(
+          addFace(
+            [face.vertices[0], face.vertices[i], face.vertices[i + 1]],
+            material: face.material,
+            smooth: face.smooth,
+          ),
+        );
       }
       faces.remove(face);
     }
@@ -578,8 +581,8 @@ extension MeshActions on Mesh {
     final at = chosen.isEmpty
         ? _centre
         : chosen
-            .fold(Vector3.zero(), (sum, i) => sum..add(positions[i]))
-            .scaled(1 / chosen.length);
+              .fold(Vector3.zero(), (sum, i) => sum..add(positions[i]))
+              .scaled(1 / chosen.length);
 
     transform(Matrix4.translationValues(-at.x, -at.y, -at.z));
     return at;
@@ -590,11 +593,9 @@ extension MeshActions on Mesh {
     final copy = this.copy();
     if (!x && !y && !z) return copy;
 
-    copy.transform(Matrix4.diagonal3(Vector3(
-      x ? -1 : 1,
-      y ? -1 : 1,
-      z ? -1 : 1,
-    )));
+    copy.transform(
+      Matrix4.diagonal3(Vector3(x ? -1 : 1, y ? -1 : 1, z ? -1 : 1)),
+    );
     // Reflecting turns the winding inside out, and a mesh that is inside out
     // is one that is invisible from the side somebody is looking at.
     final flips = [x, y, z].where((on) => on).length;

@@ -23,95 +23,140 @@ final class OrbisScriptHost extends Struct {
   external Pointer<NativeFunction<Void Function(Pointer<Char>)>> log;
 
   external Pointer<
-      NativeFunction<
-          Uint32 Function(Pointer<core.OrbisWorldStruct>, Pointer<Char>,
-              Uint32, Uint32)>> componentRegister;
+    NativeFunction<
+      Uint32 Function(
+        Pointer<core.OrbisWorldStruct>,
+        Pointer<Char>,
+        Uint32,
+        Uint32,
+      )
+    >
+  >
+  componentRegister;
   external Pointer<
-      NativeFunction<
-          Uint32 Function(Pointer<core.OrbisWorldStruct>,
-              Pointer<Char>)>> componentLookup;
+    NativeFunction<
+      Uint32 Function(Pointer<core.OrbisWorldStruct>, Pointer<Char>)
+    >
+  >
+  componentLookup;
 
   external Pointer<
-      NativeFunction<Uint64 Function(Pointer<core.OrbisWorldStruct>)>>
-      entityCreate;
+    NativeFunction<Uint64 Function(Pointer<core.OrbisWorldStruct>)>
+  >
+  entityCreate;
   external Pointer<
-          NativeFunction<Void Function(Pointer<core.OrbisWorldStruct>, Uint64)>>
-      entityDestroy;
+    NativeFunction<Void Function(Pointer<core.OrbisWorldStruct>, Uint64)>
+  >
+  entityDestroy;
   external Pointer<
-          NativeFunction<Bool Function(Pointer<core.OrbisWorldStruct>, Uint64)>>
-      entityAlive;
+    NativeFunction<Bool Function(Pointer<core.OrbisWorldStruct>, Uint64)>
+  >
+  entityAlive;
   external Pointer<
-      NativeFunction<Uint32 Function(Pointer<core.OrbisWorldStruct>)>>
-      entityCount;
+    NativeFunction<Uint32 Function(Pointer<core.OrbisWorldStruct>)>
+  >
+  entityCount;
   external Pointer<
-      NativeFunction<
-          Bool Function(Pointer<core.OrbisWorldStruct>, Uint64, Uint32,
-              Pointer<Void>)>> entityAdd;
+    NativeFunction<
+      Bool Function(
+        Pointer<core.OrbisWorldStruct>,
+        Uint64,
+        Uint32,
+        Pointer<Void>,
+      )
+    >
+  >
+  entityAdd;
   external Pointer<
-      NativeFunction<
-          Bool Function(Pointer<core.OrbisWorldStruct>, Uint64,
-              Uint32)>> entityRemove;
+    NativeFunction<
+      Bool Function(Pointer<core.OrbisWorldStruct>, Uint64, Uint32)
+    >
+  >
+  entityRemove;
   external Pointer<
-      NativeFunction<
-          Bool Function(Pointer<core.OrbisWorldStruct>, Uint64,
-              Uint32)>> entityHas;
+    NativeFunction<
+      Bool Function(Pointer<core.OrbisWorldStruct>, Uint64, Uint32)
+    >
+  >
+  entityHas;
   external Pointer<
-      NativeFunction<
-          Pointer<Void> Function(Pointer<core.OrbisWorldStruct>, Uint64,
-              Uint32)>> entityGet;
+    NativeFunction<
+      Pointer<Void> Function(Pointer<core.OrbisWorldStruct>, Uint64, Uint32)
+    >
+  >
+  entityGet;
 
   external Pointer<
-      NativeFunction<
-          Pointer<core.OrbisQueryStruct> Function(
-              Pointer<core.OrbisWorldStruct>, Pointer<Uint32>,
-              Uint32)>> queryCreate;
+    NativeFunction<
+      Pointer<core.OrbisQueryStruct> Function(
+        Pointer<core.OrbisWorldStruct>,
+        Pointer<Uint32>,
+        Uint32,
+      )
+    >
+  >
+  queryCreate;
   external Pointer<
-          NativeFunction<Void Function(Pointer<core.OrbisQueryStruct>)>>
-      queryDestroy;
+    NativeFunction<Void Function(Pointer<core.OrbisQueryStruct>)>
+  >
+  queryDestroy;
   external Pointer<
-          NativeFunction<Uint32 Function(Pointer<core.OrbisQueryStruct>)>>
-      queryChunkCount;
+    NativeFunction<Uint32 Function(Pointer<core.OrbisQueryStruct>)>
+  >
+  queryChunkCount;
   external Pointer<
-      NativeFunction<
-          Uint32 Function(Pointer<core.OrbisQueryStruct>,
-              Uint32)>> queryChunkLength;
+    NativeFunction<Uint32 Function(Pointer<core.OrbisQueryStruct>, Uint32)>
+  >
+  queryChunkLength;
   external Pointer<
-      NativeFunction<
-          Pointer<Void> Function(Pointer<core.OrbisQueryStruct>, Uint32,
-              Uint32)>> queryChunkColumn;
+    NativeFunction<
+      Pointer<Void> Function(Pointer<core.OrbisQueryStruct>, Uint32, Uint32)
+    >
+  >
+  queryChunkColumn;
   external Pointer<
-      NativeFunction<
-          Pointer<Uint64> Function(Pointer<core.OrbisQueryStruct>,
-              Uint32)>> queryChunkEntities;
+    NativeFunction<
+      Pointer<Uint64> Function(Pointer<core.OrbisQueryStruct>, Uint32)
+    >
+  >
+  queryChunkEntities;
 
   external Pointer<
-      NativeFunction<
-          core.OrbisTransformsStruct Function(
-              Pointer<core.OrbisWorldStruct>)>> transformRegister;
+    NativeFunction<
+      core.OrbisTransformsStruct Function(Pointer<core.OrbisWorldStruct>)
+    >
+  >
+  transformRegister;
 
   external Pointer<
-      NativeFunction<
-          Double Function(Pointer<Char>, Pointer<Char>,
-              Double)>> dataNumber;
+    NativeFunction<Double Function(Pointer<Char>, Pointer<Char>, Double)>
+  >
+  dataNumber;
   external Pointer<
-          NativeFunction<Bool Function(Pointer<Char>, Pointer<Char>, Bool)>>
-      dataToggle;
+    NativeFunction<Bool Function(Pointer<Char>, Pointer<Char>, Bool)>
+  >
+  dataToggle;
   external Pointer<
-          NativeFunction<Pointer<Char> Function(Pointer<Char>, Pointer<Char>)>>
-      dataText;
+    NativeFunction<Pointer<Char> Function(Pointer<Char>, Pointer<Char>)>
+  >
+  dataText;
 
   external Pointer<
-      NativeFunction<
-          Pointer<Double> Function(Pointer<Char>, Pointer<Char>,
-              Double)>> numberAt;
+    NativeFunction<
+      Pointer<Double> Function(Pointer<Char>, Pointer<Char>, Double)
+    >
+  >
+  numberAt;
   external Pointer<
-      NativeFunction<
-          Pointer<Bool> Function(Pointer<Char>, Pointer<Char>,
-              Bool)>> toggleAt;
+    NativeFunction<Pointer<Bool> Function(Pointer<Char>, Pointer<Char>, Bool)>
+  >
+  toggleAt;
   external Pointer<
-      NativeFunction<
-          Pointer<Pointer<Char>> Function(Pointer<Char>,
-              Pointer<Char>)>> textAt;
+    NativeFunction<
+      Pointer<Pointer<Char>> Function(Pointer<Char>, Pointer<Char>)
+    >
+  >
+  textAt;
 }
 
 /// Where a script's values come from.
@@ -161,9 +206,12 @@ class NoValues implements ScriptValues {
 /// state, and forty scripts each allocating their own copy of the same
 /// function pointers would be forty allocations saying the same thing.
 class ScriptHost {
-  ScriptHost(this.world, {ScriptValues values = const NoValues(), void Function(String)? onLog})
-      : _values = values,
-        _onLog = onLog {
+  ScriptHost(
+    this.world, {
+    ScriptValues values = const NoValues(),
+    void Function(String)? onLog,
+  }) : _values = values,
+       _onLog = onLog {
     _fill();
   }
 
@@ -206,19 +254,28 @@ class ScriptHost {
   int _seen = -1;
 
   late final NativeCallable<Void Function(Pointer<Char>)> _log;
-  late final NativeCallable<Double Function(Pointer<Char>, Pointer<Char>, Double)>
-      _number;
+  late final NativeCallable<
+    Double Function(Pointer<Char>, Pointer<Char>, Double)
+  >
+  _number;
   late final NativeCallable<Bool Function(Pointer<Char>, Pointer<Char>, Bool)>
-      _toggle;
-  late final NativeCallable<Pointer<Char> Function(Pointer<Char>, Pointer<Char>)>
-      _text;
+  _toggle;
   late final NativeCallable<
-      Pointer<Double> Function(Pointer<Char>, Pointer<Char>, Double)> _numberAt;
+    Pointer<Char> Function(Pointer<Char>, Pointer<Char>)
+  >
+  _text;
   late final NativeCallable<
-      Pointer<Bool> Function(Pointer<Char>, Pointer<Char>, Bool)> _toggleAt;
+    Pointer<Double> Function(Pointer<Char>, Pointer<Char>, Double)
+  >
+  _numberAt;
   late final NativeCallable<
-          Pointer<Pointer<Char>> Function(Pointer<Char>, Pointer<Char>)>
-      _textAt;
+    Pointer<Bool> Function(Pointer<Char>, Pointer<Char>, Bool)
+  >
+  _toggleAt;
+  late final NativeCallable<
+    Pointer<Pointer<Char>> Function(Pointer<Char>, Pointer<Char>)
+  >
+  _textAt;
 
   bool _disposed = false;
 
@@ -228,68 +285,73 @@ class ScriptHost {
   }
 
   void _fill() {
-    _log = NativeCallable<Void Function(Pointer<Char>)>.isolateLocal(
-      (Pointer<Char> message) {
-        final said = message == nullptr ? '' : message.cast<Utf8>().toDartString();
-        (_onLog ?? print)(said);
-      },
-    );
-    _number = NativeCallable<
-        Double Function(Pointer<Char>, Pointer<Char>, Double)>.isolateLocal(
-      (Pointer<Char> asset, Pointer<Char> key, double fallback) =>
-          _values.number(_read(asset), _read(key), fallback),
-      exceptionalReturn: 0.0,
-    );
+    _log = NativeCallable<Void Function(Pointer<Char>)>.isolateLocal((
+      Pointer<Char> message,
+    ) {
+      final said = message == nullptr
+          ? ''
+          : message.cast<Utf8>().toDartString();
+      (_onLog ?? print)(said);
+    });
+    _number =
+        NativeCallable<
+          Double Function(Pointer<Char>, Pointer<Char>, Double)
+        >.isolateLocal(
+          (Pointer<Char> asset, Pointer<Char> key, double fallback) =>
+              _values.number(_read(asset), _read(key), fallback),
+          exceptionalReturn: 0.0,
+        );
     _toggle =
-        NativeCallable<Bool Function(Pointer<Char>, Pointer<Char>, Bool)>
-            .isolateLocal(
-      (Pointer<Char> asset, Pointer<Char> key, bool fallback) =>
-          _values.toggle(_read(asset), _read(key), fallback),
-      exceptionalReturn: false,
-    );
-    _text = NativeCallable<
-        Pointer<Char> Function(Pointer<Char>, Pointer<Char>)>.isolateLocal(
-      (Pointer<Char> asset, Pointer<Char> key) {
-        final said = _values.text(_read(asset), _read(key));
-        if (_lastText != nullptr) calloc.free(_lastText);
-        _lastText =
-            said == null ? nullptr : said.toNativeUtf8().cast<Char>();
-        return _lastText;
-      },
-    );
+        NativeCallable<
+          Bool Function(Pointer<Char>, Pointer<Char>, Bool)
+        >.isolateLocal(
+          (Pointer<Char> asset, Pointer<Char> key, bool fallback) =>
+              _values.toggle(_read(asset), _read(key), fallback),
+          exceptionalReturn: false,
+        );
+    _text =
+        NativeCallable<
+          Pointer<Char> Function(Pointer<Char>, Pointer<Char>)
+        >.isolateLocal((Pointer<Char> asset, Pointer<Char> key) {
+          final said = _values.text(_read(asset), _read(key));
+          if (_lastText != nullptr) calloc.free(_lastText);
+          _lastText = said == null ? nullptr : said.toNativeUtf8().cast<Char>();
+          return _lastText;
+        });
 
-    _numberAt = NativeCallable<
-        Pointer<Double> Function(Pointer<Char>, Pointer<Char>,
-            Double)>.isolateLocal(
-      (Pointer<Char> asset, Pointer<Char> key, double fallback) {
-        final at = '${_read(asset)}\u0000${_read(key)}';
-        _numberFallbacks[at] = fallback;
-        final slot = _numbers[at] ??= calloc<Double>();
-        slot.value = _values.number(_read(asset), _read(key), fallback);
-        return slot;
-      },
-    );
-    _toggleAt = NativeCallable<
-        Pointer<Bool> Function(Pointer<Char>, Pointer<Char>,
-            Bool)>.isolateLocal(
-      (Pointer<Char> asset, Pointer<Char> key, bool fallback) {
-        final at = '${_read(asset)}\u0000${_read(key)}';
-        _toggleFallbacks[at] = fallback;
-        final slot = _toggles[at] ??= calloc<Bool>();
-        slot.value = _values.toggle(_read(asset), _read(key), fallback);
-        return slot;
-      },
-    );
-    _textAt = NativeCallable<
-        Pointer<Pointer<Char>> Function(Pointer<Char>,
-            Pointer<Char>)>.isolateLocal(
-      (Pointer<Char> asset, Pointer<Char> key) {
-        final at = '${_read(asset)}\u0000${_read(key)}';
-        final slot = _texts[at] ??= calloc<Pointer<Char>>();
-        _writeText(at, slot, _values.text(_read(asset), _read(key)));
-        return slot;
-      },
-    );
+    _numberAt =
+        NativeCallable<
+          Pointer<Double> Function(Pointer<Char>, Pointer<Char>, Double)
+        >.isolateLocal((
+          Pointer<Char> asset,
+          Pointer<Char> key,
+          double fallback,
+        ) {
+          final at = '${_read(asset)}\u0000${_read(key)}';
+          _numberFallbacks[at] = fallback;
+          final slot = _numbers[at] ??= calloc<Double>();
+          slot.value = _values.number(_read(asset), _read(key), fallback);
+          return slot;
+        });
+    _toggleAt =
+        NativeCallable<
+          Pointer<Bool> Function(Pointer<Char>, Pointer<Char>, Bool)
+        >.isolateLocal((Pointer<Char> asset, Pointer<Char> key, bool fallback) {
+          final at = '${_read(asset)}\u0000${_read(key)}';
+          _toggleFallbacks[at] = fallback;
+          final slot = _toggles[at] ??= calloc<Bool>();
+          slot.value = _values.toggle(_read(asset), _read(key), fallback);
+          return slot;
+        });
+    _textAt =
+        NativeCallable<
+          Pointer<Pointer<Char>> Function(Pointer<Char>, Pointer<Char>)
+        >.isolateLocal((Pointer<Char> asset, Pointer<Char> key) {
+          final at = '${_read(asset)}\u0000${_read(key)}';
+          final slot = _texts[at] ??= calloc<Pointer<Char>>();
+          _writeText(at, slot, _values.text(_read(asset), _read(key)));
+          return slot;
+        });
 
     final table = _table.ref;
     table

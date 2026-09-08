@@ -17,11 +17,8 @@ import 'mesh.dart';
 /// week later by dragging the corner it belongs to, and the room closes up
 /// again.
 class PolyShape {
-  PolyShape({
-    List<Vector3>? points,
-    this.height = 2.0,
-    this.flipped = false,
-  }) : points = points ?? [];
+  PolyShape({List<Vector3>? points, this.height = 2.0, this.flipped = false})
+    : points = points ?? [];
 
   /// The outline, in order, in the object's own space.
   ///
@@ -147,18 +144,18 @@ class PolyShape {
   }
 
   PolyShape copy() => PolyShape(
-        points: [for (final at in points) at.clone()],
-        height: height,
-        flipped: flipped,
-      );
+    points: [for (final at in points) at.clone()],
+    height: height,
+    flipped: flipped,
+  );
 
   Map<String, Object?> toJson() => {
-        'points': [
-          for (final at in points) ...[at.x, at.y, at.z],
-        ],
-        'height': height,
-        if (flipped) 'flipped': true,
-      };
+    'points': [
+      for (final at in points) ...[at.x, at.y, at.z],
+    ],
+    'height': height,
+    if (flipped) 'flipped': true,
+  };
 
   static PolyShape? fromJson(Object? value) {
     if (value is! Map) return null;

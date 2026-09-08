@@ -47,8 +47,7 @@ void main() {
     });
 
     test('the sky is darker at night than at noon', () {
-      double lightness(Tint colour) =>
-          colour.red + colour.green + colour.blue;
+      double lightness(Tint colour) => colour.red + colour.green + colour.blue;
       expect(
         lightness(DayCycle.at(1).skyColour),
         lessThan(lightness(DayCycle.at(12).skyColour)),
@@ -89,8 +88,8 @@ void main() {
       for (var minute = 0; minute < 24 * 60; minute += 5) {
         final sky = DayCycle.at(minute / 60);
 
-        final incident = sky.power * 683 * math.max(0, math.sin(sky.altitude)) +
-            sky.ambient;
+        final incident =
+            sky.power * 683 * math.max(0, math.sin(sky.altitude)) + sky.ambient;
         // What Filament does with the three numbers, and then what a
         // mid-grey surface facing the light comes out as.
         final exposure = 1 / (1.2 * math.pow(2, sky.exposure.ev100));
@@ -99,7 +98,8 @@ void main() {
         expect(
           grey,
           inInclusiveRange(0.05, 0.6),
-          reason: 'at ${minute ~/ 60}:${(minute % 60).toString().padLeft(2, '0')}'
+          reason:
+              'at ${minute ~/ 60}:${(minute % 60).toString().padLeft(2, '0')}'
               ' a mid-grey surface comes out at $grey',
         );
       }
@@ -155,7 +155,8 @@ void main() {
       final before = DayCycle.at(5.99);
       final after = DayCycle.at(6.01);
 
-      double gap(Tint a, Tint b) => (a.red - b.red).abs() +
+      double gap(Tint a, Tint b) =>
+          (a.red - b.red).abs() +
           (a.green - b.green).abs() +
           (a.blue - b.blue).abs();
 

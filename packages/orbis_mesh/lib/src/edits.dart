@@ -37,18 +37,19 @@ extension MeshEdits on Mesh {
       // purpose: pulling one face should not drag its neighbours' vertices
       // with it.
       final fresh = [
-        for (final index in face.vertices)
-          addVertex(positions[index] + along),
+        for (final index in face.vertices) addVertex(positions[index] + along),
       ];
 
       final count = face.vertices.length;
       for (var i = 0; i < count; i++) {
         final a = face.vertices[i];
         final b = face.vertices[(i + 1) % count];
-        addFace(
-          [a, b, fresh[(i + 1) % count], fresh[i]],
-          material: face.material,
-        );
+        addFace([
+          a,
+          b,
+          fresh[(i + 1) % count],
+          fresh[i],
+        ], material: face.material);
       }
 
       // The face itself moves rather than a new one being added: it keeps its
@@ -94,10 +95,12 @@ extension MeshEdits on Mesh {
       for (var i = 0; i < count; i++) {
         final a = face.vertices[i];
         final b = face.vertices[(i + 1) % count];
-        addFace(
-          [a, b, fresh[(i + 1) % count], fresh[i]],
-          material: face.material,
-        );
+        addFace([
+          a,
+          b,
+          fresh[(i + 1) % count],
+          fresh[i],
+        ], material: face.material);
       }
 
       face.vertices
@@ -135,11 +138,13 @@ extension MeshEdits on Mesh {
 
       for (var i = 0; i < count; i++) {
         final previous = (i - 1 + count) % count;
-        made.add(addFace(
-          [corners[i], edges[i], middle, edges[previous]],
-          material: face.material,
-          smooth: face.smooth,
-        ));
+        made.add(
+          addFace(
+            [corners[i], edges[i], middle, edges[previous]],
+            material: face.material,
+            smooth: face.smooth,
+          ),
+        );
       }
       faces.remove(face);
     }
@@ -186,7 +191,8 @@ extension MeshEdits on Mesh {
     final moveTo = List<int>.filled(positions.length, 0);
     final kept = <Vector3>[];
 
-    String keyOf(Vector3 at) => '${(at.x / cell).round()}/'
+    String keyOf(Vector3 at) =>
+        '${(at.x / cell).round()}/'
         '${(at.y / cell).round()}/${(at.z / cell).round()}';
 
     for (var i = 0; i < positions.length; i++) {
@@ -266,8 +272,8 @@ extension MeshEdits on Mesh {
 
   /// Every point a set of faces touches.
   Set<int> verticesOf(Iterable<Face> which) => {
-        for (final face in which) ...face.vertices,
-      };
+    for (final face in which) ...face.vertices,
+  };
 
   /// The edges of a set of faces, each as its two points, smaller first so an
   /// edge shared by two faces is one edge rather than two.
@@ -303,7 +309,6 @@ extension MeshEdits on Mesh {
     ];
   }
 }
-
 
 /// Moving the parts of a mesh, rather than the mesh.
 ///
@@ -385,7 +390,6 @@ extension MeshHandles on Mesh {
     return sum.normalized();
   }
 }
-
 
 /// Growing a shape outwards.
 ///

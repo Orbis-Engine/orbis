@@ -5,11 +5,11 @@ import 'package:vector_math/vector_math_64.dart';
 void main() {
   /// A unit square on the ground, drawn so it faces up.
   List<Vector3> square() => [
-        Vector3(0, 0, 0),
-        Vector3(0, 0, 1),
-        Vector3(1, 0, 1),
-        Vector3(1, 0, 0),
-      ];
+    Vector3(0, 0, 0),
+    Vector3(0, 0, 1),
+    Vector3(1, 0, 1),
+    Vector3(1, 0, 0),
+  ];
 
   group('the outline', () {
     test('under three points there is nothing to build', () {
@@ -28,11 +28,9 @@ void main() {
     test('points nowhere near a plane still give one rather than nothing', () {
       // Every point in a line: no plane at all, and the honest answer is a
       // lie that does not produce NaN in everything downstream.
-      final shape = PolyShape(points: [
-        Vector3(0, 0, 0),
-        Vector3(1, 0, 0),
-        Vector3(2, 0, 0),
-      ]);
+      final shape = PolyShape(
+        points: [Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(2, 0, 0)],
+      );
       expect(shape.plane.normal.length, closeTo(1, 1e-9));
     });
 
@@ -40,8 +38,11 @@ void main() {
       final points = square();
       expect(closesOutline(points, Vector3(0, 0, 0)), isTrue);
       expect(closesOutline(points, Vector3(5, 0, 5)), isFalse);
-      expect(closesOutline(points.take(2).toList(), Vector3(0, 0, 0)), isFalse,
-          reason: 'two points do not enclose anything to close');
+      expect(
+        closesOutline(points.take(2).toList(), Vector3(0, 0, 0)),
+        isFalse,
+        reason: 'two points do not enclose anything to close',
+      );
     });
 
     test('a second click in the same place is not a second point', () {
@@ -66,9 +67,11 @@ void main() {
       ];
       expect(outlineCrosses(crossed, Vector3(0, 1, 0)), isTrue);
       expect(outlineCrosses(square(), Vector3(0, 1, 0)), isFalse);
-      expect(outlineCrosses(square().take(3).toList(), Vector3(0, 1, 0)),
-          isFalse,
-          reason: 'a triangle cannot cross itself');
+      expect(
+        outlineCrosses(square().take(3).toList(), Vector3(0, 1, 0)),
+        isFalse,
+        reason: 'a triangle cannot cross itself',
+      );
     });
 
     test('an outline that grazes itself is allowed', () {
@@ -104,14 +107,19 @@ void main() {
 
       for (final face in mesh.faces) {
         final outward = mesh.centreOf(face) - middle;
-        expect(mesh.normalOf(face).dot(outward), greaterThan(0),
-            reason: 'a face wound the wrong way is a hole in a solid');
+        expect(
+          mesh.normalOf(face).dot(outward),
+          greaterThan(0),
+          reason: 'a face wound the wrong way is a hole in a solid',
+        );
       }
     });
 
     test('drawn the other way round it still comes out solid', () {
-      final mesh =
-          PolyShape(points: square().reversed.toList(), height: 2).build();
+      final mesh = PolyShape(
+        points: square().reversed.toList(),
+        height: 2,
+      ).build();
       final middle = mesh.bounds.min + (mesh.bounds.max - mesh.bounds.min) / 2;
 
       for (final face in mesh.faces) {
@@ -145,11 +153,7 @@ void main() {
     test('a six-sided plan gives six walls', () {
       final points = [
         for (var i = 0; i < 6; i++)
-          Vector3(
-            (i.isEven ? 1.0 : 0.6) * (i == 0 ? 1 : 1),
-            0,
-            i.toDouble(),
-          ),
+          Vector3((i.isEven ? 1.0 : 0.6) * (i == 0 ? 1 : 1), 0, i.toDouble()),
       ];
       final mesh = PolyShape(points: points, height: 1).build();
       expect(mesh.faceCount, 8, reason: 'six walls, a top and a bottom');
@@ -173,8 +177,11 @@ void main() {
         (face) => mesh.normalOf(face).dot(normal) < -0.99,
       );
       for (final at in mesh.pointsOf(bottom)) {
-        expect((at - shape.plane.centre).dot(normal).abs(), lessThan(1e-9),
-            reason: 'still on the plane it was drawn on');
+        expect(
+          (at - shape.plane.centre).dot(normal).abs(),
+          lessThan(1e-9),
+          reason: 'still on the plane it was drawn on',
+        );
       }
     });
   });

@@ -7,6 +7,10 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# Every package Dart alone can build. Adding a package to the repository does
+# not add it here, which is how four of them went a long while with three
+# hundred tests nobody was running. What is on disk is checked against this
+# below rather than trusted.
 PACKAGES=(
   packages/orbis_agent
   packages/orbis_camera
@@ -15,12 +19,32 @@ PACKAGES=(
   packages/orbis_core
   packages/orbis_effect
   packages/orbis_light
+  packages/orbis_mesh
+  packages/orbis_native
   packages/orbis_noise
   packages/orbis_rig
+  packages/orbis_sequence
   packages/orbis_sprite
+  packages/orbis_weather
 )
 
 failures=0
+
+# A package needing Flutter is checked by tool/check_flutter.sh, one needing
+# neither is checked here, and a package in no list at all is checked by
+# nothing. That last case is the one worth saying out loud: it looks exactly
+# like a passing build.
+listed_elsewhere=$(grep -oE 'packages/orbis_[a-z_]+' tool/check_flutter.sh 2>/dev/null | sort -u)
+for found in packages/*/; do
+  name=${found%/}
+  # No pubspec is not a package. Moving a package to its own repository leaves
+  # the directory behind with a lock file in it, and that residue is not
+  # something to report as unchecked.
+  [ -f "$name/pubspec.yaml" ] || continue
+  case " ${PACKAGES[*]} " in *" $name "*) continue ;; esac
+  case "$listed_elsewhere" in *"$name"*) continue ;; esac
+  echo "  note  $name is checked by nothing"
+done
 
 echo "== native =="
 if ./tool/check_native.sh > /tmp/orbis_native.log 2>&1; then
