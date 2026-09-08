@@ -29,5 +29,6 @@ Pre-alpha. Nothing here is stable.
 
 ## Licence
 
-MIT. Builds link Filament, which carries its own Apache 2.0 licence — see
-[LICENSE](LICENSE).
+MIT, © 2026 Chris Beckett. Builds link Filament, which carries its own
+Apache 2.0 licence, and a prebuilt Filament.xcframework is committed here — so a full
+copy of that licence travels with it. See [LICENSE](LICENSE).

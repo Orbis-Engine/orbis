@@ -24,5 +24,5 @@ feature — see [VERSIONING.md](../../VERSIONING.md).
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE), and the repository root for the third-party
-notices that apply to builds linking the renderer.
+MIT, © 2026 Chris Beckett. See [LICENSE](LICENSE), and the repository root
+for the third-party notices that apply to builds linking the renderer.
