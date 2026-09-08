@@ -404,14 +404,38 @@ Uint8List _bytes(String text) => Uint8List.fromList(utf8.encode(text));
   final jsonLength = data.getUint32(12, Endian.little);
   if (20 + jsonLength > glb.length) return null;
 
-  Map<String, Object?> document;
+  return _boundsOfDocument(
+    _document(utf8.decode(glb.sublist(20, 20 + jsonLength))),
+  );
+}
+
+/// The same, for a `.gltf` — the one that keeps its JSON in the open.
+///
+/// Worth having separately because a `.glb` is that same JSON inside a
+/// container, and the half that matters is identical. The formats differ in
+/// where the buffers live, and this reads no buffers: the minimum and maximum
+/// are in the document either way.
+///
+/// This is the form most model libraries publish, a `.gltf` beside its
+/// textures, so without it the commonest kind of imported model is the one
+/// that cannot say how big it is.
+({Vector3 min, Vector3 max})? boundsOfGltf(String gltf) =>
+    _boundsOfDocument(_document(gltf));
+
+/// A glTF document, or null if that is not what it is.
+Map<String, Object?>? _document(String json) {
   try {
-    document =
-        jsonDecode(utf8.decode(glb.sublist(20, 20 + jsonLength)))
-            as Map<String, Object?>;
+    final decoded = jsonDecode(json);
+    return decoded is Map<String, Object?> ? decoded : null;
   } on FormatException {
     return null;
   }
+}
+
+({Vector3 min, Vector3 max})? _boundsOfDocument(
+  Map<String, Object?>? document,
+) {
+  if (document == null) return null;
 
   final accessors = document['accessors'];
   final meshes = document['meshes'];

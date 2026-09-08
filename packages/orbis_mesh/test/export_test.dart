@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:orbis_mesh/orbis_mesh.dart';
@@ -252,6 +253,60 @@ void main() {
       }
       final box = boundsOfGlb(small.toGlb())!;
       expect(box.max.x, lessThan(0.2));
+    });
+
+    test('a .gltf is read the same as the .glb of the same document', () {
+      // The two formats are the same document in different containers, and
+      // the half that carries the size is identical. Pulling the JSON chunk
+      // out of a glb and reading it as a gltf is the cheapest way to say so.
+      final mesh = Shape.of(ShapeKind.stairs).build();
+      final glb = mesh.toGlb();
+      final length = ByteData.sublistView(glb).getUint32(12, Endian.little);
+      final json = utf8.decode(glb.sublist(20, 20 + length));
+
+      final asGltf = boundsOfGltf(json)!;
+      final asGlb = boundsOfGlb(glb)!;
+      expect(asGltf.min.x, closeTo(asGlb.min.x, 1e-9));
+      expect(asGltf.max.y, closeTo(asGlb.max.y, 1e-9));
+      expect(asGltf.max.z, closeTo(asGlb.max.z, 1e-9));
+    });
+
+    test('a .gltf nobody here wrote is read too', () {
+      // Hand-written rather than exported, because the file this exists for
+      // comes from somewhere else: a model library publishes a .gltf beside
+      // its textures, and the editor has to frame one it did not make.
+      const gltf = '''
+      {
+        "asset": {"version": "2.0"},
+        "meshes": [
+          {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}}]}
+        ],
+        "accessors": [
+          {"type": "VEC3", "min": [-0.5, 0, -1.25], "max": [0.5, 3, 1.25]},
+          {"type": "VEC3", "min": [-1, -1, -1], "max": [1, 1, 1]}
+        ]
+      }
+      ''';
+
+      final box = boundsOfGltf(gltf)!;
+      expect(box.min.x, closeTo(-0.5, 1e-9));
+      expect(box.max.y, closeTo(3, 1e-9), reason: 'the normal is not a size');
+      expect(box.max.z, closeTo(1.25, 1e-9));
+    });
+
+    test('something that is not a gltf is nothing, not a guess', () {
+      expect(boundsOfGltf(''), isNull);
+      expect(boundsOfGltf('not json at all'), isNull);
+      expect(
+        boundsOfGltf('[1, 2, 3]'),
+        isNull,
+        reason: 'JSON, but not a document',
+      );
+      expect(
+        boundsOfGltf('{"asset": {"version": "2.0"}}'),
+        isNull,
+        reason: 'a document with no meshes has no size to report',
+      );
     });
 
     test('something that is not a glb is nothing, not a guess', () {
