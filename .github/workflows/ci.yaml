@@ -78,6 +78,16 @@ jobs:
           fetch-depth: 0
       - run: ./tool/check_versions.sh origin/${{ github.base_ref }}
 
+  # The Markdown, which is now this repository's front door and which nothing
+  # else looks at. Cheap enough to sit in the format job's shadow.
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./tool/check_docs.sh
+
   # Formatting is its own job so a formatting failure never hides a real one.
   format:
     runs-on: ubuntu-latest
