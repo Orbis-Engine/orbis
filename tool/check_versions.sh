@@ -63,7 +63,16 @@ exempt=$(git log --format='%B' "$MERGE_BASE"..HEAD \
   | sed -n 's/^Version-exempt: *//p' \
   | sed 's/[-—:].*//' | tr ' ' '\n' | grep -v '^$' | sort -u)
 
-changed=$(git diff --name-only "$MERGE_BASE"...HEAD -- 'packages/*/lib/*' \
+# Dart and native both. Watching only lib/ was wrong for this repository in
+# particular: the renderer is four thousand lines of C++ under darwin/, and a
+# change to it is exactly the kind a consumer notices — but it touched no Dart,
+# so the rule that a feature is a version did not apply to the largest feature
+# there is. Generated material headers and the fetched SDK are excluded; they
+# are build output, not source.
+changed=$(git diff --name-only "$MERGE_BASE"...HEAD \
+    -- 'packages/*/lib/*' 'packages/*/darwin/*' 'packages/*/android/*' \
+       'packages/*/linux/*' 'packages/*/windows/*' 'packages/*/src/*' \
+  | grep -vE '/(third_party|generated)/' \
   | cut -d/ -f2 | sort -u)
 
 if [ -z "$changed" ]; then

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- Presentation sits behind an `OrbisSurface` interface rather than being
+  written into the renderer. No behaviour change on either Apple platform;
+  it is what a third platform needs in order to exist.
+
 ## 0.2.0
 
 - Renders on iOS. Both Apple platforms share one implementation under
