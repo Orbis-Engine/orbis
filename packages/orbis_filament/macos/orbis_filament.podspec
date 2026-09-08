@@ -9,7 +9,7 @@ without a trip through the CPU.
                        DESC
   s.homepage         = 'https://github.com/Orbis-Engine/orbis'
   s.license          = { :type => 'MIT' }
-  s.author           = { 'Orbis Engine' => 'orbis@example.com' }
+  s.author           = { 'Chris Beckett' => '49186278+ChxisB@users.noreply.github.com' }
   s.source           = { :path => '.' }
   # The sources sit in the layout Swift Package Manager wants — one directory
   # per target under Sources — and CocoaPods is pointed at them rather than

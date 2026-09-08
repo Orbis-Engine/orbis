@@ -55,10 +55,10 @@ class ScriptRunner {
     Toolchain? toolchain,
     List<String>? includes,
     void Function(String)? onLog,
-  })  : toolchain = toolchain ?? Toolchain.find(),
-        includes = includes ?? engineIncludes(),
-        _onLog = onLog,
-        _host = ScriptHost(world, values: values, onLog: onLog);
+  }) : toolchain = toolchain ?? Toolchain.find(),
+       includes = includes ?? engineIncludes(),
+       _onLog = onLog,
+       _host = ScriptHost(world, values: values, onLog: onLog);
 
   final World world;
 
@@ -80,15 +80,15 @@ class ScriptRunner {
   bool get canCompile => toolchain != null;
 
   List<ScriptStatus> get scripts => [
-        for (final loaded in _scripts.values)
-          ScriptStatus(
-            name: loaded.name,
-            source: loaded.source,
-            running: loaded.script?.isRunning ?? false,
-            output: loaded.output,
-            revision: loaded.revision,
-          ),
-      ];
+    for (final loaded in _scripts.values)
+      ScriptStatus(
+        name: loaded.name,
+        source: loaded.source,
+        running: loaded.script?.isRunning ?? false,
+        output: loaded.output,
+        revision: loaded.revision,
+      ),
+  ];
 
   /// The headers a script is compiled against.
   ///
@@ -119,7 +119,7 @@ class ScriptRunner {
   /// not implement resolvePackageUriSync at all.
   static List<String> _fromPackageConfig() {
     File? config;
-    for (var at = Directory.current;; at = at.parent) {
+    for (var at = Directory.current; ; at = at.parent) {
       final candidate = File(
         '${at.path}${Platform.pathSeparator}.dart_tool'
         '${Platform.pathSeparator}package_config.json',
@@ -151,8 +151,7 @@ class ScriptRunner {
       final root = entry['rootUri'];
       if (root is! String) continue;
 
-      final resolved =
-          config.uri.resolve(root.endsWith('/') ? root : '$root/');
+      final resolved = config.uri.resolve(root.endsWith('/') ? root : '$root/');
       final include = resolved.resolve('include/');
       if (Directory.fromUri(include).existsSync()) {
         found.add(include.toFilePath());
@@ -187,7 +186,8 @@ class ScriptRunner {
     if (tools == null) {
       return BuildResult(
         library: null,
-        output: 'No C++ compiler found. Install the Xcode command line tools, '
+        output:
+            'No C++ compiler found. Install the Xcode command line tools, '
             'or clang, or gcc.',
         command: '',
       );
@@ -287,10 +287,12 @@ class ScriptRunner {
       settle = Timer(const Duration(milliseconds: 150), () {
         if (!source.existsSync()) return;
         final built = add(source);
-        _onLog?.call(built.ok
-            ? 'Rebuilt ${source.uri.pathSegments.last}.'
-            : 'Could not build ${source.uri.pathSegments.last}:\n'
-                '${built.output}');
+        _onLog?.call(
+          built.ok
+              ? 'Rebuilt ${source.uri.pathSegments.last}.'
+              : 'Could not build ${source.uri.pathSegments.last}:\n'
+                    '${built.output}',
+        );
         onBuilt?.call(built);
       });
     });
@@ -298,7 +300,8 @@ class ScriptRunner {
   }
 
   static bool _sameFile(String a, String b) =>
-      a == b || a.split(Platform.pathSeparator).last ==
+      a == b ||
+      a.split(Platform.pathSeparator).last ==
           b.split(Platform.pathSeparator).last;
 
   /// Stops everything and frees the table.

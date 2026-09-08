@@ -93,8 +93,7 @@ class CameraExposure {
     // Puts sunny sixteen at EV 15, which is where a century of film boxes say
     // it goes.
     const double calibration = 250;
-    final wanted =
-        _log2(math.max(lux, 1e-5) * 100 / calibration);
+    final wanted = _log2(math.max(lux, 1e-5) * 100 / calibration);
     final light = math.pow(2, wanted).toDouble();
 
     // A photographer's own order: stop down while there is light to spare,
@@ -116,8 +115,10 @@ class CameraExposure {
         // Wide open and as slow as anybody would hand-hold. What is left goes
         // into the sensor.
         shutter = _slowestShutter;
-        sensitivity =
-            (100 * aperture * aperture / (shutter * light)).clamp(50, 25600);
+        sensitivity = (100 * aperture * aperture / (shutter * light)).clamp(
+          50,
+          25600,
+        );
       }
     }
 
@@ -239,11 +240,10 @@ abstract final class DayCycle {
       body: body,
       // Light travels from the body to the scene, which is the way the body
       // is not.
-      direction: -toBody..normalize(),
+      direction: -toBody
+        ..normalize(),
       altitude: altitude,
-      lightColour: isDay
-          ? Tint.lerp(_lowSun, _highSun, horizon)
-          : _moonlight,
+      lightColour: isDay ? Tint.lerp(_lowSun, _highSun, horizon) : _moonlight,
       power: power,
       skyColour: _skyAt(swing),
       ambient: ambient,

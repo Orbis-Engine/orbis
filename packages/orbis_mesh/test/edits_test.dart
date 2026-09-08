@@ -91,7 +91,12 @@ void main() {
 
     test('a face that is not in the mesh is ignored', () {
       final mesh = cube();
-      expect(mesh.extrude([Face([0, 1, 2])], 1), isEmpty);
+      expect(
+        mesh.extrude([
+          Face([0, 1, 2]),
+        ], 1),
+        isEmpty,
+      );
       expect(mesh.faces, hasLength(6));
     });
 
@@ -191,11 +196,9 @@ void main() {
     });
 
     test('a face left with two corners is dropped', () {
-      final mesh = Mesh(positions: [
-        Vector3(0, 0, 0),
-        Vector3(1, 0, 0),
-        Vector3(1.00001, 0, 0),
-      ])..addFace([0, 1, 2]);
+      final mesh = Mesh(
+        positions: [Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1.00001, 0, 0)],
+      )..addFace([0, 1, 2]);
 
       mesh.weld(within: 0.01);
 
@@ -265,8 +268,11 @@ void main() {
     });
 
     test('a plane is all border', () {
-      final mesh =
-          Shape(kind: ShapeKind.plane, widthCuts: 0, heightCuts: 0).build();
+      final mesh = Shape(
+        kind: ShapeKind.plane,
+        widthCuts: 0,
+        heightCuts: 0,
+      ).build();
       expect(mesh.openFaces, hasLength(1));
     });
   });

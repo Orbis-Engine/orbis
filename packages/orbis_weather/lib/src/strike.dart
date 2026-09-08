@@ -54,7 +54,7 @@ class Strike {
     final stroke = since < 0
         ? 0.0
         : math.exp(-since * 14) +
-            (since > 0.18 ? 0.45 * math.exp(-(since - 0.18) * 10) : 0);
+              (since > 0.18 ? 0.45 * math.exp(-(since - 0.18) * 10) : 0);
 
     return Strike(
       flash: (stroke * (0.6 + 0.4 * _scatter(index * 13 + 5))).clamp(0.0, 1.0),

@@ -160,7 +160,7 @@ const boolMixer = BoolMixer();
 /// give the same answer as playing forwards to the same place.
 class Channel<T> {
   Channel(this.keys, this.mixer)
-      : assert(keys.isNotEmpty, 'a channel with no keys has no value');
+    : assert(keys.isNotEmpty, 'a channel with no keys has no value');
 
   /// In ascending order of [Key.at]. Not sorted here: a channel is built once
   /// and sampled constantly, and sorting on every sample would be the most

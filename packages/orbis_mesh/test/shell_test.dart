@@ -21,8 +21,7 @@ void main() {
       final normal = was.normalOf(was.faces[i]);
       final moved = now.centreOf(now.faces[i]) - was.centreOf(was.faces[i]);
       // Along the normal by exactly the distance, and not sideways at all.
-      expect(moved.dot(normal), closeTo(0.25, 1e-9),
-          reason: 'face $i');
+      expect(moved.dot(normal), closeTo(0.25, 1e-9), reason: 'face $i');
       expect((moved - normal * 0.25).length, closeTo(0, 1e-9));
     }
   });
@@ -65,14 +64,17 @@ void main() {
   });
 
   test('a drawn room grows without turning inside out', () {
-    final room = PolyShape(points: [
-      Vector3(0, 0, 0),
-      Vector3(0, 0, 3),
-      Vector3(2, 0, 3),
-      Vector3(2, 0, 1),
-      Vector3(4, 0, 1),
-      Vector3(4, 0, 0),
-    ], height: 2).build();
+    final room = PolyShape(
+      points: [
+        Vector3(0, 0, 0),
+        Vector3(0, 0, 3),
+        Vector3(2, 0, 3),
+        Vector3(2, 0, 1),
+        Vector3(4, 0, 1),
+        Vector3(4, 0, 0),
+      ],
+      height: 2,
+    ).build();
 
     final grown = room.grown(0.2);
     // Every face still points the way it did. Not "away from the middle":
@@ -89,14 +91,17 @@ void main() {
   });
 
   test('a reflex corner is grown too, not left behind', () {
-    final room = PolyShape(points: [
-      Vector3(0, 0, 0),
-      Vector3(0, 0, 3),
-      Vector3(2, 0, 3),
-      Vector3(2, 0, 1),
-      Vector3(4, 0, 1),
-      Vector3(4, 0, 0),
-    ], height: 2).build();
+    final room = PolyShape(
+      points: [
+        Vector3(0, 0, 0),
+        Vector3(0, 0, 3),
+        Vector3(2, 0, 3),
+        Vector3(2, 0, 1),
+        Vector3(4, 0, 1),
+        Vector3(4, 0, 0),
+      ],
+      height: 2,
+    ).build();
 
     final was = room.copy();
     final now = room.grown(0.2);
@@ -111,11 +116,7 @@ void main() {
     // Two faces back to back: their normals sum to nothing, and there is no
     // direction to move the corner in.
     final sheet = Mesh(
-      positions: [
-        Vector3(0, 0, 0),
-        Vector3(1, 0, 0),
-        Vector3(1, 0, 1),
-      ],
+      positions: [Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 0, 1)],
       faces: [
         Face([0, 1, 2]),
         Face([2, 1, 0]),

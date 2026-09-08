@@ -61,13 +61,18 @@ void main() {
       mesh.faces[i].material = i < 2 ? 0 : 1;
     }
 
-    final json = jsonOf(mesh.toGlb(materials: const [
-      GlbMaterial(name: 'Brick', colour: [0.6, 0.2, 0.15, 1]),
-      GlbMaterial(name: 'Glass', metallic: 1, roughness: 0.05),
-    ]));
+    final json = jsonOf(
+      mesh.toGlb(
+        materials: const [
+          GlbMaterial(name: 'Brick', colour: [0.6, 0.2, 0.15, 1]),
+          GlbMaterial(name: 'Glass', metallic: 1, roughness: 0.05),
+        ],
+      ),
+    );
 
-    final primitives = ((json['meshes']! as List).first
-        as Map<String, Object?>)['primitives']! as List;
+    final primitives =
+        ((json['meshes']! as List).first as Map<String, Object?>)['primitives']!
+            as List;
     expect(primitives, hasLength(2));
     expect((primitives[0] as Map)['material'], 0);
     expect((primitives[1] as Map)['material'], 1);
@@ -75,8 +80,7 @@ void main() {
     final materials = json['materials']! as List;
     expect((materials[0] as Map)['name'], 'Brick');
     expect(
-      ((materials[1] as Map)['pbrMetallicRoughness']
-          as Map)['metallicFactor'],
+      ((materials[1] as Map)['pbrMetallicRoughness'] as Map)['metallicFactor'],
       1,
     );
   });
@@ -86,10 +90,9 @@ void main() {
     for (var i = 0; i < mesh.faces.length; i++) {
       mesh.faces[i].material = i < 2 ? 0 : 1;
     }
-    final json = jsonOf(mesh.toGlb(materials: const [
-      GlbMaterial(),
-      GlbMaterial(),
-    ]));
+    final json = jsonOf(
+      mesh.toGlb(materials: const [GlbMaterial(), GlbMaterial()]),
+    );
 
     final accessors = json['accessors']! as List;
     final first = accessors[0] as Map<String, Object?>;
@@ -108,21 +111,25 @@ void main() {
     mesh.faces[0].material = 9;
 
     final json = jsonOf(mesh.toGlb(materials: const [GlbMaterial()]));
-    final primitives = ((json['meshes']! as List).first
-        as Map<String, Object?>)['primitives']! as List;
+    final primitives =
+        ((json['meshes']! as List).first as Map<String, Object?>)['primitives']!
+            as List;
 
     // Two primitives, and the one nobody named has no material — the file's
     // own default, which is a surface somebody can see and fix.
     expect(primitives, hasLength(2));
-    expect(primitives.where((one) => (one as Map).containsKey('material')),
-        hasLength(1));
+    expect(
+      primitives.where((one) => (one as Map).containsKey('material')),
+      hasLength(1),
+    );
   });
 
   test('a mesh with no materials writes none at all', () {
     final json = jsonOf(cube().toGlb());
     expect(json.containsKey('materials'), isFalse);
-    final primitives = ((json['meshes']! as List).first
-        as Map<String, Object?>)['primitives']! as List;
+    final primitives =
+        ((json['meshes']! as List).first as Map<String, Object?>)['primitives']!
+            as List;
     expect(primitives, hasLength(1));
     expect((primitives.single as Map).containsKey('material'), isFalse);
   });
@@ -136,8 +143,9 @@ void main() {
       mesh.toGlb(materials: [for (var i = 0; i < 6; i++) const GlbMaterial()]),
     );
 
-    final primitives = ((json['meshes']! as List).first
-        as Map<String, Object?>)['primitives']! as List;
+    final primitives =
+        ((json['meshes']! as List).first as Map<String, Object?>)['primitives']!
+            as List;
     expect(primitives, hasLength(6));
 
     final attributes =

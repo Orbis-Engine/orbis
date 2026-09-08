@@ -41,8 +41,8 @@ class FaceUv {
     this.flipV = false,
     this.swap = false,
     this.manual,
-  })  : _offset = offset,
-        _scale = scale;
+  }) : _offset = offset,
+       _scale = scale;
 
   /// Explicit coordinates, one a corner, in the face's own order.
   ///
@@ -86,17 +86,16 @@ class FaceUv {
     bool? swap,
     List<Vector2>? manual,
     bool clearManual = false,
-  }) =>
-      FaceUv(
-        fit: fit ?? this.fit,
-        offset: offset ?? this.offset,
-        scale: scale ?? this.scale,
-        rotation: rotation ?? this.rotation,
-        flipU: flipU ?? this.flipU,
-        flipV: flipV ?? this.flipV,
-        swap: swap ?? this.swap,
-        manual: clearManual ? null : (manual ?? this.manual),
-      );
+  }) => FaceUv(
+    fit: fit ?? this.fit,
+    offset: offset ?? this.offset,
+    scale: scale ?? this.scale,
+    rotation: rotation ?? this.rotation,
+    flipU: flipU ?? this.flipU,
+    flipV: flipV ?? this.flipV,
+    swap: swap ?? this.swap,
+    manual: clearManual ? null : (manual ?? this.manual),
+  );
 
   /// The coordinates for a face's corners.
   ///
@@ -205,18 +204,18 @@ class FaceUv {
   }
 
   Map<String, Object?> toJson() => {
-        if (fit != UvFit.tile) 'fit': fit.name,
-        if (offset.x != 0 || offset.y != 0) 'offset': [offset.x, offset.y],
-        if (scale.x != 1 || scale.y != 1) 'scale': [scale.x, scale.y],
-        if (rotation != 0) 'turn': rotation,
-        if (flipU) 'flipU': true,
-        if (flipV) 'flipV': true,
-        if (swap) 'swap': true,
-        if (manual != null)
-          'uvs': [
-            for (final at in manual!) ...[at.x, at.y],
-          ],
-      };
+    if (fit != UvFit.tile) 'fit': fit.name,
+    if (offset.x != 0 || offset.y != 0) 'offset': [offset.x, offset.y],
+    if (scale.x != 1 || scale.y != 1) 'scale': [scale.x, scale.y],
+    if (rotation != 0) 'turn': rotation,
+    if (flipU) 'flipU': true,
+    if (flipV) 'flipV': true,
+    if (swap) 'swap': true,
+    if (manual != null)
+      'uvs': [
+        for (final at in manual!) ...[at.x, at.y],
+      ],
+  };
 
   static FaceUv? fromJson(Object? value) {
     if (value is! Map) return null;
@@ -236,7 +235,10 @@ class FaceUv {
       drawn = [
         for (var i = 0; i + 1 < raw.length; i += 2)
           if (raw[i] is num && raw[i + 1] is num)
-            Vector2((raw[i]! as num).toDouble(), (raw[i + 1]! as num).toDouble()),
+            Vector2(
+              (raw[i]! as num).toDouble(),
+              (raw[i + 1]! as num).toDouble(),
+            ),
       ];
     }
 

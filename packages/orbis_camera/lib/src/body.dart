@@ -53,8 +53,7 @@ class StaticBody implements CameraBody {
     required Lens lens,
     required double aspect,
     required double delta,
-  }) =>
-      position.clone();
+  }) => position.clone();
 }
 
 /// Which space an offset is measured in.
@@ -349,7 +348,8 @@ class ScreenFollowBody implements CameraBody {
     // Behind the camera there is nothing to frame, only something to recover
     // from: go straight to where it should be rather than reading a
     // projection that has folded over.
-    if (!seen.inFront) return _within(centred + _offsetFor(right, up, lens, aspect, 0, 0));
+    if (!seen.inFront)
+      return _within(centred + _offsetFor(right, up, lens, aspect, 0, 0));
 
     final idealX = (screenX - 0.5) * 2;
     final idealY = (0.5 - screenY) * 2;
@@ -370,8 +370,7 @@ class ScreenFollowBody implements CameraBody {
     final moveX = hardX + (overX - hardX) * follows;
     final moveY = hardY + (overY - hardY) * follows;
 
-    final wanted =
-        current + _offsetFor(right, up, lens, aspect, moveX, moveY);
+    final wanted = current + _offsetFor(right, up, lens, aspect, moveX, moveY);
 
     // Held at the shot distance along the view direction, so framing sideways
     // never drifts the camera closer or further away.

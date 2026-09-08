@@ -72,9 +72,7 @@ extension MeshExport on Mesh {
       case MeshFormat.obj:
         return toObj(name: name, materials: materials);
       case MeshFormat.glb:
-        return [
-          Written('$name.glb', toGlb(name: name, materials: materials)),
-        ];
+        return [Written('$name.glb', toGlb(name: name, materials: materials))];
       case MeshFormat.stl:
         return [Written('$name.stl', toStl(name: name, binary: binary))];
       case MeshFormat.ply:
@@ -158,8 +156,10 @@ extension MeshExport on Mesh {
       for (var i = 0; i < face.vertices.length; i++) {
         // One-based, which OBJ has been since 1986 and is the commonest way
         // to write one of these that nothing will open.
-        parts.add('${face.vertices[i] + 1}/${corners[i].uv}/'
-            '${corners[i].normal}');
+        parts.add(
+          '${face.vertices[i] + 1}/${corners[i].uv}/'
+          '${corners[i].normal}',
+        );
       }
       out.writeln('f ${parts.join(' ')}');
     }
@@ -182,11 +182,17 @@ extension MeshExport on Mesh {
         // mapping is a convention rather than a conversion: OBJ predates
         // anything physically based and there is no right answer, only the
         // one every other exporter uses.
-        ..writeln('Ns ${_number((1 - one.roughness) * (1 - one.roughness) * 900 + 1)}')
-        ..writeln('Ks ${_number(one.metallic)} ${_number(one.metallic)} '
-            '${_number(one.metallic)}')
-        ..writeln('Ke ${_number(one.emissive[0])} ${_number(one.emissive[1])} '
-            '${_number(one.emissive[2])}');
+        ..writeln(
+          'Ns ${_number((1 - one.roughness) * (1 - one.roughness) * 900 + 1)}',
+        )
+        ..writeln(
+          'Ks ${_number(one.metallic)} ${_number(one.metallic)} '
+          '${_number(one.metallic)}',
+        )
+        ..writeln(
+          'Ke ${_number(one.emissive[0])} ${_number(one.emissive[1])} '
+          '${_number(one.emissive[2])}',
+        );
       if (c.length > 3 && c[3] < 1) out.writeln('d ${_number(c[3])}');
       out.writeln('illum 2');
     }
@@ -203,10 +209,10 @@ extension MeshExport on Mesh {
     final count = tris.triangleCount;
 
     Vector3 corner(int at) => Vector3(
-          tris.positions[at * 3],
-          tris.positions[at * 3 + 1],
-          tris.positions[at * 3 + 2],
-        );
+      tris.positions[at * 3],
+      tris.positions[at * 3 + 1],
+      tris.positions[at * 3 + 2],
+    );
 
     if (!binary) {
       final out = StringBuffer()..writeln('solid ${_word(name)}');
@@ -218,8 +224,10 @@ extension MeshExport on Mesh {
         if (normal.length2 > 1e-20) normal.normalize();
 
         out
-          ..writeln('  facet normal ${_number(normal.x)} '
-              '${_number(normal.y)} ${_number(normal.z)}')
+          ..writeln(
+            '  facet normal ${_number(normal.x)} '
+            '${_number(normal.y)} ${_number(normal.z)}',
+          )
           ..writeln('    outer loop');
         for (final at in [a, b, c]) {
           out.writeln(
@@ -297,20 +305,24 @@ extension MeshExport on Mesh {
     if (!binary) {
       final out = StringBuffer()..write(header);
       for (var i = 0; i < tris.vertexCount; i++) {
-        out.writeln([
-          _number(tris.positions[i * 3]),
-          _number(tris.positions[i * 3 + 1]),
-          _number(tris.positions[i * 3 + 2]),
-          _number(tris.normals[i * 3]),
-          _number(tris.normals[i * 3 + 1]),
-          _number(tris.normals[i * 3 + 2]),
-          _number(tris.uvs[i * 2]),
-          _number(tris.uvs[i * 2 + 1]),
-        ].join(' '));
+        out.writeln(
+          [
+            _number(tris.positions[i * 3]),
+            _number(tris.positions[i * 3 + 1]),
+            _number(tris.positions[i * 3 + 2]),
+            _number(tris.normals[i * 3]),
+            _number(tris.normals[i * 3 + 1]),
+            _number(tris.normals[i * 3 + 2]),
+            _number(tris.uvs[i * 2]),
+            _number(tris.uvs[i * 2 + 1]),
+          ].join(' '),
+        );
       }
       for (var i = 0; i < tris.triangleCount; i++) {
-        out.writeln('3 ${tris.indices[i * 3]} ${tris.indices[i * 3 + 1]} '
-            '${tris.indices[i * 3 + 2]}');
+        out.writeln(
+          '3 ${tris.indices[i * 3]} ${tris.indices[i * 3 + 1]} '
+          '${tris.indices[i * 3 + 2]}',
+        );
       }
       return _bytes(out.toString());
     }
@@ -373,7 +385,6 @@ String _word(String name) {
 
 Uint8List _bytes(String text) => Uint8List.fromList(utf8.encode(text));
 
-
 /// Reading back only what a file says about its own size.
 ///
 /// The box a model occupies, without loading the model. glTF requires every
@@ -395,8 +406,9 @@ Uint8List _bytes(String text) => Uint8List.fromList(utf8.encode(text));
 
   Map<String, Object?> document;
   try {
-    document = jsonDecode(utf8.decode(glb.sublist(20, 20 + jsonLength)))
-        as Map<String, Object?>;
+    document =
+        jsonDecode(utf8.decode(glb.sublist(20, 20 + jsonLength)))
+            as Map<String, Object?>;
   } on FormatException {
     return null;
   }

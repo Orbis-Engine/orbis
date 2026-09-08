@@ -17,9 +17,9 @@ void main() {
     });
 
     test('an angle keeps it on the flat', () {
-      final mesh = Shape.of(ShapeKind.plane)
-          .copyWith(widthCuts: 3, heightCuts: 3)
-          .build();
+      final mesh = Shape.of(
+        ShapeKind.plane,
+      ).copyWith(widthCuts: 3, heightCuts: 3).build();
       final middle = mesh.faces[5];
 
       // Every face of a plane points the same way, so nothing stops it.
@@ -34,9 +34,9 @@ void main() {
     });
 
     test('shrinking drops the ones on the edge', () {
-      final mesh = Shape.of(ShapeKind.plane)
-          .copyWith(widthCuts: 2, heightCuts: 2)
-          .build();
+      final mesh = Shape.of(
+        ShapeKind.plane,
+      ).copyWith(widthCuts: 2, heightCuts: 2).build();
 
       // Three by three; only the middle one has neighbours all round.
       expect(mesh.shrink(mesh.faces), hasLength(1));
@@ -50,8 +50,9 @@ void main() {
 
   group('loops and rings', () {
     test('a ring goes round a cylinder', () {
-      final mesh =
-          Shape.of(ShapeKind.cylinder).copyWith(sides: 8, capped: false).build();
+      final mesh = Shape.of(
+        ShapeKind.cylinder,
+      ).copyWith(sides: 8, capped: false).build();
       final face = mesh.faces.first;
       final edge = edgeOf(face.vertices[0], face.vertices[1]);
 
@@ -61,8 +62,9 @@ void main() {
     });
 
     test('a face loop goes all the way round', () {
-      final mesh =
-          Shape.of(ShapeKind.cylinder).copyWith(sides: 8, capped: false).build();
+      final mesh = Shape.of(
+        ShapeKind.cylinder,
+      ).copyWith(sides: 8, capped: false).build();
 
       expect(mesh.faceLoop(mesh.faces.first), hasLength(8));
     });
@@ -112,8 +114,9 @@ void main() {
     });
 
     test('splitting a corner only one face uses does nothing', () {
-      final mesh =
-          Shape.of(ShapeKind.plane).copyWith(widthCuts: 0, heightCuts: 0).build();
+      final mesh = Shape.of(
+        ShapeKind.plane,
+      ).copyWith(widthCuts: 0, heightCuts: 0).build();
       expect(mesh.split([0]), 0);
     });
   });
@@ -159,10 +162,13 @@ void main() {
     });
 
     test('an open edge has nothing to bevel between', () {
-      final mesh =
-          Shape.of(ShapeKind.plane).copyWith(widthCuts: 0, heightCuts: 0).build();
-      final edge = edgeOf(mesh.faces.first.vertices[0],
-          mesh.faces.first.vertices[1]);
+      final mesh = Shape.of(
+        ShapeKind.plane,
+      ).copyWith(widthCuts: 0, heightCuts: 0).build();
+      final edge = edgeOf(
+        mesh.faces.first.vertices[0],
+        mesh.faces.first.vertices[1],
+      );
 
       expect(mesh.bevel([edge], 0.2), isEmpty);
     });
@@ -170,12 +176,14 @@ void main() {
 
   group('bridging', () {
     test('puts a face between two open edges', () {
-      final mesh = Mesh(positions: [
-        Vector3(0, 0, 0),
-        Vector3(1, 0, 0),
-        Vector3(0, 0, 2),
-        Vector3(1, 0, 2),
-      ]);
+      final mesh = Mesh(
+        positions: [
+          Vector3(0, 0, 0),
+          Vector3(1, 0, 0),
+          Vector3(0, 0, 2),
+          Vector3(1, 0, 2),
+        ],
+      );
 
       final made = mesh.bridge(edgeOf(0, 1), edgeOf(2, 3));
 
@@ -184,12 +192,14 @@ void main() {
     });
 
     test('does not make a bow tie of it', () {
-      final mesh = Mesh(positions: [
-        Vector3(0, 0, 0),
-        Vector3(1, 0, 0),
-        Vector3(1, 0, 2),
-        Vector3(0, 0, 2),
-      ]);
+      final mesh = Mesh(
+        positions: [
+          Vector3(0, 0, 0),
+          Vector3(1, 0, 0),
+          Vector3(1, 0, 2),
+          Vector3(0, 0, 2),
+        ],
+      );
 
       // The two edges run in opposite directions; joining them corner to
       // corner would cross the face over itself and halve its area.
@@ -245,9 +255,9 @@ void main() {
 
   group('merging faces', () {
     test('two side by side become one', () {
-      final mesh = Shape.of(ShapeKind.plane)
-          .copyWith(widthCuts: 1, heightCuts: 0)
-          .build();
+      final mesh = Shape.of(
+        ShapeKind.plane,
+      ).copyWith(widthCuts: 1, heightCuts: 0).build();
       final was = mesh.areaOf(mesh.faces[0]) + mesh.areaOf(mesh.faces[1]);
 
       final made = mesh.mergeFaces(mesh.faces.toList());
@@ -258,9 +268,9 @@ void main() {
     });
 
     test('the merged face points the way the pieces did', () {
-      final mesh = Shape.of(ShapeKind.plane)
-          .copyWith(widthCuts: 1, heightCuts: 0)
-          .build();
+      final mesh = Shape.of(
+        ShapeKind.plane,
+      ).copyWith(widthCuts: 1, heightCuts: 0).build();
 
       final made = mesh.mergeFaces(mesh.faces.toList())!;
       expect(mesh.normalOf(made).y, closeTo(1, 1e-9));

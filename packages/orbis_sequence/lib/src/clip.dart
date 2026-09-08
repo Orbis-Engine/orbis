@@ -16,8 +16,8 @@ class Clip {
     this.clipIn = 0.0,
     this.speed = 1.0,
     this.name,
-  })  : assert(duration > 0, 'a clip with no length never runs'),
-        assert(speed != 0, 'a clip at no speed never advances');
+  }) : assert(duration > 0, 'a clip with no length never runs'),
+       assert(speed != 0, 'a clip at no speed never advances');
 
   /// Seconds from the start of the sequence.
   final double start;

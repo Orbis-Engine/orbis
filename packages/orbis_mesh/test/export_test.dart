@@ -20,8 +20,11 @@ void main() {
 
       expect(faces, hasLength(6));
       for (final face in faces) {
-        expect(face.trim().split(RegExp(r'\s+')).length, 5,
-            reason: 'four corners and the f — not two triangles');
+        expect(
+          face.trim().split(RegExp(r'\s+')).length,
+          5,
+          reason: 'four corners and the f — not two triangles',
+        );
       }
     });
 
@@ -34,8 +37,11 @@ void main() {
           expect(parts, hasLength(3));
           for (final part in parts) {
             expect(int.tryParse(part), isNotNull);
-            expect(int.parse(part), greaterThan(0),
-                reason: 'one-based, which is what OBJ has always been');
+            expect(
+              int.parse(part),
+              greaterThan(0),
+              reason: 'one-based, which is what OBJ has always been',
+            );
           }
         }
       }
@@ -43,10 +49,8 @@ void main() {
 
     test('the counts add up', () {
       final text = only(cube().toObj(), '.obj').text;
-      int count(String prefix) => text
-          .split('\n')
-          .where((line) => line.startsWith('$prefix '))
-          .length;
+      int count(String prefix) =>
+          text.split('\n').where((line) => line.startsWith('$prefix ')).length;
 
       expect(count('v'), 8, reason: 'a cube has eight corners');
       // One coordinate and one normal a face corner: six faces of four.
@@ -59,10 +63,17 @@ void main() {
       for (var i = 0; i < mesh.faces.length; i++) {
         mesh.faces[i].material = i < 3 ? 0 : 1;
       }
-      final files = mesh.toObj(name: 'wall', materials: const [
-        GlbMaterial(name: 'Red brick', colour: [0.6, 0.2, 0.1, 1]),
-        GlbMaterial(name: 'Glass', roughness: 0.05, colour: [0.8, 0.9, 1, 0.4]),
-      ]);
+      final files = mesh.toObj(
+        name: 'wall',
+        materials: const [
+          GlbMaterial(name: 'Red brick', colour: [0.6, 0.2, 0.1, 1]),
+          GlbMaterial(
+            name: 'Glass',
+            roughness: 0.05,
+            colour: [0.8, 0.9, 1, 0.4],
+          ),
+        ],
+      );
 
       expect(files, hasLength(2));
       expect(files.first.name, 'wall.obj');
@@ -70,8 +81,11 @@ void main() {
       expect(only(files, '.obj').text, contains('mtllib wall.mtl'));
 
       final mtl = only(files, '.mtl').text;
-      expect(mtl, contains('newmtl Red_brick'),
-          reason: 'a space in a name splits the line');
+      expect(
+        mtl,
+        contains('newmtl Red_brick'),
+        reason: 'a space in a name splits the line',
+      );
       expect(mtl, contains('newmtl Glass'));
       expect(mtl, contains('d 0.4'), reason: 'the see-through one says so');
     });
@@ -104,7 +118,9 @@ void main() {
           Vector3(1, 0, 0),
           Vector3(0, 1, 0),
         ],
-        faces: [Face([0, 1, 2])],
+        faces: [
+          Face([0, 1, 2]),
+        ],
       );
       final text = only(mesh.toObj(), '.obj').text;
       expect(text, isNot(contains('e-')));
@@ -214,14 +230,15 @@ void main() {
       expect(box.max.z, closeTo(actual.max.z, 1e-5));
     });
 
-    test('several materials are several primitives, and it takes them all',
-        () {
+    test('several materials are several primitives, and it takes them all', () {
       final mesh = cube();
       for (var i = 0; i < mesh.faces.length; i++) {
         mesh.faces[i].material = i;
       }
       final box = boundsOfGlb(
-        mesh.toGlb(materials: [for (var i = 0; i < 6; i++) const GlbMaterial()]),
+        mesh.toGlb(
+          materials: [for (var i = 0; i < 6; i++) const GlbMaterial()],
+        ),
       )!;
       expect(box.max.x, closeTo(cube().bounds.max.x, 1e-5));
     });

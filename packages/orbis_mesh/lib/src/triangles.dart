@@ -146,7 +146,6 @@ extension MeshTriangles on Mesh {
             : entry.value.normalized(),
     };
   }
-
 }
 
 /// Cuts a face into triangles, whatever shape its outline is.
@@ -301,17 +300,17 @@ class GlbMaterial {
   final bool cutout;
 
   Map<String, Object?> toGltf() => {
-        'name': name,
-        'pbrMetallicRoughness': {
-          'baseColorFactor': colour,
-          'metallicFactor': metallic,
-          'roughnessFactor': roughness,
-        },
-        if (emissive.any((one) => one > 0)) 'emissiveFactor': emissive,
-        if (doubleSided) 'doubleSided': true,
-        if (cutout) 'alphaMode': 'MASK',
-        if (cutout) 'alphaCutoff': 0.5,
-      };
+    'name': name,
+    'pbrMetallicRoughness': {
+      'baseColorFactor': colour,
+      'metallicFactor': metallic,
+      'roughnessFactor': roughness,
+    },
+    if (emissive.any((one) => one > 0)) 'emissiveFactor': emissive,
+    if (doubleSided) 'doubleSided': true,
+    if (cutout) 'alphaMode': 'MASK',
+    if (cutout) 'alphaCutoff': 0.5,
+  };
 }
 
 /// Writing a mesh as a `.glb`, which the renderer already knows how to load.
@@ -323,7 +322,10 @@ class GlbMaterial {
 /// things to keep working.
 extension MeshGlb on Mesh {
   /// This mesh as a binary glTF file.
-  Uint8List toGlb({String name = 'mesh', List<GlbMaterial> materials = const []}) {
+  Uint8List toGlb({
+    String name = 'mesh',
+    List<GlbMaterial> materials = const [],
+  }) {
     final tris = triangulate();
 
     // One primitive a material, which is what a glTF loader turns into one
@@ -344,9 +346,7 @@ extension MeshGlb on Mesh {
       for (var i = 0; i < materials.length; i++)
         if (wanted.contains(i)) i,
     ];
-    final slotOf = {
-      for (var i = 0; i < listed.length; i++) listed[i]: i,
-    };
+    final slotOf = {for (var i = 0; i < listed.length; i++) listed[i]: i};
 
     // glTF wants the buffer's parts aligned to four bytes, and the index
     // buffer's own component size. Laid out indices first so the alignment
@@ -360,18 +360,24 @@ extension MeshGlb on Mesh {
     final builder = BytesBuilder()
       ..add(indexBytes)
       ..add(Uint8List(indexPadding))
-      ..add(tris.positions.buffer.asUint8List(
-        tris.positions.offsetInBytes,
-        tris.positions.lengthInBytes,
-      ))
-      ..add(tris.normals.buffer.asUint8List(
-        tris.normals.offsetInBytes,
-        tris.normals.lengthInBytes,
-      ))
-      ..add(tris.uvs.buffer.asUint8List(
-        tris.uvs.offsetInBytes,
-        tris.uvs.lengthInBytes,
-      ));
+      ..add(
+        tris.positions.buffer.asUint8List(
+          tris.positions.offsetInBytes,
+          tris.positions.lengthInBytes,
+        ),
+      )
+      ..add(
+        tris.normals.buffer.asUint8List(
+          tris.normals.offsetInBytes,
+          tris.normals.lengthInBytes,
+        ),
+      )
+      ..add(
+        tris.uvs.buffer.asUint8List(
+          tris.uvs.offsetInBytes,
+          tris.uvs.lengthInBytes,
+        ),
+      );
     final binary = builder.toBytes();
 
     final indexEnd = indexBytes.length + indexPadding;
@@ -383,7 +389,9 @@ extension MeshGlb on Mesh {
       'asset': {'version': '2.0', 'generator': 'Orbis'},
       'scene': 0,
       'scenes': [
-        {'nodes': [0]},
+        {
+          'nodes': [0],
+        },
       ],
       'nodes': [
         {'mesh': 0, 'name': name},

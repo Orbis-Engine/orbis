@@ -242,7 +242,10 @@ void _tintTests() {
       // would put mid-grey at 0.218; the real transfer function puts it at
       // 0.216, and the straight segment near black is off by far more.
       expect(const Tint(0.5, 0.5, 0.5).linear.x, closeTo(0.2140, 1e-3));
-      expect(const Tint(0.02, 0.02, 0.02).linear.x, closeTo(0.02 / 12.92, 1e-9));
+      expect(
+        const Tint(0.02, 0.02, 0.02).linear.x,
+        closeTo(0.02 / 12.92, 1e-9),
+      );
       expect(Tint.white.linear.x, closeTo(1.0, 1e-9));
       expect(Tint.black.linear.x, 0.0);
     });
@@ -255,6 +258,5 @@ void _tintTests() {
       expect(middle.red, 0.5);
       expect(middle.linear.x, lessThan(0.25));
     });
-
   });
 }

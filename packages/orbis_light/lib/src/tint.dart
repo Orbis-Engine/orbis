@@ -39,8 +39,7 @@ class Tint {
   final double blue;
 
   /// The same colour in the space light actually behaves in.
-  Vector3 get linear =>
-      Vector3(_linear(red), _linear(green), _linear(blue));
+  Vector3 get linear => Vector3(_linear(red), _linear(green), _linear(blue));
 
   /// Part of the way from one to another.
   ///

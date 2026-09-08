@@ -131,7 +131,8 @@ class PropertyTrack<T> extends Track {
   final Mixer<T> mixer;
 
   @override
-  double get end => clips.fold(0.0, (most, one) => one.clip.end > most ? one.clip.end : most);
+  double get end =>
+      clips.fold(0.0, (most, one) => one.clip.end > most ? one.clip.end : most);
 
   /// The value at [at], or null where no clip covers it.
   ///
@@ -173,7 +174,8 @@ class ActivationTrack extends Track {
   final List<Clip> clips;
 
   @override
-  double get end => clips.fold(0.0, (most, one) => one.end > most ? one.end : most);
+  double get end =>
+      clips.fold(0.0, (most, one) => one.end > most ? one.end : most);
 
   /// Whether the thing should be there at [at], or null where the track has
   /// no opinion.
@@ -262,12 +264,14 @@ class SoundTrack extends Track {
     if (muted) return;
     for (final (clip, sound) in clips) {
       if (!clip.covers(at)) continue;
-      frame.sounds.add(SoundAt(
-        sound,
-        clip.localAt(at),
-        gain * clip.weightAt(at),
-        binding: binding,
-      ));
+      frame.sounds.add(
+        SoundAt(
+          sound,
+          clip.localAt(at),
+          gain * clip.weightAt(at),
+          binding: binding,
+        ),
+      );
     }
   }
 }
