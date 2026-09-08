@@ -2236,6 +2236,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   Texture *blank = [self blankTexture];
   TextureSampler sampler(TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
                          TextureSampler::MagFilter::LINEAR);
+  sampler.setAnisotropy(8.0f);
   instance->setParameter("baseColor", float4{0.8f, 0.8f, 0.8f, 1.0f});
   instance->setParameter("metallic", 0.0f);
   instance->setParameter("roughness", 0.4f);
@@ -2348,6 +2349,15 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   if (wrap == 2) mode = TextureSampler::WrapMode::MIRRORED_REPEAT;
   sampler.setWrapModeS(mode);
   sampler.setWrapModeT(mode);
+  // Anisotropy, unless the texture asked to be sharp.
+  //
+  // What it fixes is ground seen at a glancing angle, which is most of what a
+  // camera at head height sees: a road or a floor stretching away is sampled
+  // across a long thin footprint, and a mipmap chain can only pick one level
+  // for it. Too fine and it crawls, too coarse and it is mud a few metres
+  // out. Eight samples is the usual place to stop — past that the cost keeps
+  // climbing and nobody can see the difference.
+  if (!sharp) sampler.setAnisotropy(8.0f);
   return sampler;
 }
 
@@ -3186,7 +3196,19 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   options.shadowCascades = static_cast<uint8_t>(cascades < 1   ? 1
                                                 : cascades > 4 ? 4
                                                                : cascades);
-  options.shadowFar = _pipelineParams[4];
+  // Zero means "as far as the camera sees", and that is a reasonable thing to
+  // ask for — but it was only half honoured. The cascade splits below fall
+  // back to a hundred metres when it is zero while shadowFar stayed zero, so
+  // the splits described one distance and the shadow described another, and
+  // the result is a scene where every surface samples as shadowed. A sun at a
+  // hundred thousand lux then lights nothing, which is a very confusing way
+  // for a default to fail.
+  //
+  // One fallback, used by both.
+  constexpr float kDefaultShadowFar = 100.0f;
+  const float shadowFar =
+      _pipelineParams[4] > 0 ? _pipelineParams[4] : kDefaultShadowFar;
+  options.shadowFar = shadowFar;
   options.constantBias = _pipelineParams[6];
   options.normalBias = _pipelineParams[7];
   const int shadowFlags = static_cast<int>(_pipelineParams[8]);
@@ -3197,9 +3219,8 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // usual compromise: evenly spaced wastes the near cascades on ground the
   // camera is standing on, and logarithmic wastes the far ones on sky.
   if (options.shadowCascades > 1) {
-    const float far = options.shadowFar > 0 ? options.shadowFar : 100.0f;
     LightManager::ShadowCascades::computePracticalSplits(
-        options.cascadeSplitPositions, options.shadowCascades, 0.1f, far,
+        options.cascadeSplitPositions, options.shadowCascades, 0.1f, shadowFar,
         _pipelineParams[5]);
   }
   lights.setShadowOptions(instance, options);

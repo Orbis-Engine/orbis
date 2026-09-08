@@ -461,11 +461,8 @@ class BistroExteriorExample extends BistroExample {
           kind: OrbisShadowKind.soft,
           cascades: 4,
           mapSize: 2048,
-          // Not the default. `distance` is Filament's shadowFar, and it
-          // defaults to zero — which over four cascades leaves the shadow map
-          // covering nothing, so every surface samples as shadowed and the
-          // scene renders black under a hundred thousand lux of sun. This
-          // street is a hundred and seventy metres across.
+          // A hundred and seventy metres of street, so the shadows are told
+          // to reach across it rather than left at the default.
           distance: 120,
           // Contact shadows. A cascaded map cannot resolve where a chair leg
           // meets the cobbles, so without these everything fine-grained
