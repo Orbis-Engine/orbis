@@ -22,7 +22,7 @@ if !FileManager.default.fileExists(atPath: here.appendingPathComponent(filament)
 
     Filament is fetched, not vendored. Build it once:
 
-        bash packages/orbis_filament/macos/setup.sh
+        bash packages/orbis_filament/darwin/setup.sh
 
     """
   )

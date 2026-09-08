@@ -32,7 +32,7 @@ Third-party software linked into builds of this engine:
   licence's requirement, not an attribution of design.
 
   A prebuilt Filament.xcframework is committed under
-  packages/orbis_filament/macos/orbis_filament/third_party/ because the
+  packages/orbis_filament/darwin/orbis_filament/third_party/ because the
   current Xcode cannot regenerate it. That is redistribution rather than
   linking, so a full copy of the Apache License 2.0 is included at
   LICENSES/Apache-2.0.txt, which is what section 4 of that licence asks for.
