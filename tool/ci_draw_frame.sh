@@ -51,7 +51,10 @@ for _ in $(seq "$SECONDS_ALLOWED"); do
 done
 
 if [ -n "$drew" ]; then
-  grep '\[orbis\] frame' "$log" | head -1
+  # Both lines: the one proving a frame exists, and the one saying what it
+  # cost. The cost is printed on every run so a regression shows up as a
+  # number in a build log rather than as somebody eventually noticing.
+  grep '\[orbis\] frame' "$log" | head -2
   echo "renderer drew a frame"
   exit 0
 fi

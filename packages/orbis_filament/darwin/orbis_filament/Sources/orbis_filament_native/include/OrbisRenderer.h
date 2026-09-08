@@ -194,6 +194,14 @@ NS_ASSUME_NONNULL_BEGIN
 /// exactly the same there.
 - (double)gpuMilliseconds;
 
+/// What recent frames cost this renderer on the CPU, in milliseconds.
+///
+/// The GPU number says how expensive the picture is to draw; this says how
+/// expensive the renderer is to drive. A change that leaves the picture
+/// identical can double this without moving the other at all, which is why
+/// both are reported.
+- (double)cpuMilliseconds;
+
 /// Whether anything is holding population buffers, so a scene that has just
 /// dropped its last one still gets the call that clears them.
 @property(nonatomic, readonly) BOOL hasPopulations;
