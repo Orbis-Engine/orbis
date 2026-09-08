@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0
+
+- `Toggle` takes a `note` and an `enabled`, and the Bistro examples use it
+  instead of `SwitchListTile`. A ListTile paints onto the nearest Material
+  ancestor and reports itself broken when something opaque sits in between,
+  which the settings panel is — so four switches were reporting an error on
+  every frame they were on screen, and an editor showing the Bistro filled its
+  console with them.
+
 ## 0.8.0
 
 - A blending example: three ground panels that are the same two surfaces and
