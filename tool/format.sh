@@ -17,6 +17,25 @@ sources() {
     -not -path '*/quickjs-ng/*' -print0
 }
 
+# The formatter reads each package's language version out of its resolved
+# .dart_tool/package_config.json, and formats differently without it — the
+# newer line-splitting style is gated on that version. So an unresolved
+# checkout disagrees with a resolved one about what "formatted" means, which
+# is why this check passed on a developer's machine and failed on CI for
+# weeks with no version difference between them.
+#
+# Resolving is what makes the two agree. Only packages that need it, so this
+# costs nothing once a checkout is warm.
+for package in packages/*/; do
+  [ -f "$package/pubspec.yaml" ] || continue
+  [ -f "$package/.dart_tool/package_config.json" ] && continue
+  if grep -q '^  flutter:' "$package/pubspec.yaml" && command -v flutter > /dev/null; then
+    (cd "$package" && flutter pub get > /dev/null 2>&1)
+  else
+    (cd "$package" && dart pub get > /dev/null 2>&1)
+  fi
+done
+
 if [ "${1:-}" = "--check" ]; then
   sources | xargs -0 dart format --output=none --set-exit-if-changed
 else

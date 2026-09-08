@@ -71,12 +71,19 @@ there are, and git's whitespace-blind comparison works within a line rather
 than across two. Rather than guess, say so in a commit message:
 
 ```
-Version-exempt: dart format only, no behaviour changed
+Version-exempt: orbis_camera orbis_light - dart format only
+Version-exempt: all - repository-wide reformat
 ```
 
-The check honours it and prints the reason. Making the exemption a line in the
-history rather than a silent skip is the point — it is there in the log next
-to the reason for it, and a branch full of them is visible.
+It names the packages it covers, and exempts only those. That matters more
+than it looks: an exemption that covered the whole branch would also excuse
+every package changed in later commits, so one reformat early on would quietly
+wave through the feature that landed after it — the exact failure this check
+exists to prevent, reintroduced by the escape hatch meant to make it usable.
+
+Making the exemption a line in the history rather than a silent skip is the
+rest of the point. It sits in the log next to its reason, and a branch full of
+them is visible.
 
 Run it before opening the pull request:
 

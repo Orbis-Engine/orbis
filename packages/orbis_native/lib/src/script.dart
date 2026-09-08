@@ -59,7 +59,16 @@ final class _Loader {
 
   /// RTLD_NOW | RTLD_LOCAL: every symbol resolved at load, and nothing put
   /// into the global namespace where two scripts could shadow each other.
-  static const int flags = 2 | 4;
+  ///
+  /// The constants are not the same on both systems, and the difference is
+  /// vicious. RTLD_NOW is 2 everywhere. RTLD_LOCAL is 4 on macOS, and on
+  /// glibc it is 0 — because local is already the default — while 4 there
+  /// means RTLD_NOLOAD: *do not load this, only tell me whether it is
+  /// already loaded*. Sending macOS's flags to Linux therefore asks for a
+  /// handle to a library nobody has opened, gets null, and dlerror has
+  /// nothing to report because nothing went wrong. Every script failed to
+  /// load, and said "unknown" about it.
+  static final int flags = Platform.isMacOS ? 2 | 4 : 2;
 
   static String lastError() {
     final said = error();

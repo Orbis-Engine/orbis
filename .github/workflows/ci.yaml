@@ -123,12 +123,19 @@ jobs:
           path: orbis/packages/orbis_filament/macos/third_party
           key: filament-${{ runner.os }}-${{ hashFiles('orbis/packages/orbis_filament/macos/setup.sh') }}
 
-      # One repository, not three: the viewport depends on the renderer and
-      # nothing else, so link_local.sh wires it and skips the apps whose
-      # other checkouts are absent.
-      - name: Link the engine checkout
-        working-directory: orbis-examples
-        run: ./tool/link_local.sh ../orbis
+      # Written here rather than by the examples repository's link script.
+      # That script comes from *its* master, so this job's behaviour would
+      # depend on a file in another repository that this pull request cannot
+      # change — which is exactly how this job first failed. The viewport
+      # depends on the renderer and nothing else, so the override is two
+      # lines and owning them is cheaper than the coupling.
+      - name: Point the viewport at this checkout
+        run: |
+          cat > orbis-examples/viewport/pubspec_overrides.yaml <<YAML
+          dependency_overrides:
+            orbis_filament:
+              path: ${{ github.workspace }}/orbis/packages/orbis_filament
+          YAML
 
       - name: Build the viewport
         working-directory: orbis-examples/viewport

@@ -50,12 +50,18 @@ version_at() {
 # --ignore-all-space compares within lines and a reflow changes how many there
 # are. Rather than guess, the exemption is stated in a commit and printed
 # here, so the exception is in the history next to the reason for it.
+# The trailer names the packages it covers, and only those:
+#
+#   Version-exempt: orbis_camera orbis_light - dart format only
+#   Version-exempt: all - repository-wide reformat
+#
+# Naming them matters. A branch-wide exemption exempts everything committed
+# after it too, so a reformat early on quietly excuses the feature that lands
+# later — which is the failure this check exists to prevent, reintroduced by
+# the escape hatch meant to make it usable.
 exempt=$(git log --format='%B' "$MERGE_BASE"..HEAD \
-  | sed -n 's/^Version-exempt: *//p' | head -1)
-if [ -n "$exempt" ]; then
-  echo "  --    version bump exempted: $exempt"
-  exit 0
-fi
+  | sed -n 's/^Version-exempt: *//p' \
+  | sed 's/[-—:].*//' | tr ' ' '\n' | grep -v '^$' | sort -u)
 
 changed=$(git diff --name-only "$MERGE_BASE"...HEAD -- 'packages/*/lib/*' \
   | cut -d/ -f2 | sort -u)
@@ -67,6 +73,14 @@ fi
 
 failures=0
 for package in $changed; do
+  case "$exempt" in
+    *all*) echo "  --    $package exempted"; continue ;;
+  esac
+  if echo "$exempt" | grep -qx "$package"; then
+    echo "  --    $package exempted"
+    continue
+  fi
+
   was=$(version_at "$MERGE_BASE" "$package")
   now=$(version_at HEAD "$package")
 
