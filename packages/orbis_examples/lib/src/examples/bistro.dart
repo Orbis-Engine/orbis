@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:orbis_filament/orbis_filament.dart';
@@ -66,6 +67,21 @@ abstract class BistroExample extends Example {
   }
 
   bool get ready => File(_model).existsSync();
+
+  /// The prefiltered environment cmgen made when the scene was fetched.
+  ///
+  /// Empty when it has not been built, and the scene falls back to the flat
+  /// ambient — which is worth saying out loud, because the difference between
+  /// the two is most of the difference between a render and a photograph.
+  String get radiance => _envIfPresent('bistro_ibl.ktx');
+  String get skyboxMap => _envIfPresent('bistro_skybox.ktx');
+
+  String _envIfPresent(String name) {
+    final file = File('$directory/$name');
+    return file.existsSync() ? file.absolute.path : '';
+  }
+
+  bool get hasEnvironment => radiance.isNotEmpty;
 
   /// The model, as one object. Its own root node carries the turn from Z-up
   /// and the scale into metres, so nothing is done to it here.
@@ -137,7 +153,7 @@ class BistroExteriorExample extends BistroExample {
   ViewPoint get viewpoint =>
       const ViewPoint(distance: 22, pitch: 0.20, height: 3, yaw: 2.2);
 
-  bool night = true;
+  bool night = false;
   bool festoon = true;
 
   /// The film speed, which at night is the dial that decides whether there is
@@ -146,6 +162,89 @@ class BistroExteriorExample extends BistroExample {
 
   /// The moon, in lux. A real full moon is about a quarter of one.
   double moon = 4;
+
+  /// Walk the street rather than orbit it.
+  ///
+  /// An orbit is the right camera for looking at an object and the wrong one
+  /// for a place. A street is meant to be walked down: the lamps pass
+  /// overhead one at a time, the shopfronts come alongside, and the light on
+  /// a wall changes because you moved rather than because the wall did. None
+  /// of that is visible from a fixed point spinning around the middle.
+  bool walking = true;
+
+  /// Where the walk goes.
+  ///
+  /// Not guessed, and not taken from the street lamps — that was the first
+  /// attempt and it walked straight through the restaurant, because the lamps
+  /// stand on the pavement with the building between them. These come from an
+  /// occupancy map of the scene: every primitive whose bounding box occupies
+  /// the height a person does, on a three-metre grid, which leaves the open
+  /// ground visible as the gaps. The street turns out to be a corridor about
+  /// six metres wide running past the restaurant front.
+  ///
+  /// Conservative on purpose. Bounding boxes overstate what they cover, so
+  /// the real street is wider than the map says — and a path down the middle
+  /// of what the map calls open is a path that cannot clip a wall.
+  static final _path = <Vector3>[
+    Vector3(-12.5, 1.7, -11),
+    Vector3(-12.0, 1.7, -5),
+    Vector3(-11.5, 1.7, 1),
+    Vector3(-10.0, 1.7, 7),
+    Vector3(-7.0, 1.7, 11),
+  ];
+
+  /// Where somebody walking is at `seconds`, and what they are looking at.
+  ///
+  /// A walking pace, a little bob at the frequency feet actually hit the
+  /// ground, and a slow sweep of the head — because a person walking a street
+  /// they have not seen before looks at the buildings rather than straight
+  /// ahead, and a camera that only ever looks along its own path is the
+  /// giveaway that nobody is holding it.
+  (Vector3, Vector3) _walk(double seconds) {
+    const pace = 1.3; // metres a second
+    var total = 0.0;
+    for (var i = 0; i < _path.length - 1; i++) {
+      total += (_path[i + 1] - _path[i]).length;
+    }
+    // There and back, so it never cuts from the far end to the near one.
+    final cycle = total / pace * 2;
+    var travelled = (seconds % cycle) * pace;
+    if (travelled > total) travelled = total * 2 - travelled;
+
+    var along = 0.0;
+    var at = _path.first;
+    var heading = _path.last - _path.first;
+    for (var i = 0; i < _path.length - 1; i++) {
+      final leg = _path[i + 1] - _path[i];
+      final length = leg.length;
+      if (travelled <= along + length) {
+        at = _path[i] + leg * ((travelled - along) / length);
+        heading = leg;
+        break;
+      }
+      along += length;
+    }
+    heading = heading.normalized();
+
+    // The bob. Two steps a second at a walking pace, and a couple of
+    // centimetres — enough to feel, not enough to notice.
+    final bob = math.sin(seconds * math.pi * 2 * 1.8) * 0.022;
+    final eye = Vector3(at.x, at.y + bob, at.z);
+
+    // Looking about: a slow sweep either side of the way ahead, and a little
+    // up, because the interesting part of this street is above eye level.
+    // Narrower than a real head turn. A wide sweep in a six-metre street
+    // spends half its time looking at a wall a metre away, which reads as
+    // being lost rather than as looking around.
+    final sweep = math.sin(seconds * 0.19) * 0.55 + math.sin(seconds * 0.08) * 0.25;
+    final look = Vector3(
+      heading.x * math.cos(sweep) - heading.z * math.sin(sweep),
+      0,
+      heading.x * math.sin(sweep) + heading.z * math.cos(sweep),
+    );
+    final rise = 0.12 + math.sin(seconds * 0.13) * 0.10;
+    return (eye, eye + Vector3(look.x * 8, rise * 8, look.z * 8));
+  }
 
   @override
   OrbisScene scene(OrbisCamera camera, double seconds) {
@@ -216,16 +315,34 @@ class BistroExteriorExample extends BistroExample {
       // not a detail: on one fixed exposure either the night is black or the
       // day is white, which is exactly why these are stated as a real camera's
       // three numbers rather than as a brightness.
-      camera: OrbisCamera(
-        position: camera.position,
-        target: camera.target,
-        fieldOfView: camera.fieldOfView,
-        aperture: night ? 2.0 : 16,
-        shutterSpeed: night ? 1 / 30 : 1 / 125,
-        sensitivity: night ? iso : 100,
-      ),
+      camera: () {
+        final (eye, look) = walking
+            ? _walk(seconds)
+            : (camera.position, camera.target);
+        return OrbisCamera(
+          position: eye,
+          target: look,
+          // Wider on foot. Fifty degrees is a portrait lens and a street seen
+          // through one feels like a corridor; somebody actually standing in
+          // this square sees most of it at once.
+          fieldOfView: walking ? 65 : camera.fieldOfView,
+          aperture: night ? 2.0 : 16,
+          shutterSpeed: night ? 1 / 30 : 1 / 125,
+          sensitivity: night ? iso : 100,
+        );
+      }(),
       objects: [model],
       lights: lights,
+      // A photograph of a real sky, prefiltered — the reflection in its mip
+      // chain and the diffuse in its harmonics. Only by day: this is a bridge
+      // at noon, and using it at night would light the street with sunshine.
+      environment: night || !hasEnvironment
+          ? const OrbisEnvironment()
+          : OrbisEnvironment(
+              radiance: radiance,
+              skybox: skyboxMap,
+              intensity: 30000,
+            ),
       sky: night
           ? OrbisSky(
               zenith: linearOf(const Color(0xFF0B1224)),
@@ -240,7 +357,12 @@ class BistroExteriorExample extends BistroExample {
           : OrbisSky(
               zenith: linearOf(const Color(0xFF4E86C8)),
               horizon: linearOf(const Color(0xFFBFD4E8)),
-              ambient: 22000,
+              // Both off when there is an environment. A procedural sky and a
+              // photographed one are two answers to the same question and the
+              // procedural one wins, so leaving it on would hide the very
+              // thing it was fetched for — and light the scene twice.
+              ambient: hasEnvironment ? 0 : 22000,
+              drawn: !hasEnvironment,
             ),
       pipeline: OrbisPipeline(
         shadows: OrbisShadows(
@@ -277,6 +399,15 @@ class BistroExteriorExample extends BistroExample {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: walking,
+          title: const Text('Walk the street'),
+          subtitle: Text(walking
+              ? 'On foot, looking around'
+              : 'Drag to orbit instead'),
+          onChanged: (value) { walking = value; changed(); },
+        ),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           value: night,

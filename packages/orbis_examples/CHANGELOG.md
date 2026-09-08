@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+- A prefiltered environment, built by `cmgen` when the scene is fetched. The
+  flat one-band ambient is a placeholder by its own admission; this is a
+  photograph of a real sky, with the reflection in its mip chain and the
+  diffuse in its harmonics. It is most of the difference between a render and
+  a photograph.
+- The exterior walks the street instead of orbiting it, at a walking pace,
+  with a bob and a slow look around. The route comes from an occupancy map of
+  the scene rather than a guess — the first attempt followed the street lamps
+  and walked through the restaurant, because the lamps stand on the pavement
+  with the building between them.
+
 ## 0.3.0
 
 - The Bistro's materials are repaired on fetch. All 132 omitted

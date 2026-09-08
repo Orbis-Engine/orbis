@@ -109,6 +109,37 @@ PYTHON
   done
 done
 
+# The environment, prefiltered.
+#
+# This is the difference between a scene that looks rendered and one that
+# looks photographed, and it is the single largest quality step available
+# here. The renderer's flat ambient is one spherical-harmonic band — light
+# arriving equally from every direction — and its own comment admits it is a
+# placeholder: it fills shadows so they are not black, and it cannot do
+# anything else. Nothing is brighter towards the sky, nothing picks up the
+# colour of the wall beside it, and every reflective surface reflects a
+# uniform grey.
+#
+# cmgen turns the HDR that ships with the scene into the two things Filament
+# actually wants: a mip chain that is the reflection, and spherical harmonics
+# in its metadata that are the diffuse. Both directional, both from a real
+# photograph of a real place.
+#
+# Done here rather than at runtime because it is seconds of work per image and
+# the answer never changes.
+CMGEN="packages/orbis_filament/darwin/third_party/filament-mac/filament/bin/cmgen"
+CMGEN="$(cd "$(dirname "$0")/.." && pwd)/$CMGEN"
+HDR="$INTO/san_giuseppe_bridge_4k.hdr"
+if [ -f "$HDR" ] && [ ! -f "$INTO/san_giuseppe_bridge_4k_ibl.ktx" ]; then
+  if [ -x "$CMGEN" ]; then
+    echo "  prefiltering the environment"
+    "$CMGEN" --quiet --format=ktx --size=256 --extract-blur=0.1 \
+      --deploy="$INTO" "$HDR" || echo "  cmgen failed; the day scene falls back to a flat ambient"
+  else
+    echo "  no cmgen yet — run packages/orbis_filament/darwin/setup.sh first"
+  fi
+fi
+
 # Repair the metalness the conversion lost.
 #
 # Every one of the 132 materials omits metallicFactor, and glTF says the
