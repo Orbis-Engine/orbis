@@ -182,6 +182,43 @@ class OrbisTexture {
 ///
 /// Every field has a default that draws something sensible, so a material is
 /// worth making for one changed number.
+/// How a second surface is mixed into the first.
+///
+/// For ground, mostly: grass over rock, cobbles over mud, a path worn across
+/// a field. Two materials on one mesh, because the alternatives are a seam
+/// where two meshes meet, or a texture painted for one patch of world and
+/// good for nowhere else.
+enum OrbisBlendMode {
+  /// One surface. The second is not sampled at all.
+  none('None'),
+
+  /// Evenly, across the whole surface.
+  ///
+  /// The mix is a property of the object rather than of the place on it — a
+  /// wash of one material over another, and the cheapest of the three.
+  linear('Linear'),
+
+  /// Where a mask says, as much as the amount says.
+  ///
+  /// A fade: at half, every point is half of each. Right for smoke-staining
+  /// and wear, wrong for two surfaces that are physically different, because
+  /// half a cobble and half a lawn is neither.
+  masked('Masked'),
+
+  /// The mask read as a height, so one surface fills in behind the other.
+  ///
+  /// The difference from [masked] is the reason this exists. Grass blended
+  /// into cobbles fills the mortar between them first and leaves the stones
+  /// as stone until they are buried, because at each point the taller
+  /// surface wins outright rather than the two being averaged. That is what
+  /// ground actually does.
+  maskedDepth('Masked depth');
+
+  const OrbisBlendMode(this.label);
+
+  final String label;
+}
+
 class OrbisMaterial {
   const OrbisMaterial({
     required this.key,
@@ -206,6 +243,13 @@ class OrbisMaterial {
     this.filter = OrbisFilter.smooth,
     this.video,
     this.screenMapped = false,
+    this.blendMode = OrbisBlendMode.none,
+    this.blendAmount = 0.0,
+    this.blendSharpness = 8.0,
+    Vector2? blendTiling,
+    Vector2? blendOffset,
+    this.blendBaseColourMap,
+    this.blendMaskMap,
     this.baseColourMap,
     this.normalMap,
     this.metallicRoughnessMap,
@@ -214,7 +258,9 @@ class OrbisMaterial {
   }) : _baseColour = baseColour,
        _emissive = emissive,
        _tiling = tiling,
-       _offset = offset;
+       _offset = offset,
+       _blendTiling = blendTiling,
+       _blendOffset = blendOffset;
 
   /// This material's identity, stable for as long as it exists — the same
   /// contract as an object's key, and for the same reason. A renderer that
@@ -237,6 +283,8 @@ class OrbisMaterial {
   final Vector3? _emissive;
   final Vector2? _tiling;
   final Vector2? _offset;
+  final Vector2? _blendTiling;
+  final Vector2? _blendOffset;
 
   /// Linear RGB and alpha. Not sRGB, and not a Flutter Color: the lighting
   /// maths happens in linear space and a silent conversion is the kind that
@@ -350,13 +398,42 @@ class OrbisMaterial {
     metallicRoughnessMap,
     occlusionMap,
     emissiveMap,
+    blendBaseColourMap,
+    blendMaskMap,
   ];
 
+  /// How the second surface is mixed in, and how much of it there is.
+  final OrbisBlendMode blendMode;
+
+  /// How much of the second surface, from none to all of it.
+  final double blendAmount;
+
+  /// How abruptly [OrbisBlendMode.maskedDepth] hands over.
+  ///
+  /// High is an edge that follows the relief closely; low is nearly a plain
+  /// masked blend. Unused by the other modes.
+  final double blendSharpness;
+
+  /// How the second surface tiles, separately from the first.
+  ///
+  /// Rock at one scale under grass at another is most of what stops tiling
+  /// from reading as tiling. Defaults to the first surface's, which is the
+  /// answer when the two are the same size of thing.
+  Vector2 get blendTiling => _blendTiling ?? tiling;
+  Vector2 get blendOffset => _blendOffset ?? offset;
+
+  /// The second surface, and where it shows through.
+  ///
+  /// The mask is read from red, and in [OrbisBlendMode.maskedDepth] it is a
+  /// height rather than an opacity.
+  final OrbisTexture? blendBaseColourMap;
+  final OrbisTexture? blendMaskMap;
+
   /// How many maps a material has room for.
-  static const int mapCount = 5;
+  static const int mapCount = 7;
 
   /// How many floats one material contributes to the message.
-  static const int stride = 19;
+  static const int stride = 26;
 
   /// The bits that decide which compiled material an instance comes from and
   /// how the rasteriser is set up. Separate from the floats because a change
@@ -399,6 +476,13 @@ class OrbisMaterial {
     out[at + 16] = shift.y;
     out[at + 17] = maskThreshold;
     out[at + 18] = depthBias;
+    out[at + 19] = blendMode.index.toDouble();
+    out[at + 20] = blendAmount;
+    out[at + 21] = blendSharpness;
+    out[at + 22] = blendTiling.x;
+    out[at + 23] = blendTiling.y;
+    out[at + 24] = blendOffset.x;
+    out[at + 25] = blendOffset.y;
   }
 
   OrbisMaterial copyWith({

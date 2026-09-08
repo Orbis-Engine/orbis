@@ -235,4 +235,98 @@ void main() {
     expect(rougher.roughness, 0.9);
     expect(rougher.baseColourMap?.path, '/tmp/a.png');
   });
+
+  group('a second surface blended into the first', () {
+    test('its mode, amount and tiling reach the message', () {
+      final scene = sceneOf(
+        [objectOn(1, material: 9)],
+        [
+          OrbisMaterial(
+            key: 9,
+            blendMode: OrbisBlendMode.maskedDepth,
+            blendAmount: 0.4,
+            blendSharpness: 12,
+            blendTiling: Vector2(8, 8),
+            blendOffset: Vector2(0.25, 0.5),
+          ),
+        ],
+      );
+
+      final params = scene.toMessage(0)['materialParams']! as Float32List;
+      const at = 0;
+      expect(params[at + 19], OrbisBlendMode.maskedDepth.index);
+      expect(params[at + 20], near(0.4));
+      expect(params[at + 21], near(12));
+      expect(params[at + 22], near(8));
+      expect(params[at + 23], near(8));
+      expect(params[at + 24], near(0.25));
+      expect(params[at + 25], near(0.5));
+    });
+
+    test('its maps sit after the first surface\'s', () {
+      final scene = sceneOf(
+        [objectOn(1, material: 9)],
+        [
+          const OrbisMaterial(
+            key: 9,
+            baseColourMap: OrbisTexture('/ground/cobbles.png'),
+            blendBaseColourMap: OrbisTexture('/ground/grass.png'),
+            blendMaskMap: OrbisTexture('/ground/height.png'),
+          ),
+        ],
+      );
+
+      final message = scene.toMessage(0);
+      final paths = message['texturePaths']! as List<String>;
+      final maps = message['materialMaps']! as Int32List;
+
+      // The order the renderer reads them back in. Getting this wrong swaps
+      // a mask for a colour map and shows up as a surface that is somehow
+      // the wrong material rather than as anything that looks like an index.
+      expect(maps, hasLength(OrbisMaterial.mapCount));
+      expect(paths[maps[0]], '/ground/cobbles.png');
+      expect(paths[maps[5]], '/ground/grass.png');
+      expect(paths[maps[6]], '/ground/height.png');
+      // Untouched slots stay empty rather than pointing at something.
+      expect(maps[1], -1);
+      expect(maps[4], -1);
+    });
+
+    test('a material that does not blend costs no maps and no mode', () {
+      final scene = sceneOf(
+        [objectOn(1, material: 9)],
+        [const OrbisMaterial(key: 9)],
+      );
+
+      final message = scene.toMessage(0);
+      final params = message['materialParams']! as Float32List;
+      final maps = message['materialMaps']! as Int32List;
+
+      expect(params[19], OrbisBlendMode.none.index);
+      expect(maps[5], -1);
+      expect(maps[6], -1);
+      expect(message['texturePaths'], isEmpty);
+    });
+
+    test(
+      'the blend layer tiles with the first when it is not told otherwise',
+      () {
+        // Two surfaces the same size of thing is the ordinary case, and having
+        // to restate the tiling for it would be a trap: forget, and the second
+        // layer silently tiles once across a field.
+        const material = OrbisMaterial(
+          key: 9,
+          blendMode: OrbisBlendMode.linear,
+        );
+        final tiled = OrbisMaterial(
+          key: 9,
+          tiling: Vector2(16, 16),
+          blendMode: OrbisBlendMode.linear,
+        );
+
+        expect(material.blendTiling, material.tiling);
+        expect(tiled.blendTiling, Vector2(16, 16));
+      },
+    );
+  });
 }

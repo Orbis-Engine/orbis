@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0
+
+- A blending example: three ground panels that are the same two surfaces and
+  the same mask, differing only in what the mask is taken to mean. The point
+  is visible with the grass slider at half — the first two panels are half
+  grass everywhere, and the third has grass in the mortar and stone on the
+  stones. Its textures are generated rather than shipped, and the height it
+  blends by is the cobble relief itself, which is what stops grass appearing
+  where the stones are.
+
 ## 0.7.0
 
 - The walk no longer goes through walls. The route is searched rather than

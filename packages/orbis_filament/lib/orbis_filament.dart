@@ -11,6 +11,7 @@ export 'src/detail.dart' show OrbisDetailState, OrbisLod, OrbisStep;
 export 'src/material.dart'
     show
         OrbisBlend,
+        OrbisBlendMode,
         OrbisCulling,
         OrbisFilter,
         OrbisMaterial,

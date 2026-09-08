@@ -286,8 +286,8 @@ struct Drawn {
 /// How many floats one material's numbers occupy, and how many maps it has
 /// room for. Both agree with the Dart side by hand; a mismatch is caught in
 /// the plugin, which checks the array lengths before any of this is reached.
-constexpr size_t kMaterialParams = 19;
-constexpr size_t kMaterialMaps = 5;
+constexpr size_t kMaterialParams = 26;
+constexpr size_t kMaterialMaps = 7;
 
 /// One material as the renderer holds it between frames.
 ///
@@ -299,7 +299,7 @@ struct Surfaced {
   filament::MaterialInstance *instance = nullptr;
   int32_t flags = -1;
   float params[kMaterialParams] = {};
-  int32_t maps[kMaterialMaps] = {-1, -1, -1, -1, -1};
+  int32_t maps[kMaterialMaps] = {-1, -1, -1, -1, -1, -1, -1};
   bool written = false;
   uint64_t seen = 0;
 };
@@ -2469,17 +2469,30 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     instance->setParameter("reflectance", params[6]);
     instance->setParameter("ambientOcclusion", params[11]);
     instance->setParameter("normalScale", params[12]);
+
+    // The second surface. Only the lit material declares these, which is why
+    // they are inside this branch rather than beside baseColor — Filament
+    // treats a parameter a material has not declared as a mistake rather
+    // than ignoring it.
+    instance->setParameter("blendMode", static_cast<int32_t>(params[19]));
+    instance->setParameter("blendAmount", params[20]);
+    instance->setParameter("blendSharpness", params[21]);
+    instance->setParameter(
+        "blendUvTransform",
+        float4{params[22], params[23], params[24], params[25]});
   }
 
   // The names are in the order the packed maps are, which is the order the
   // Dart side lists them. A shorter list for the unlit surface, because it
   // has nothing to do with the other four.
   static const char *kMapNames[kMaterialMaps] = {
-      "baseColorMap", "normalMap", "metallicRoughnessMap", "occlusionMap",
-      "emissiveMap"};
+      "baseColorMap",  "normalMap",         "metallicRoughnessMap",
+      "occlusionMap",  "emissiveMap",       "blendBaseColorMap",
+      "blendMaskMap"};
   static const char *kMapFlags[kMaterialMaps] = {
-      "hasBaseColorMap", "hasNormalMap", "hasMetallicRoughnessMap",
-      "hasOcclusionMap", "hasEmissiveMap"};
+      "hasBaseColorMap",   "hasNormalMap",      "hasMetallicRoughnessMap",
+      "hasOcclusionMap",   "hasEmissiveMap",    "hasBlendBaseColorMap",
+      "hasBlendMaskMap"};
 
   // What a pass drew has one level and is never tiled, so it is bound with a
   // sampler of its own rather than the material's.
