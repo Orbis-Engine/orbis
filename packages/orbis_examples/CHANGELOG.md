@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.0
+
+- Two whole small worlds rather than one technique each.
+
+  **Blocks**: a generated landscape of sixty thousand cubes with grass, stone,
+  snow and lakes, in one buffer uploaded when the world changes and not again.
+  Only the block somebody can see is built — a column of height twelve is one
+  cube, not twelve — and a column fills down to its lowest neighbour so a
+  cliff is a wall rather than floating tops.
+
+  **Runner**: a track that never ends and never allocates a piece of one. A
+  fixed set of hazards, coins and roadside blocks laid out once; what changes
+  is how far the world has come, and a piece that goes behind the camera comes
+  round the front by a modulo. The runner does not run — it stays where it is
+  and the world moves past.
+
 ## 0.10.0
 
 - The Bistro exterior no longer judders. It was asking for four shadow
