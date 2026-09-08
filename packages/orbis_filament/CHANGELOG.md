@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+- Textures load asynchronously. `loadResources` decoded every image before it
+  returned, so a scene with four hundred of them stopped the application dead
+  for seconds on geometry that was ready almost at once. The frame loop now
+  nudges Filament along instead, and a scene appears immediately with its
+  textures arriving over the following frames.
+
+## 0.2.3
+
+- A `.gltf` finds its textures again. The resource loader was given the
+  directory holding the file where Filament wants the file itself — it takes
+  the last component off to get the directory, so a scene at
+  `assets/bistro/Bistro.gltf` looked in `assets/Textures` and found none of
+  its four hundred images. Every `.gltf` with external textures was affected;
+  `.glb` was not, because it carries its own.
+
 ## 0.2.2
 
 - `cpuMilliseconds` reports what a frame costs to *drive*, beside the

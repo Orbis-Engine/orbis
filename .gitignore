@@ -27,3 +27,6 @@ packages/orbis_filament/darwin/orbis_filament/Sources/orbis_filament_native/gene
 **/macos/Flutter/ephemeral/
 **/macos/Flutter/GeneratedPluginRegistrant.swift
 *.iml
+
+# Fetched by tool/fetch_bistro.sh: a CC BY 4.0 test scene, not ours to ship.
+assets/bistro/

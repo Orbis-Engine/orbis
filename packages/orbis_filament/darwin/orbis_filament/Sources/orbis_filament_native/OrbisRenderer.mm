@@ -772,6 +772,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   uint64_t _materialGeneration;
   gltfio::TextureProvider *_ktxTextures;
 
+  /// Whether any asset is still decoding its textures. An ivar block takes
+  /// no initialiser, so this is zeroed by the runtime like the rest.
+  bool _loadingResources;
+
   /// Loaded glTF files, by path. Kept for the life of the renderer: a scene
   /// arrives on every drag, and the parse is the expensive part.
   std::map<std::string, Mesh> _meshes;
@@ -1586,18 +1590,40 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     return nullptr;
   }
 
-  // The base path, so a .gltf can find the .bin and the textures sitting
+  // The glTF's own path, so it can find the .bin and the textures sitting
   // beside it. A .glb carries everything and does not need it.
-  const std::string base = path.substr(0, path.find_last_of('/') + 1);
+  //
+  // The file, not the directory it is in. Filament takes the last component
+  // off this to get the directory, so handing it a directory throws away the
+  // real one: a scene at assets/bistro/Bistro.gltf looked for its textures in
+  // assets/Textures, found none of the four hundred, and drew every surface
+  // black. Nothing failed — loadResources still returned true — so the scene
+  // rendered in the right shape with no colour in it, and in daylight at a
+  // hundred thousand lux it was still black, which is what finally said this
+  // was not a lighting problem.
   _resourceLoader->setConfiguration({
       .engine = _engine,
-      .gltfPath = base.c_str(),
+      .gltfPath = path.c_str(),
       .normalizeSkinningWeights = true,
   });
 
-  if (!_resourceLoader->loadResources(entry.asset)) {
+  // Begun rather than waited for.
+  //
+  // loadResources decodes every texture before it returns, and this scene has
+  // four hundred of them — so the application stopped dead for several seconds
+  // on a mesh that was, geometrically, ready almost at once. Filament will
+  // decode them on its own threads instead, and the frame loop nudges it along
+  // by calling asyncUpdateLoad until it says it is finished.
+  //
+  // What that buys is that the scene appears immediately. The geometry is
+  // there on the next frame and the textures arrive over the following ones,
+  // which is a scene assembling itself rather than an application that has
+  // hung.
+  if (!_resourceLoader->asyncBeginLoad(entry.asset)) {
     NSLog(@"[orbis] mesh resources failed: %@", native);
     _assetNotes[native] = @"Its geometry or textures could not be loaded.";
+  } else {
+    _loadingResources = true;
   }
 
   // Deliberately not calling releaseSourceData: more instances can only be
@@ -4314,6 +4340,17 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 
 - (void)renderAtTime:(double)time {
   if (_disposed) return;
+
+  // Textures still arriving. Filament decodes them off this thread and hands
+  // them over here, so this has to be called until it says it is done —
+  // stopping early leaves an asset permanently half-textured.
+  if (_loadingResources) {
+    _resourceLoader->asyncUpdateLoad();
+    if (_resourceLoader->asyncGetLoadProgress() >= 1.0f) {
+      _loadingResources = false;
+    }
+  }
+
   try {
     [self drawAtTime:time];
   } catch (const std::exception &error) {

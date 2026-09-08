@@ -21,6 +21,8 @@ library;
 export 'src/example.dart'
     show Choice, Example, GalleryCamera, Setting, Toggle, ViewPoint;
 export 'src/examples/benchmark.dart' show BenchmarkExample;
+export 'src/examples/bistro.dart'
+    show BistroExteriorExample, BistroFixture, BistroInteriorExample;
 export 'src/examples/cameras.dart' show CamerasExample;
 export 'src/examples/crowd.dart' show CrowdExample;
 export 'src/examples/day_and_night.dart' show DayAndNightExample;
@@ -36,6 +38,7 @@ export 'src/examples/surface.dart' show SurfaceExample, linearOf;
 
 import 'src/example.dart';
 import 'src/examples/benchmark.dart';
+import 'src/examples/bistro.dart';
 import 'src/examples/cameras.dart';
 import 'src/examples/crowd.dart';
 import 'src/examples/day_and_night.dart';
@@ -71,5 +74,7 @@ List<Example> engineExamples() => [
   PipelineExample(),
   PostExample(),
   VideoExample(),
+  BistroExteriorExample(),
+  BistroInteriorExample(),
   BenchmarkExample(),
 ];
