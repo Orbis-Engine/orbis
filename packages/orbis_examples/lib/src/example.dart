@@ -187,17 +187,28 @@ class Choice extends StatelessWidget {
   final String label;
   final List<String> options;
   final String selected;
-  final ValueChanged<String> onSelect;
+
+  /// Null for a row that has nothing to act on yet. Shown greyed rather than
+  /// removed: a control that disappears takes with it the fact that it is
+  /// there at all, and the reader is left wondering what they have missed.
+  final ValueChanged<String>? onSelect;
 
   @override
   Widget build(BuildContext context) {
+    final answer = onSelect;
+    final live = answer != null;
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
           SizedBox(
             width: 96,
-            child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: live ? null : const Color(0xFF6A7385)),
+            ),
           ),
           Expanded(
             child: Wrap(
@@ -206,7 +217,7 @@ class Choice extends StatelessWidget {
               children: [
                 for (final option in options)
                   GestureDetector(
-                    onTap: () => onSelect(option),
+                    onTap: live ? () => answer(option) : null,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 9,
@@ -214,7 +225,9 @@ class Choice extends StatelessWidget {
                       ),
                       decoration: BoxDecoration(
                         color: option == selected
-                            ? const Color(0xFFC25E22)
+                            ? (live
+                                  ? const Color(0xFFC25E22)
+                                  : const Color(0xFF4A3226))
                             : const Color(0xFF232833),
                         borderRadius: BorderRadius.circular(4),
                       ),
@@ -223,8 +236,8 @@ class Choice extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 11.5,
                           color: option == selected
-                              ? Colors.white
-                              : const Color(0xFF98A2B3),
+                              ? (live ? Colors.white : const Color(0xFF9A8B82))
+                              : Color(live ? 0xFF98A2B3 : 0xFF5C6472),
                         ),
                       ),
                     ),
@@ -245,17 +258,53 @@ class Toggle extends StatelessWidget {
     required this.label,
     required this.value,
     required this.onChanged,
+    this.note,
+    this.enabled = true,
   });
 
   final String label;
   final bool value;
   final ValueChanged<bool> onChanged;
 
+  /// What this setting currently means, under it.
+  ///
+  /// For the switches whose two states are not equally obvious: "night" is
+  /// clear enough, but which of a hundred lights that turns on is not, and
+  /// the difference is the whole point of the switch.
+  final String? note;
+
+  /// Off for a setting that has nothing to act on yet — a light's colour
+  /// while the lights are out. Shown rather than hidden, because a control
+  /// that disappears takes with it the fact that it exists.
+  final bool enabled;
+
   @override
-  Widget build(BuildContext context) => Choice(
-    label: label,
-    options: const ['Off', 'On'],
-    selected: value ? 'On' : 'Off',
-    onSelect: (option) => onChanged(option == 'On'),
-  );
+  Widget build(BuildContext context) {
+    final row = Choice(
+      label: label,
+      options: const ['Off', 'On'],
+      selected: value ? 'On' : 'Off',
+      onSelect: enabled ? (option) => onChanged(option == 'On') : null,
+    );
+
+    final saying = note;
+    if (saying == null) return row;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row,
+        Padding(
+          padding: const EdgeInsets.only(left: 96, bottom: 2),
+          child: Text(
+            saying,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              fontSize: 11,
+              color: Colors.white.withValues(alpha: enabled ? 0.5 : 0.28),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }

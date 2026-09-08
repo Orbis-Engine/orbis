@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0
+
+- A model's files are handed to the loader rather than left for it to open.
+  Opening them itself is deprecated and says so once per resource — four
+  hundred lines for one scene, which buries whatever the log was for. They
+  are memory-mapped rather than read: the alternative holds every resource at
+  once, because all of them must be handed over before the load begins, and
+  for the largest scene here that is three hundred and fifty megabytes of
+  memory the system cannot reclaim. A mapping is backed by the file, so the
+  cost is the pages the decoder is touching.
+- A file whose name is percent-encoded in the glTF is now found. The URI was
+  used as a path unchanged, so a texture called `brick wall.png` was looked
+  for under `brick%20wall.png` and reported missing — which is the one kind
+  of wrong that sounds authoritative.
+
 ## 0.6.0
 
 - A material can carry a second surface and choose between them per pixel,

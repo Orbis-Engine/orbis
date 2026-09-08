@@ -519,43 +519,35 @@ class BistroExteriorExample extends BistroExample {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
+        Toggle(
+          label: 'Walk',
           value: walking,
-          title: const Text('Walk the street'),
-          subtitle: Text(
-            walking ? 'On foot, looking around' : 'Drag to orbit instead',
-          ),
+          note: walking ? 'On foot, looking around' : 'Drag to orbit instead',
           onChanged: (value) {
             walking = value;
             changed();
           },
         ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
+        Toggle(
+          label: 'Night',
           value: night,
-          title: const Text('Night'),
-          subtitle: Text(
-            night
-                ? '${fixtures.length} point lights'
-                : 'One sun at 100,000 lux',
-          ),
+          note: night
+              ? '${fixtures.length} point lights'
+              : 'One sun at 100,000 lux',
           onChanged: (value) {
             night = value;
             changed();
           },
         ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
+        Toggle(
+          label: 'Festoon',
           value: festoon,
-          title: const Text('Festoon lights'),
-          subtitle: const Text('The small coloured bulbs'),
-          onChanged: night
-              ? (value) {
-                  festoon = value;
-                  changed();
-                }
-              : null,
+          note: 'The small coloured bulbs',
+          enabled: night,
+          onChanged: (value) {
+            festoon = value;
+            changed();
+          },
         ),
         if (night) ...[
           const SizedBox(height: 8),
@@ -709,11 +701,10 @@ class BistroInteriorExample extends BistroExample {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
+        Toggle(
+          label: 'Wine',
           value: wine,
-          title: const Text('Wine dressing'),
-          subtitle: const Text('The variant with the bottles and glasses'),
+          note: 'The variant with the bottles and glasses',
           onChanged: (value) {
             wine = value;
             changed();

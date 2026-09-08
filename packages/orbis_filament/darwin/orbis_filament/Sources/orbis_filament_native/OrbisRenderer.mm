@@ -41,6 +41,11 @@
 #include <utils/EntityManager.h>
 #include <utils/Panic.h>
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -1638,14 +1643,21 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       // Data URIs carry their own bytes and embedded resources have no URI at
       // all; only a file on disk can be missing.
       if ([uri hasPrefix:@"data:"]) continue;
+
+      // A glTF URI is a URI, so a space in a file name arrives as %20. The
+      // path has to be the decoded form or the file is looked for under a
+      // name nothing on disk has — and the answer would be "missing", which
+      // is the one kind of wrong that sounds authoritative.
+      NSString *name = [uri stringByRemovingPercentEncoding] ?: uri;
       // Relative to the glTF, which is what a glTF URI is relative to.
       NSString *full = [[native stringByDeletingLastPathComponent]
-          stringByAppendingPathComponent:uri];
-      if (![[NSFileManager defaultManager] fileExistsAtPath:full]) {
+          stringByAppendingPathComponent:name];
+
+      if (![self provideResource:full as:uris[i]]) {
         missing++;
         // A few names, not four hundred. The count is the number that
         // matters and the names are only there to recognise them by.
-        if (sample.count < 3) [sample addObject:uri.lastPathComponent];
+        if (sample.count < 3) [sample addObject:name.lastPathComponent];
       }
     }
     if (missing > 0) {
@@ -1671,6 +1683,55 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   entry.all.push_back(first);
   entry.spare.push_back(first);
   return &entry;
+}
+
+/// Hands one of a model's files to the loader, mapped rather than read.
+///
+/// Returns whether the file was there, which is the question the caller is
+/// asking — a model that names four hundred textures and finds none of them
+/// still loads, and still draws, in black.
+///
+/// Two reasons to do this rather than let the loader open the file itself.
+/// The first is that opening it itself is deprecated, and says so once per
+/// resource: four hundred lines of it for one scene, which buries whatever
+/// the log was actually for. The second is that this is where the file name
+/// is already being resolved to check it exists, so the bytes are free.
+///
+/// Mapped, not read. The alternative is `addResourceData` over four hundred
+/// files that come to three hundred and fifty megabytes, all of it held at
+/// once because every resource has to be handed over before the load begins —
+/// and that is dirty memory the system cannot reclaim. A mapping is backed by
+/// the file: the kernel pages in what the decoder touches and evicts it again
+/// under pressure, so the cost is the pages in flight rather than the whole
+/// asset.
+- (BOOL)provideResource:(NSString *)path as:(const char *)uri {
+  const int file = open(path.fileSystemRepresentation, O_RDONLY);
+  if (file < 0) return NO;
+
+  struct stat facts;
+  if (fstat(file, &facts) != 0 || facts.st_size <= 0) {
+    close(file);
+    return NO;
+  }
+
+  const size_t size = (size_t)facts.st_size;
+  void *pages = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, file, 0);
+  // The mapping keeps its own reference to the file, so the descriptor is not
+  // needed past this point whether or not the mapping worked.
+  close(file);
+  if (pages == MAP_FAILED) return NO;
+
+  // Sequentially, once: this is a decoder reading a texture from front to
+  // back and never coming back to it, which is the one access pattern where
+  // saying so is worth the call.
+  madvise(pages, size, MADV_SEQUENTIAL);
+
+  _resourceLoader->addResourceData(
+      uri,
+      filament::backend::BufferDescriptor(
+          pages, size,
+          [](void *buffer, size_t length, void *) { munmap(buffer, length); }));
+  return YES;
 }
 
 /// A copy of a mesh to give an object, from the pool if one is spare.
