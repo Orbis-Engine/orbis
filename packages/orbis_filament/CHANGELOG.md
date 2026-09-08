@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0
+
+- A scene is told what is wrong with *it*, not with every scene loaded since
+  the renderer started. A file that could not be read is still remembered —
+  re-reading it every frame to find out it is still missing would be four
+  hundred failed opens a second — but remembering is not reporting, and
+  "the file could not be read" was appearing over a street that had loaded
+  perfectly because a different example had failed a minute earlier.
+- A frame already on its way to the engine's thread turns back when its
+  viewport is disposed, rather than drawing into a texture that has been
+  unregistered. Ordering used to be implicit because all of this happened on
+  one thread; it is not implicit any more.
+
 ## 0.8.0
 
 - The engine has a thread of its own, and the application no longer stops

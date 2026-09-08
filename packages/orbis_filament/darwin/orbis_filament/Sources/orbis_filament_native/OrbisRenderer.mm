@@ -4895,11 +4895,34 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 }
 
 - (NSDictionary<NSString *, NSString *> *)notes {
-  // Two sources, one answer. An unreadable file stays reported until it is
-  // fixed, because it is read once; a light the scene has too many of stops
-  // being reported the moment the scene stops having too many.
+  // What is wrong with *this* scene.
+  //
+  // A file that could not be read is remembered for as long as the renderer
+  // lives, because it is only read once and re-reading it every frame to
+  // find out it is still missing would be four hundred failed opens a
+  // second. But remembering it is not the same as reporting it: a scene that
+  // does not name that file has nothing wrong with it, and saying otherwise
+  // put "the file could not be read" over a street that had loaded perfectly,
+  // because a different example had failed a minute earlier.
+  //
+  // So the memory is kept and the answer is filtered to the files the scene
+  // in front of us actually asks for.
+  NSMutableSet<NSString *> *asked = [NSMutableSet set];
+  for (const auto &pair : _drawn) {
+    if (!pair.second.path.empty()) {
+      [asked addObject:@(pair.second.path.c_str())];
+    }
+  }
+
   NSMutableDictionary<NSString *, NSString *> *all =
-      [NSMutableDictionary dictionaryWithDictionary:_assetNotes];
+      [NSMutableDictionary dictionary];
+  [_assetNotes enumerateKeysAndObjectsUsingBlock:^(NSString *path,
+                                                   NSString *saying, BOOL *) {
+    if ([asked containsObject:path]) all[path] = saying;
+  }];
+
+  // These two are already about the scene as it stands rather than about a
+  // file, so they are reported as they are.
   [all addEntriesFromDictionary:_objectNotes];
   [all addEntriesFromDictionary:_lightNotes];
   return all;
