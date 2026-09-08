@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0
+
+- Blocks is a world you are in rather than one you look at. WASD and space to
+  walk and jump, drag to look, click to dig and right-click to put a block
+  back. The world is a grid of bytes now instead of a list of what to draw —
+  the moment somebody can dig, "what is at this point" is asked constantly, by
+  the body falling and by every ray under the crosshair, and a grid answers
+  that in one lookup rather than sixty thousand comparisons. Only blocks with
+  air beside them are drawn, which in a world of solid hills is about an
+  eighth of them.
+
 ## 0.12.0
 
 - Two whole small worlds rather than one technique each.
