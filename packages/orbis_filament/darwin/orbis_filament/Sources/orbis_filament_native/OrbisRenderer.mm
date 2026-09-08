@@ -21,6 +21,8 @@
 #include <filament/Texture.h>
 #include <filament/TextureSampler.h>
 #include <filament/SwapChain.h>
+
+#import "OrbisSurface.h"
 #include <filament/TransformManager.h>
 #include <filament/VertexBuffer.h>
 #include <filament/View.h>
@@ -506,20 +508,6 @@ constexpr uint16_t kIndices[36] = {
     16, 17, 18, 18, 19, 16, 20, 21, 22, 22, 23, 20,
 };
 
-/// An IOSurface-backed BGRA buffer — the format Filament's Apple swap chain
-/// requires and the one Flutter's compositor can adopt without a readback.
-CVPixelBufferRef CreatePixelBuffer(uint32_t width, uint32_t height) {
-  NSDictionary *attributes = @{
-    (NSString *)kCVPixelBufferIOSurfacePropertiesKey : @{},
-    (NSString *)kCVPixelBufferMetalCompatibilityKey : @YES,
-  };
-  CVPixelBufferRef buffer = nullptr;
-  CVReturn result = CVPixelBufferCreate(
-      kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
-      (__bridge CFDictionaryRef)attributes, &buffer);
-  return result == kCVReturnSuccess ? buffer : nullptr;
-}
-
 /// One image a pass draws into, and everything needed to keep it.
 ///
 /// Rebuilt when its size changes and not otherwise: a render target is a
@@ -847,7 +835,7 @@ static constexpr NSUInteger kMaxPostParams = 128;
   float _mistThickness;
   float3 _mistCentre;
 
-  CVPixelBufferRef _buffers[kOrbisBufferCount];
+  OrbisSurface *_surface;
   SwapChain *_swapChains[kOrbisBufferCount];
   NSInteger _backIndex;
   NSInteger _presentedIndex;
@@ -918,6 +906,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
 - (nullable instancetype)initWithWidth:(uint32_t)width height:(uint32_t)height {
   if (!(self = [super init])) return nil;
+
+  // Before Filament, because starting Filament allocates through it.
+  _surface = OrbisCreateSurface();
 
   // Filament reports misuse by throwing, and an uncaught throw here would take
   // the whole application down rather than the one viewport that failed. The
@@ -4211,29 +4202,13 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 }
 
 - (void)allocateBuffers {
-  for (int i = 0; i < kOrbisBufferCount; i++) {
-    _buffers[i] = CreatePixelBuffer(_width, _height);
-    _swapChains[i] =
-        _buffers[i] ? _engine->createSwapChain(
-                          (void *)_buffers[i],
-                          SwapChain::CONFIG_APPLE_CVPIXELBUFFER)
-                    : nullptr;
-  }
+  _surface->allocate(_engine, _width, _height, _swapChains, kOrbisBufferCount);
   _backIndex = 0;
   _presentedIndex = -1;
 }
 
 - (void)releaseBuffers {
-  for (int i = 0; i < kOrbisBufferCount; i++) {
-    if (_swapChains[i]) {
-      _engine->destroy(_swapChains[i]);
-      _swapChains[i] = nullptr;
-    }
-    if (_buffers[i]) {
-      CVPixelBufferRelease(_buffers[i]);
-      _buffers[i] = nullptr;
-    }
-  }
+  _surface->release(_engine, _swapChains, kOrbisBufferCount);
 }
 
 - (void)applyViewportSize {
@@ -4482,47 +4457,19 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     const double elapsed = CFAbsoluteTimeGetCurrent() - _startedAt;
     NSLog(@"[orbis] 60 frames in %.2fs (%.1f ms each)", elapsed,
           elapsed * 1000.0 / 60.0);
-    // The app is sandboxed, so this goes to the container's temporary
-    // directory rather than anywhere the caller might name.
-    NSString *path =
-        [NSTemporaryDirectory() stringByAppendingPathComponent:@"orbis_frame.png"];
-    [self writeBuffer:_buffers[_presentedIndex] toPath:path.UTF8String];
+    _surface->writeFrame(_presentedIndex);
   }
-}
-
-- (void)writeBuffer:(CVPixelBufferRef)buffer toPath:(const char *)path {
-  if (!buffer) return;
-  CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
-  CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-  CGContextRef context = CGBitmapContextCreate(
-      CVPixelBufferGetBaseAddress(buffer), CVPixelBufferGetWidth(buffer),
-      CVPixelBufferGetHeight(buffer), 8, CVPixelBufferGetBytesPerRow(buffer),
-      space, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
-  CGImageRef image = CGBitmapContextCreateImage(context);
-  CFURLRef url = CFURLCreateFromFileSystemRepresentation(
-      nullptr, (const UInt8 *)path, strlen(path), false);
-  CGImageDestinationRef destination =
-      CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, nullptr);
-  CGImageDestinationAddImage(destination, image, nullptr);
-  BOOL wrote = CGImageDestinationFinalize(destination);
-  NSLog(@"[orbis] frame %d (%zux%zu) -> %s : %@", _frameCount,
-        CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer), path,
-        wrote ? @"written" : @"REFUSED");
-  CFRelease(destination);
-  CFRelease(url);
-  CGImageRelease(image);
-  CGContextRelease(context);
-  CGColorSpaceRelease(space);
-  CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
 }
 
 - (nullable CVPixelBufferRef)copyPresentedBuffer {
   [_presentLock lock];
-  CVPixelBufferRef buffer =
-      _presentedIndex >= 0 ? _buffers[_presentedIndex] : nullptr;
-  if (buffer) CVPixelBufferRetain(buffer);
+  // Opaque on the way out of the surface and concrete here, which is the one
+  // place on this platform that is entitled to know: the plugin hands it
+  // straight to Flutter's texture registry, and the registry wants a
+  // CVPixelBuffer.
+  void *buffer = _surface->retainPresented(_presentedIndex);
   [_presentLock unlock];
-  return buffer;
+  return (CVPixelBufferRef)buffer;
 }
 
 - (void)dispose {
@@ -4646,6 +4593,11 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   _engine->destroy(_renderer);
   Engine::destroy(&_engine);
   _engine = nullptr;
+
+  // After the engine, because releasing the buffers needs it — the surface
+  // owns the images and the engine owns the chains onto them.
+  delete _surface;
+  _surface = nullptr;
 }
 
 - (NSDictionary<NSString *, NSString *> *)notes {
