@@ -1748,6 +1748,39 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   return costs[costs.size() / 2];
 }
 
+/// What recent frames cost this renderer on the CPU, in milliseconds.
+///
+/// The other half of the answer. A frame has two costs and they fail
+/// differently: the GPU number moves when the picture gets more expensive to
+/// draw, and this one moves when the renderer gets more expensive to *drive* —
+/// a scene reconciled less carefully, an allocation per frame that was not
+/// there before, work done per object that used to be done per scene. A change
+/// that leaves the picture identical can double this and never touch the GPU.
+///
+/// Filament already records beginFrame and endFrame, so this costs nothing to
+/// collect. Median rather than mean, for the same reason as the GPU number: a
+/// mean is dragged about by the one frame in thirty that hit a hitch, and what
+/// anybody wants to know is what a frame usually costs.
+- (double)cpuMilliseconds {
+  if (_disposed) return 0;
+
+  const auto history = _renderer->getFrameInfoHistory(16);
+  std::vector<double> costs;
+  costs.reserve(history.size());
+
+  for (const auto &frame : history) {
+    // Both ends have to be real. A frame still in flight reports PENDING, and
+    // treating that as a timestamp gives a duration of minus several years.
+    if (frame.beginFrame > 0 && frame.endFrame > frame.beginFrame) {
+      costs.push_back(double(frame.endFrame - frame.beginFrame) / 1.0e6);
+    }
+  }
+
+  if (costs.empty()) return 0;
+  std::sort(costs.begin(), costs.end());
+  return costs[costs.size() / 2];
+}
+
 - (BOOL)hasPopulations {
   return !_populations.empty();
 }
@@ -4452,11 +4485,17 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 
   if (due) {
     _dumped = true;
-    // What sixty frames actually cost, so a change to the sky can be judged
-    // on its price as well as on how it looks.
-    const double elapsed = CFAbsoluteTimeGetCurrent() - _startedAt;
-    NSLog(@"[orbis] 60 frames in %.2fs (%.1f ms each)", elapsed,
-          elapsed * 1000.0 / 60.0);
+    // The steady-state cost of a frame, not the average since launch.
+    //
+    // This line used to divide the whole elapsed time by a hard-coded sixty,
+    // which was wrong twice: it reported half the true cost whenever the dump
+    // was asked for at frame thirty — which is what CI asks for — and even
+    // with the right divisor it averaged in engine startup, the first frame's
+    // shader compilation and the buffer allocation. An average polluted by
+    // one-off costs cannot show a small regression, which is the only thing
+    // anybody would use it for.
+    NSLog(@"[orbis] frame %d: cpu %.2f ms, gpu %.2f ms (median of recent)",
+          _frameCount, [self cpuMilliseconds], [self gpuMilliseconds]);
     _surface->writeFrame(_presentedIndex);
   }
 }

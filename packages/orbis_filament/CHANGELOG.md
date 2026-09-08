@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2
+
+- `cpuMilliseconds` reports what a frame costs to *drive*, beside the
+  existing `gpuMilliseconds` for what it costs to draw. Read from timings
+  Filament already keeps, so it is free to collect.
+- Fixes the frame-cost report, which divided elapsed time by a hard-coded
+  sixty — halving the figure whenever the dump was asked for at frame
+  thirty — and averaged in engine startup and first-frame shader
+  compilation.
+
 ## 0.2.1
 
 - Presentation sits behind an `OrbisSurface` interface rather than being
