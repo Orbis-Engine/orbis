@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1
+
+- An object drawn without a material no longer leaves two samplers unbound.
+  The defaults were set from a second, hand-written list of the maps a lit
+  surface has, and the blend maps were added to the other one — so a material
+  that never went through the map loop, which is what an object with no
+  material or an unreadable mesh gets, declared two samplers nobody bound.
+  Filament reports that on every draw, which came to a few hundred lines a
+  second in the editor. There is one list now, so the two cannot disagree.
+
 ## 0.7.0
 
 - A model's files are handed to the loader rather than left for it to open.
