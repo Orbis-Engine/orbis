@@ -99,9 +99,13 @@ class BistroFixture {
 /// twenty-five to one is most of why the reference images read as evening
 /// rather than as a stage set.
 const _fittings = <String, ({Color colour, double lumens, double reach})>{
-  'street': (colour: Color(0xFFFFB870), lumens: 2400, reach: 14),
-  'spot': (colour: Color(0xFFFFD5A8), lumens: 700, reach: 7),
-  'sign': (colour: Color(0xFFFFE0B0), lumens: 500, reach: 6),
+  // Reach is a cull distance as much as a physical one — beyond it the light
+  // contributes nothing and the renderer can skip it. Set too short it is
+  // visible as a hard edge where a pool of light stops, and set to what a
+  // lamp really lights, the pools overlap the way they do in a street.
+  'street': (colour: Color(0xFFFFB870), lumens: 5200, reach: 28),
+  'spot': (colour: Color(0xFFFFD5A8), lumens: 1400, reach: 12),
+  'sign': (colour: Color(0xFFFFE0B0), lumens: 900, reach: 9),
   'orange': (colour: Color(0xFFFF8A3D), lumens: 70, reach: 4),
   'red': (colour: Color(0xFFFF4A4A), lumens: 70, reach: 4),
   'white': (colour: Color(0xFFFFF2DC), lumens: 90, reach: 4),
@@ -131,7 +135,7 @@ class BistroExteriorExample extends BistroExample {
 
   @override
   ViewPoint get viewpoint =>
-      const ViewPoint(distance: 26, pitch: 0.13, height: 5, yaw: 1.9);
+      const ViewPoint(distance: 22, pitch: 0.20, height: 3, yaw: 2.2);
 
   bool night = true;
   bool festoon = true;
@@ -139,6 +143,9 @@ class BistroExteriorExample extends BistroExample {
   /// The film speed, which at night is the dial that decides whether there is
   /// a picture at all.
   double iso = 1600;
+
+  /// The moon, in lux. A real full moon is about a quarter of one.
+  double moon = 4;
 
   @override
   OrbisScene scene(OrbisCamera camera, double seconds) {
@@ -165,16 +172,25 @@ class BistroExteriorExample extends BistroExample {
           ),
         );
       }
-      // Not black between the lamps. A moonless street with nothing but point
-      // sources reads as objects floating in a void, because nothing lights
-      // the sky or the far side of anything.
+      // The moon, at what a moon actually is.
+      //
+      // This was 900 lux, and that one number was most of why the night did
+      // not read as night: it is roughly three thousand times a real full
+      // moon, so it flooded every surface evenly and the hundred lamps —
+      // which are the whole point — contributed almost nothing next to it.
+      // A scene lit flat has no depth, and no amount of tuning the lamps
+      // fixes a fill light that is drowning them.
+      //
+      // Three lux is generous for a full moon and leaves the street dark
+      // enough that a lamp pools light on it, which is what the reference
+      // images actually look like.
       lights.add(
         OrbisLight(
           key: 1,
           kind: OrbisLightKind.directional,
           direction: Vector3(-0.3, -1, 0.4)..normalize(),
           colour: linearOf(const Color(0xFF9FB4D8)),
-          intensity: 900,
+          intensity: moon,
           castShadows: true,
         ),
       );
@@ -214,10 +230,11 @@ class BistroExteriorExample extends BistroExample {
           ? OrbisSky(
               zenith: linearOf(const Color(0xFF0B1224)),
               horizon: linearOf(const Color(0xFF243046)),
-              // Not zero. A night sky still casts light, and a scene with an
-              // ambient of nothing has pitch-black shadows that no amount of
-              // lamp makes look like evening.
-              ambient: 120,
+              // Not zero — a night sky still casts light, and shadows with
+              // nothing in them read as holes. But close to it: this is the
+              // sky's own glow, not a stage wash, and at anything like a
+              // hundred lux it stops being night.
+              ambient: 12,
               showBody: false,
             )
           : OrbisSky(
@@ -237,11 +254,21 @@ class BistroExteriorExample extends BistroExample {
           // street is a hundred and seventy metres across.
           distance: 120,
         ),
+        // Four samples. A street full of railings, shutters and thin lamp
+        // posts is nothing but edges, and edges are what a single sample
+        // makes a mess of.
+        samples: 4,
       ),
-      // Bloom at night only. It is what makes a small bright bulb read as a
+      // Bloom at night only — it is what makes a small bright bulb read as a
       // light rather than as a white dot, and in daylight it only fogs the
-      // image.
-      post: OrbisPostProcess(bloom: OrbisBloom(enabled: night, strength: 0.14)),
+      // image. Occlusion always: it is the cheapest stand-in for the contact
+      // darkening that bounced light would give, and without it everything
+      // sits on the ground rather than in it.
+      post: OrbisPostProcess(
+        antiAliasing: AntiAliasing.fxaa,
+        bloom: OrbisBloom(enabled: night, strength: 0.22, levels: 7),
+        occlusion: OrbisOcclusion(enabled: true),
+      ),
     );
   }
 

@@ -109,6 +109,51 @@ PYTHON
   done
 done
 
+# Repair the metalness the conversion lost.
+#
+# Every one of the 132 materials omits metallicFactor, and glTF says the
+# default is 1.0 — fully metallic. None carries a metallic-roughness texture
+# either, so there is nothing to vary it. Taken at its word, every cobblestone,
+# plaster wall, wooden shutter and canvas awning in this scene is solid metal.
+#
+# A metal has no diffuse response. It shows reflections and nothing else, so
+# with a flat ambient and no environment map to reflect it renders black — at
+# midnight and equally at a hundred thousand lux of noon, which is what finally
+# gave it away. The base colour textures are still sampled, but on a metal they
+# tint the reflection rather than colour the surface, so the cobbles are
+# invisible whatever the lighting does.
+#
+# This is a lossy FBX conversion rather than anything the renderer did. The
+# source was Lumberyard's specular workflow, which has no metalness channel to
+# carry across, and the converter wrote no value instead of writing zero.
+#
+# Dielectric is the right guess for almost all of it — stone, plaster, wood,
+# fabric, glass. The handful whose names say metal keep it.
+for scene in "${SCENES[@]}"; do
+  python3 - "$INTO/$scene.gltf" <<'PYTHON'
+import json, sys
+
+path = sys.argv[1]
+doc = json.load(open(path))
+METAL = ('metal', 'chrome', 'steel', 'iron', 'brass', 'copper', 'aluminium',
+         'aluminum', 'silver', 'gold')
+fixed = kept = 0
+for m in doc.get('materials', []):
+    pbr = m.setdefault('pbrMetallicRoughness', {})
+    if 'metallicFactor' in pbr:
+        continue
+    if any(w in (m.get('name') or '').lower() for w in METAL):
+        pbr['metallicFactor'] = 1.0
+        kept += 1
+    else:
+        pbr['metallicFactor'] = 0.0
+        fixed += 1
+if fixed or kept:
+    json.dump(doc, open(path, 'w'))
+print(f"  {fixed} materials made dielectric, {kept} left metallic")
+PYTHON
+done
+
 # The lights, out of the geometry that emits.
 #
 # The scene has no KHR_lights_punctual — the Falcor scene file carried the

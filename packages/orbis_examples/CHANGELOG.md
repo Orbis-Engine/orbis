@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0
+
+- The Bistro's materials are repaired on fetch. All 132 omitted
+  `metallicFactor`, and glTF's default is 1.0 — so every cobblestone, wall
+  and awning was rendering as solid metal, which has no diffuse response and
+  goes black whatever the lighting does.
+- Night is lit like night: the moon at a few lux rather than 900, which was
+  three thousand times a real one and flattened the whole street.
+- Sliders for moonlight and film speed, four-sample anti-aliasing, ambient
+  occlusion, and a shadow distance — `OrbisShadows.distance` defaults to 0,
+  which leaves the shadow map covering nothing.
+
 ## 0.2.0
 
 - Two Bistro examples, exterior and interior, lighting the Amazon Lumberyard
