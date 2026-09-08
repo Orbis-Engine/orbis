@@ -19,20 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party software linked into builds of this engine:
-
-  Filament, by Google — Apache License 2.0.
-  https://github.com/google/filament
-
-  The renderer links Filament's libraries, so an application built with
-  Orbis contains Filament code and carries its licence. This notice is that
-  licence's requirement, not an attribution of design.
-
-  A prebuilt Filament.xcframework is committed under
-  packages/orbis_filament/macos/orbis_filament/third_party/ because the
-  current Xcode cannot regenerate it. That is redistribution rather than
-  linking, so a full copy of the Apache License 2.0 is included at
-  LICENSES/Apache-2.0.txt, which is what section 4 of that licence asks for.

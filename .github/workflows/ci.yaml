@@ -55,6 +55,23 @@ jobs:
       - name: Analyze and test
         run: ./tool/check_flutter.sh
 
+  # Every package whose library changed has to say so in its version and its
+  # changelog. Only on pull requests: it compares a branch against master, and
+  # on master there is nothing to compare to.
+  versions:
+    name: Versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history, because the check needs the merge base — and a
+          # shallow clone does not have one, which makes this pass by
+          # accident rather than on purpose.
+          fetch-depth: 0
+      - run: ./tool/check_versions.sh origin/${{ github.base_ref }}
+
   # Formatting is its own job so a formatting failure never hides a real one.
   format:
     runs-on: ubuntu-latest
