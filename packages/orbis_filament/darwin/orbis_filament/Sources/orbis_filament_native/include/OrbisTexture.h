@@ -1,5 +1,12 @@
-#import <FlutterMacOS/FlutterMacOS.h>
 #import <Foundation/Foundation.h>
+#import <TargetConditionals.h>
+
+// The same protocol, in a differently-named module on each platform.
+#if TARGET_OS_IPHONE
+#import <Flutter/Flutter.h>
+#else
+#import <FlutterMacOS/FlutterMacOS.h>
+#endif
 
 #import "OrbisRenderer.h"
 

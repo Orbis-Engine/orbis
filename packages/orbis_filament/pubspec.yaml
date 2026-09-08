@@ -2,7 +2,7 @@ name: orbis_filament
 description: >-
   Filament rendering for Orbis, composited by Flutter. Renders into
   IOSurface-backed pixel buffers the texture registry adopts without a readback.
-version: 0.1.0
+version: 0.2.0
 publish_to: none
 
 environment:
@@ -21,6 +21,13 @@ dev_dependencies:
 
 flutter:
   plugin:
+    # Both Apple platforms reach the same sources in darwin/, through the
+    # symlinks in ios/ and macos/. Flutter also offers sharedDarwinSource for
+    # this, but the symlinks are what the macOS build here is already known to
+    # work with, including under Swift Package Manager, and swapping mechanism
+    # and adding a platform in one change makes a failure ambiguous.
     platforms:
       macos:
+        pluginClass: OrbisFilamentPlugin
+      ios:
         pluginClass: OrbisFilamentPlugin

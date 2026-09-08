@@ -31,7 +31,8 @@ if !FileManager.default.fileExists(atPath: here.appendingPathComponent(filament)
 let package = Package(
   name: "orbis_filament",
   platforms: [
-    .macOS("10.15")
+    .macOS("10.15"),
+    .iOS("13.0"),
   ],
   products: [
     .library(name: "orbis-filament", targets: ["orbis_filament"])
@@ -72,8 +73,12 @@ let package = Package(
         .linkedFramework("QuartzCore"),
         .linkedFramework("IOSurface"),
         // bluegl's fallback backend; Filament links it whether or not the
-        // Metal backend is the one in use.
-        .linkedFramework("OpenGL"),
+        // Metal backend is the one in use. macOS only — iOS has no OpenGL
+        // framework at all, and the iOS slice of the xcframework does not
+        // contain bluegl, so there is nothing there to satisfy. Without the
+        // condition the iOS build compiles every file and then fails at the
+        // link with "Framework 'OpenGL' not found".
+        .linkedFramework("OpenGL", .when(platforms: [.macOS])),
       ]
     ),
     .binaryTarget(name: "Filament", path: filament),

@@ -19,9 +19,13 @@ without a trip through the CPU.
   # The compiled material is an implementation detail and defines a symbol, so
   # it stays out of the umbrella header the module exposes.
   s.public_header_files = "#{src}/orbis_filament_native/include/*.h"
-  s.dependency 'FlutterMacOS'
+  s.ios.dependency 'Flutter'
+  s.osx.dependency 'FlutterMacOS'
 
-  s.platform = :osx, '10.15'
+  # Both Apple platforms from one spec, which is what the darwin/ layout is
+  # for. 13.0 on iOS because that is where Filament's own minimum sits.
+  s.ios.deployment_target = '13.0'
+  s.osx.deployment_target = '10.15'
   s.swift_version = '5.0'
   s.static_framework = true
 
@@ -33,36 +37,36 @@ without a trip through the CPU.
   # once by hand. Package.swift says so if it has not been.
   s.prepare_command = 'bash setup.sh'
 
-  # Listed rather than globbed: the SDK ships thirty archives and this is the
-  # dozen the renderer actually needs. Vendored rather than passed as linker
-  # flags, because a static pod archives instead of linking and flags set on
-  # the pod target never reach the application that consumes it.
-  lib = 'third_party/filament-mac/filament/lib/arm64'
-  #
-  # The second row is what gltfio pulls in: the loader itself, the pre-built
-  # ubershaders it makes materials from, and the decoders for the formats a
-  # glTF file can carry its geometry and textures in.
-  s.vendored_libraries = %w[
-    filament backend bluegl bluevk filabridge filaflat
-    utils geometry smol-v ibl abseil zstd
-
-    gltfio_core uberarchive uberzlib dracodec meshoptimizer ktxreader
-    stb basis_transcoder mikktspace
-  ].map { |name| "#{lib}/lib#{name}.a" }
+  # The xcframework setup.sh builds, rather than a list of archives from one
+  # platform's SDK. It carries a slice per platform — macOS, an iOS device and
+  # the iOS simulator — so one line here serves all three, and the same
+  # artifact serves Swift Package Manager, which can take nothing else.
+  s.vendored_frameworks = 'orbis_filament/third_party/Filament.xcframework'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'CLANG_CXX_LANGUAGE_STANDARD' => 'c++17',
     'HEADER_SEARCH_PATHS' => [
+      # The headers are the same API on both platforms, and the mac SDK is
+      # fetched either way because it carries matc.
       '"$(PODS_TARGET_SRCROOT)/third_party/filament-mac/filament/include"',
       # Where the renderer's own headers moved to. A quoted include searches
       # the including file's directory, and that is no longer where they are.
       '"$(PODS_TARGET_SRCROOT)/orbis_filament/Sources/orbis_filament_native/include"',
     ].join(' '),
-    # Filament ships arm64 only in the mac release.
-    'EXCLUDED_ARCHS' => 'x86_64',
   }
-  s.user_target_xcconfig = { 'EXCLUDED_ARCHS' => 'x86_64' }
-  s.frameworks = 'Metal', 'MetalKit', 'CoreVideo', 'QuartzCore', 'IOSurface', 'OpenGL',
-                 'AVFoundation', 'CoreMedia', 'AudioToolbox'
+
+  # Filament ships arm64 only in the mac release, so an Intel slice cannot be
+  # built there. On iOS this must not be set: the simulator slice is a fat
+  # archive and excluding x86_64 would rule out running on an Intel Mac.
+  s.osx.pod_target_xcconfig = { 'EXCLUDED_ARCHS' => 'x86_64' }
+  s.osx.user_target_xcconfig = { 'EXCLUDED_ARCHS' => 'x86_64' }
+
+  # Metal on both. OpenGL is macOS-only and is there for Filament's GL backend,
+  # which iOS has no use for and no framework to link — asking for it is what
+  # made the first iOS build fail, at link, after everything had compiled.
+  shared = ['Metal', 'MetalKit', 'CoreVideo', 'QuartzCore', 'IOSurface',
+            'AVFoundation', 'CoreMedia', 'AudioToolbox']
+  s.ios.frameworks = shared
+  s.osx.frameworks = shared + ['OpenGL']
 end
