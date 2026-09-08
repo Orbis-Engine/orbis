@@ -1,6 +1,12 @@
-import CoreVideo
-import FlutterMacOS
 import Foundation
+
+#if os(iOS)
+  import Flutter
+  import QuartzCore
+#else
+  import CoreVideo
+  import FlutterMacOS
+#endif
 
 // Under CocoaPods the renderer is in this same module; under Swift Package
 // Manager it is its own target, because a package target holds one language
@@ -9,6 +15,67 @@ import Foundation
 #if canImport(orbis_filament_native)
   import orbis_filament_native
 #endif
+
+/// A once-per-refresh tick, from whichever display link this platform has.
+///
+/// The only part of the render loop that differs between the two: macOS has
+/// CVDisplayLink, which calls a C function on a thread of its own, and iOS has
+/// CADisplayLink, which targets a selector on a run loop. What is done with
+/// the tick is identical, so only the clock is behind the #if.
+private final class FrameClock {
+  private var onTick: (() -> Void)?
+
+  #if os(iOS)
+    private var link: CADisplayLink?
+
+    func start(_ tick: @escaping () -> Void) {
+      onTick = tick
+      // Added to the main run loop, so the tick arrives on the thread that
+      // owns the engine. That is not an optimisation — Filament's job system
+      // only accepts work from threads it has adopted.
+      let link = CADisplayLink(target: self, selector: #selector(fire))
+      link.add(to: .main, forMode: .common)
+      self.link = link
+    }
+
+    @objc private func fire() { onTick?() }
+
+    func stop() {
+      link?.invalidate()
+      link = nil
+      onTick = nil
+    }
+  #else
+    private var link: CVDisplayLink?
+
+    func start(_ tick: @escaping () -> Void) {
+      onTick = tick
+      // CVDisplayLink is soft-deprecated on recent macOS in favour of the
+      // NSView-attached variant, but that needs a view we do not own —
+      // Flutter owns the hierarchy and hands us only a texture id.
+      var link: CVDisplayLink?
+      guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess,
+            let link else { return }
+
+      CVDisplayLinkSetOutputCallback(link, { _, _, _, _, _, context in
+        guard let context else { return kCVReturnSuccess }
+        Unmanaged<FrameClock>.fromOpaque(context).takeUnretainedValue().onTick?()
+        return kCVReturnSuccess
+      }, Unmanaged.passUnretained(self).toOpaque())
+
+      CVDisplayLinkStart(link)
+      self.link = link
+    }
+
+    func stop() {
+      if let link {
+        CVDisplayLinkStop(link)
+        self.link = nil
+      }
+      onTick = nil
+    }
+  #endif
+}
 
 /// One 3D surface: a renderer, the texture Flutter samples, and the display
 /// link driving it.
@@ -21,7 +88,7 @@ private final class Viewport {
   let textureId: Int64
   private let renderer: OrbisRenderer
   private let registry: FlutterTextureRegistry
-  private var displayLink: CVDisplayLink?
+  private let clock = FrameClock()
   private let startedAt = CFAbsoluteTimeGetCurrent()
   private let frameLock = NSLock()
   private var framePending = false
@@ -40,21 +107,7 @@ private final class Viewport {
   var passTimings: [NSNumber] { renderer.passTimings }
 
   func start() {
-    // CVDisplayLink is soft-deprecated on recent macOS in favour of the
-    // NSView-attached variant, but that needs a view we do not own — Flutter
-    // owns the hierarchy and hands us only a texture id.
-    var link: CVDisplayLink?
-    guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess,
-          let link else { return }
-
-    CVDisplayLinkSetOutputCallback(link, { _, _, _, _, _, context in
-      guard let context else { return kCVReturnSuccess }
-      Unmanaged<Viewport>.fromOpaque(context).takeUnretainedValue().tick()
-      return kCVReturnSuccess
-    }, Unmanaged.passUnretained(self).toOpaque())
-
-    CVDisplayLinkStart(link)
-    displayLink = link
+    clock.start { [weak self] in self?.tick() }
   }
 
   /// Called on the display link's own thread, which does not own the engine.
@@ -299,10 +352,7 @@ private final class Viewport {
   var notes: [String: String] { renderer.notes }
 
   func dispose() {
-    if let displayLink {
-      CVDisplayLinkStop(displayLink)
-      self.displayLink = nil
-    }
+    clock.stop()
     renderer.dispose()
   }
 }
@@ -686,9 +736,18 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
   }
 
   public static func register(with registrar: FlutterPluginRegistrar) {
+    #if os(iOS)
+      // Methods on iOS, properties on macOS. The same two things, reached
+      // two ways, and the only reason this registration is not shared.
+      let messenger = registrar.messenger()
+      let textures = registrar.textures()
+    #else
+      let messenger = registrar.messenger
+      let textures = registrar.textures
+    #endif
     let channel = FlutterMethodChannel(
-      name: "orbis_filament", binaryMessenger: registrar.messenger)
-    let instance = OrbisFilamentPlugin(registry: registrar.textures)
+      name: "orbis_filament", binaryMessenger: messenger)
+    let instance = OrbisFilamentPlugin(registry: textures)
     registrar.addMethodCallDelegate(instance, channel: channel)
   }
 

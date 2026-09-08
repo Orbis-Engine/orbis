@@ -221,8 +221,13 @@ class _OrbisViewState extends State<OrbisView> {
 
   @override
   Widget build(BuildContext context) {
-    if (defaultTargetPlatform != TargetPlatform.macOS) {
-      return const _Notice('Orbis renders on macOS only so far.');
+    // Where the renderer's native side exists. Both Apple platforms share
+    // one implementation — the same Filament, the same Metal backend, the
+    // same CVPixelBuffer handed to the texture registry — so this is a list
+    // rather than a single platform, and the rest grows it as they land.
+    const drawable = {TargetPlatform.macOS, TargetPlatform.iOS};
+    if (!drawable.contains(defaultTargetPlatform)) {
+      return const _Notice('Orbis renders on macOS and iOS so far.');
     }
 
     return LayoutBuilder(
