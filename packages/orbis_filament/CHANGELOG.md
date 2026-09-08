@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.3
+
+- A `.gltf` finds its textures again. The resource loader was given the
+  directory holding the file where Filament wants the file itself — it takes
+  the last component off to get the directory, so a scene at
+  `assets/bistro/Bistro.gltf` looked in `assets/Textures` and found none of
+  its four hundred images. Every `.gltf` with external textures was affected;
+  `.glb` was not, because it carries its own.
+
 ## 0.2.2
 
 - `cpuMilliseconds` reports what a frame costs to *drive*, beside the

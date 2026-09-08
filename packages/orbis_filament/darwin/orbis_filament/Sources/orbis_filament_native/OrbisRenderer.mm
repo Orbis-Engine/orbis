@@ -1586,12 +1586,20 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     return nullptr;
   }
 
-  // The base path, so a .gltf can find the .bin and the textures sitting
+  // The glTF's own path, so it can find the .bin and the textures sitting
   // beside it. A .glb carries everything and does not need it.
-  const std::string base = path.substr(0, path.find_last_of('/') + 1);
+  //
+  // The file, not the directory it is in. Filament takes the last component
+  // off this to get the directory, so handing it a directory throws away the
+  // real one: a scene at assets/bistro/Bistro.gltf looked for its textures in
+  // assets/Textures, found none of the four hundred, and drew every surface
+  // black. Nothing failed — loadResources still returned true — so the scene
+  // rendered in the right shape with no colour in it, and in daylight at a
+  // hundred thousand lux it was still black, which is what finally said this
+  // was not a lighting problem.
   _resourceLoader->setConfiguration({
       .engine = _engine,
-      .gltfPath = base.c_str(),
+      .gltfPath = path.c_str(),
       .normalizeSkinningWeights = true,
   });
 

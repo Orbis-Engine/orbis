@@ -226,7 +226,17 @@ class BistroExteriorExample extends BistroExample {
               ambient: 22000,
             ),
       pipeline: OrbisPipeline(
-        shadows: OrbisShadows(kind: OrbisShadowKind.soft, cascades: 4, mapSize: 2048),
+        shadows: OrbisShadows(
+          kind: OrbisShadowKind.soft,
+          cascades: 4,
+          mapSize: 2048,
+          // Not the default. `distance` is Filament's shadowFar, and it
+          // defaults to zero — which over four cascades leaves the shadow map
+          // covering nothing, so every surface samples as shadowed and the
+          // scene renders black under a hundred thousand lux of sun. This
+          // street is a hundred and seventy metres across.
+          distance: 120,
+        ),
       ),
       // Bloom at night only. It is what makes a small bright bulb read as a
       // light rather than as a white dot, and in daylight it only fogs the
@@ -244,27 +254,42 @@ class BistroExteriorExample extends BistroExample {
           contentPadding: EdgeInsets.zero,
           value: night,
           title: const Text('Night'),
-          subtitle: Text(night
-              ? '${fixtures.length} point lights'
-              : 'One sun at 100,000 lux'),
-          onChanged: (value) { night = value; changed(); },
+          subtitle: Text(
+            night
+                ? '${fixtures.length} point lights'
+                : 'One sun at 100,000 lux',
+          ),
+          onChanged: (value) {
+            night = value;
+            changed();
+          },
         ),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           value: festoon,
           title: const Text('Festoon lights'),
           subtitle: const Text('The small coloured bulbs'),
-          onChanged: night ? (value) { festoon = value; changed(); } : null,
+          onChanged: night
+              ? (value) {
+                  festoon = value;
+                  changed();
+                }
+              : null,
         ),
         if (night) ...[
           const SizedBox(height: 8),
-          Text('Film speed — ISO ${iso.round()}',
-              style: const TextStyle(fontSize: 12)),
+          Text(
+            'Film speed — ISO ${iso.round()}',
+            style: const TextStyle(fontSize: 12),
+          ),
           Slider(
             value: iso,
             min: 100,
             max: 6400,
-            onChanged: (value) { iso = value; changed(); },
+            onChanged: (value) {
+              iso = value;
+              changed();
+            },
           ),
           const Text(
             'At ISO 100 this street is black. The lamps have not changed; '
@@ -376,7 +401,13 @@ class BistroInteriorExample extends BistroExample {
         drawn: false,
       ),
       pipeline: OrbisPipeline(
-        shadows: OrbisShadows(kind: OrbisShadowKind.soft, mapSize: 2048),
+        shadows: OrbisShadows(
+          kind: OrbisShadowKind.soft,
+          mapSize: 2048,
+          // A room rather than a street, so the shadows only have to reach
+          // across it — but not zero, which covers nothing at all.
+          distance: 30,
+        ),
       ),
       post: OrbisPostProcess(
         bloom: OrbisBloom(enabled: true, strength: 0.1),
@@ -397,15 +428,24 @@ class BistroInteriorExample extends BistroExample {
           value: wine,
           title: const Text('Wine dressing'),
           subtitle: const Text('The variant with the bottles and glasses'),
-          onChanged: (value) { wine = value; changed(); },
+          onChanged: (value) {
+            wine = value;
+            changed();
+          },
         ),
         const SizedBox(height: 8),
-        Text('Ambient — ${ambient.round()} lux', style: const TextStyle(fontSize: 12)),
+        Text(
+          'Ambient — ${ambient.round()} lux',
+          style: const TextStyle(fontSize: 12),
+        ),
         Slider(
           value: ambient,
           min: 0,
           max: 2000,
-          onChanged: (value) { ambient = value; changed(); },
+          onChanged: (value) {
+            ambient = value;
+            changed();
+          },
         ),
       ],
     );
@@ -444,8 +484,10 @@ class _Missing extends StatelessWidget {
         child: const Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('The Bistro is not here yet.',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            Text(
+              'The Bistro is not here yet.',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
             SizedBox(height: 8),
             Text(
               'It is half a gigabyte and belongs to somebody else, so it is '
