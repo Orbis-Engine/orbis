@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.0
+
+- The Bistro exterior no longer judders. It was asking for four shadow
+  cascades of two thousand square and contact shadows, which came to fifty-five
+  milliseconds a frame with the camera looking down the street — twelve frames
+  a second, arriving unevenly, which is what a judder is. Three cascades of a
+  thousand and no contact shadows is within a millisecond and a half of having
+  no shadows at all, and the walk now runs at a hundred and twenty frames a
+  second with one percent unevenness. Resolution is adaptive as well, so what
+  is in view changing between a wall and a hundred and seventy metres of street
+  changes the pixel count rather than the frame rate.
+
 ## 0.9.0
 
 - `Toggle` takes a `note` and an `enabled`, and the Bistro examples use it

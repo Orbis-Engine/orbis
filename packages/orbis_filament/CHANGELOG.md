@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0
+
+- A model says what its load cost, in the three parts it is made of: reading
+  the file, parsing it and building its buffers, and decoding its textures.
+  "It takes a few seconds" is not something anybody can act on — those are
+  three different costs with three different fixes. The Bistro exterior turns
+  out to be 1 ms, 1455 ms and 1933 ms, which says immediately that the file
+  is not the problem and the JSON is not either.
+
 ## 0.7.1
 
 - An object drawn without a material no longer leaves two samplers unbound.

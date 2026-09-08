@@ -795,6 +795,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// Whether any asset is still decoding its textures. An ivar block takes
   /// no initialiser, so this is zeroed by the runtime like the rest.
   bool _loadingResources;
+  /// What the load in flight is, and when it started, for the timing report.
+  NSString *_loadingName;
+  size_t _loadingResourceCount;
+  double _loadingFrom;
 
   /// Loaded glTF files, by path. Kept for the life of the renderer: a scene
   /// arrives on every drag, and the parse is the expensive part.
@@ -1591,6 +1595,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   Mesh &entry = _meshes[path];
 
   NSString *native = [NSString stringWithUTF8String:path.c_str()];
+  const double readFrom = CFAbsoluteTimeGetCurrent();
   NSData *data = [NSData dataWithContentsOfFile:native];
   if (data == nil) {
     NSLog(@"[orbis] mesh unreadable: %@", native);
@@ -1598,6 +1603,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     return nullptr;
   }
 
+  const double parsedFrom = CFAbsoluteTimeGetCurrent();
   gltfio::FilamentInstance *first = nullptr;
   entry.asset = _assetLoader->createInstancedAsset(
       static_cast<const uint8_t *>(data.bytes),
@@ -1690,6 +1696,20 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     _assetNotes[native] = @"Its geometry or textures could not be loaded.";
   } else {
     _loadingResources = true;
+    // What the load cost, in the three parts it is actually made of.
+    //
+    // "It takes a few seconds" is not a thing anybody can act on: reading the
+    // file, parsing it, and decoding its textures are three different costs
+    // with three different fixes, and until they are separated the only
+    // available move is to guess. Printed rather than measured on request
+    // because a load happens once and the number is wanted the first time,
+    // not after somebody has reproduced it.
+    _loadingName = native;
+    _loadingResourceCount = entry.asset->getResourceUriCount();
+    _loadingFrom = CFAbsoluteTimeGetCurrent();
+    NSLog(@"[orbis] %@: read %.0f ms, parsed %.0f ms, %zu files to decode",
+          native.lastPathComponent, (parsedFrom - readFrom) * 1000,
+          (_loadingFrom - parsedFrom) * 1000, _loadingResourceCount);
   }
 
   // Deliberately not calling releaseSourceData: more instances can only be
@@ -4494,6 +4514,12 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     _resourceLoader->asyncUpdateLoad();
     if (_resourceLoader->asyncGetLoadProgress() >= 1.0f) {
       _loadingResources = false;
+      if (_loadingFrom > 0) {
+        NSLog(@"[orbis] %@: %zu files decoded in %.0f ms",
+              _loadingName.lastPathComponent, _loadingResourceCount,
+              (CFAbsoluteTimeGetCurrent() - _loadingFrom) * 1000);
+        _loadingFrom = 0;
+      }
     }
   }
 
