@@ -15,6 +15,14 @@
   is how far the world has come, and a piece that goes behind the camera comes
   round the front by a modulo. The runner does not run — it stays where it is
   and the world moves past.
+## 0.11.0
+
+- `Example` carries a `note`, so any example can say what the renderer told it
+  about the scene. That report used to reach one example and be dropped for
+  all the others, which is why a Bistro whose files had never been downloaded
+  showed a grey placeholder cube and said nothing — and a scene that draws the
+  wrong thing in silence reads as the engine being broken rather than as a
+  file being absent.
 
 ## 0.10.0
 

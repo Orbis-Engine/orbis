@@ -37,6 +37,35 @@ class AppleSurface final : public OrbisSurface {
           kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
           (__bridge CFDictionaryRef)attributes, &buffer);
       _buffers[i] = made == kCVReturnSuccess ? buffer : nullptr;
+
+      // Painted opaque black before anybody can see it.
+      //
+      // A fresh buffer's contents are whatever the memory held, and a buffer
+      // is handed to Flutter the moment it is presented — so a frame that is
+      // interrupted, or a resize that reallocates while something is still
+      // reading, can put uninitialised memory on screen. It arrives as flat
+      // white with magenta through it, which looks exactly like a texture
+      // failing to load and is not.
+      //
+      // Costs one clear per buffer, three times, when a viewport is made or
+      // resized. Nothing per frame.
+      if (_buffers[i] &&
+          CVPixelBufferLockBaseAddress(_buffers[i], 0) == kCVReturnSuccess) {
+        uint8_t *pixels =
+            (uint8_t *)CVPixelBufferGetBaseAddress(_buffers[i]);
+        const size_t stride = CVPixelBufferGetBytesPerRow(_buffers[i]);
+        const size_t rows = CVPixelBufferGetHeight(_buffers[i]);
+        if (pixels) {
+          // Opaque rather than clear: a transparent frame lets whatever is
+          // behind the texture show through, which is its own confusion.
+          memset(pixels, 0, stride * rows);
+          for (size_t row = 0; row < rows; row++) {
+            uint8_t *line = pixels + row * stride;
+            for (size_t x = 3; x < stride; x += 4) line[x] = 0xFF;
+          }
+        }
+        CVPixelBufferUnlockBaseAddress(_buffers[i], 0);
+      }
       chains[i] = _buffers[i] ? engine->createSwapChain(
                                     (void*)_buffers[i],
                                     filament::SwapChain::CONFIG_APPLE_CVPIXELBUFFER)

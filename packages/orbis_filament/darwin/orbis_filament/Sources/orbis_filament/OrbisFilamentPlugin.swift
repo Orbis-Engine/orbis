@@ -167,6 +167,15 @@ private final class Viewport {
   private let frameLock = NSLock()
   private var framePending = false
 
+  /// Set before teardown, and read on the engine's thread.
+  ///
+  /// A frame can already be on its way to that thread when a viewport is
+  /// disposed — the display link fires, the block is posted, and the texture
+  /// is unregistered before the block runs. Flutter then says it cannot mark
+  /// a texture it no longer has, once per frame in flight. Ordering used to
+  /// be implicit because all of this happened on one thread.
+  private var stopped = false
+
   init(textureId: Int64, renderer: OrbisRenderer,
        registry: FlutterTextureRegistry, engine: EngineThread) {
     self.textureId = textureId
@@ -207,6 +216,11 @@ private final class Viewport {
     let time = CFAbsoluteTimeGetCurrent() - startedAt
     engine.async { [weak self] in
       guard let self else { return }
+      self.frameLock.lock()
+      let gone = self.stopped
+      self.frameLock.unlock()
+      if gone { return }
+
       self.renderer.render(atTime: time)
       self.registry.textureFrameAvailable(self.textureId)
       self.frameLock.lock()
@@ -444,9 +458,15 @@ private final class Viewport {
 
   /// What the scene asked for that could not be given, and why.
   func dispose() {
-    // Stopped first, so no frame is posted after the engine has gone; and the
-    // teardown itself waits, because the caller unregisters the texture as
-    // soon as this returns and the renderer is still holding its buffers.
+    // Said first, so a frame already on its way to the engine's thread turns
+    // back rather than drawing into a texture that is about to be taken away.
+    frameLock.lock()
+    stopped = true
+    frameLock.unlock()
+
+    // Then the clock, so no more are posted; and the teardown itself waits,
+    // because the caller unregisters the texture as soon as this returns and
+    // the renderer is still holding its buffers.
     clock.stop()
     engine.sync { self.renderer.dispose() }
   }

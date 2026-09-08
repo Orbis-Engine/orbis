@@ -36,7 +36,6 @@ class MeshesExample extends Example {
   bool spinning = true;
 
   /// What the renderer said about the file, if anything.
-  String? note;
 
   @override
   OrbisScene scene(OrbisCamera camera, double seconds) {
@@ -120,14 +119,6 @@ class MeshesExample extends Example {
             changed();
           },
         ),
-        if (note != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              note!,
-              style: const TextStyle(fontSize: 11.5, color: Color(0xFFE58A4B)),
-            ),
-          ),
       ],
     );
   }
