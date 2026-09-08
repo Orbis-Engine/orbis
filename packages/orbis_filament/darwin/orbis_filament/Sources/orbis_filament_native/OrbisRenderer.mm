@@ -294,6 +294,21 @@ struct Drawn {
 constexpr size_t kMaterialParams = 26;
 constexpr size_t kMaterialMaps = 7;
 
+/// The maps a lit surface has, in the order the Dart side packs them.
+///
+/// At file scope because two places need them and a second copy is how the
+/// blend maps came to be missing from one of them: a material that had never
+/// been given them left two samplers unset, which Filament reports on every
+/// draw. Hundreds of lines a second, for a surface that was drawing correctly.
+constexpr const char *kMapNames[kMaterialMaps] = {
+    "baseColorMap", "normalMap",         "metallicRoughnessMap",
+    "occlusionMap", "emissiveMap",       "blendBaseColorMap",
+    "blendMaskMap"};
+constexpr const char *kMapFlags[kMaterialMaps] = {
+    "hasBaseColorMap", "hasNormalMap",      "hasMetallicRoughnessMap",
+    "hasOcclusionMap", "hasEmissiveMap",    "hasBlendBaseColorMap",
+    "hasBlendMaskMap"};
+
 /// One material as the renderer holds it between frames.
 ///
 /// The instance is the expensive part and the flags decide which compiled
@@ -2346,15 +2361,20 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   instance->setParameter("ambientOcclusion", 1.0f);
   instance->setParameter("normalScale", 1.0f);
   instance->setParameter("uvTransform", float4{1.0f, 1.0f, 0.0f, 0.0f});
-  static const char *kNames[5] = {"baseColorMap", "normalMap",
-                                  "metallicRoughnessMap", "occlusionMap",
-                                  "emissiveMap"};
-  static const char *kFlags[5] = {"hasBaseColorMap", "hasNormalMap",
-                                  "hasMetallicRoughnessMap", "hasOcclusionMap",
-                                  "hasEmissiveMap"};
-  for (int i = 0; i < 5; i++) {
-    instance->setParameter(kNames[i], blank, sampler);
-    instance->setParameter(kFlags[i], false);
+
+  // Not blending, said explicitly. A material declares these whether or not
+  // it uses them, and one left unset is undefined rather than nought.
+  instance->setParameter("blendMode", int32_t{0});
+  instance->setParameter("blendAmount", 0.0f);
+  instance->setParameter("blendSharpness", 8.0f);
+  instance->setParameter("blendUvTransform", float4{1.0f, 1.0f, 0.0f, 0.0f});
+
+  // Every map, from the one list. A sampler a material declares and nobody
+  // binds is reported on every draw — and the report is right: what it would
+  // sample is undefined.
+  for (size_t i = 0; i < kMaterialMaps; i++) {
+    instance->setParameter(kMapNames[i], blank, sampler);
+    instance->setParameter(kMapFlags[i], false);
   }
 }
 
@@ -2543,17 +2563,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
         float4{params[22], params[23], params[24], params[25]});
   }
 
-  // The names are in the order the packed maps are, which is the order the
-  // Dart side lists them. A shorter list for the unlit surface, because it
-  // has nothing to do with the other four.
-  static const char *kMapNames[kMaterialMaps] = {
-      "baseColorMap",  "normalMap",         "metallicRoughnessMap",
-      "occlusionMap",  "emissiveMap",       "blendBaseColorMap",
-      "blendMaskMap"};
-  static const char *kMapFlags[kMaterialMaps] = {
-      "hasBaseColorMap",   "hasNormalMap",      "hasMetallicRoughnessMap",
-      "hasOcclusionMap",   "hasEmissiveMap",    "hasBlendBaseColorMap",
-      "hasBlendMaskMap"};
+  // kMapNames and kMapFlags are in the order the Dart side packs them. Only
+  // the first is set for an unlit surface, which has nothing to do with the
+  // rest.
 
   // What a pass drew has one level and is never tiled, so it is bound with a
   // sampler of its own rather than the material's.
