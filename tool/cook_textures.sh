@@ -19,6 +19,27 @@
 # Cooked once and kept. This is slow — a few seconds a texture — and is meant
 # to be run when the assets change, not when the application starts.
 #
+# **What it did not do, measured on the Bistro.** Four hundred and five
+# textures came out at 1024 with eleven mip levels, 348 MB down to 181 MB, no
+# failures — and the scene loaded no faster:
+#
+#     original, 2048, no mips     2112 ms, 3270 ms
+#     cooked, 1024, eleven mips   3161 ms
+#
+# Three times fewer texels and nothing gained. These are Basis textures, which
+# are transcoded to a GPU format on every load, and pre-computing mips in a
+# format that has to be transcoded moves mip generation off the GPU, where it
+# is nearly free, and onto the CPU transcoder, where it is not: four hundred
+# and five transcodes become four and a half thousand. The pixels saved pay
+# for the levels added and no more.
+#
+# It cost quality there too. That scene's foliage is alpha-cutout, and a binary
+# alpha through a halving and a block encoder comes back with blocky leaves.
+#
+# So: worth running to fit a size budget, and worth running once the output is
+# a GPU-native format, where mips upload for nothing and the transcode goes
+# away entirely. Not worth running to make a Basis scene load faster.
+#
 # Usage: cook_textures.sh <folder> [max dimension, default 1024]
 set -uo pipefail
 cd "$(dirname "$0")/.."
