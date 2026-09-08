@@ -11,7 +11,7 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 /// which is the point: what any of them needs to work is what is written in
 /// its own file, and that is what the code panel shows.
 abstract class Example {
-  const Example();
+  Example();
 
   /// What it is called in the list.
   String get name;
@@ -35,6 +35,21 @@ abstract class Example {
 
   /// The lines that matter, as somebody would write them.
   String get code;
+
+  /// What the renderer had to say about this example's scene, or null.
+  ///
+  /// A model that could not be read still draws — as a placeholder cube,
+  /// because somewhere visible beats nowhere — and the renderer reports why.
+  /// That report used to be delivered to one example and dropped for all the
+  /// others, so a Bistro whose files had never been downloaded showed a grey
+  /// box and said nothing, which reads as the engine being broken rather than
+  /// as a file being absent.
+  ///
+  /// On the base class rather than on the examples that expect one: whether
+  /// there is something to say is the renderer's business, not the example's,
+  /// and an example that never expected a note is exactly the one whose
+  /// silence is unhelpful.
+  String? note;
 
   /// Anything drawn over the scene rather than in it.
   ///
