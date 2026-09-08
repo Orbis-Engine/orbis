@@ -208,79 +208,134 @@ class BistroExteriorExample extends BistroExample {
   /// work that way.
   (Vector3, Vector3) _walk(double seconds) {
     const pace = 1.3; // metres a second
-    const turnTime = 2.6; // long enough to read as a turn, not a spin
+    const turnTime = 3.2; // long enough to read as a turn, not a spin
 
-    var total = 0.0;
-    for (var i = 0; i < _path.length - 1; i++) {
-      total += (_path[i + 1] - _path[i]).length;
-    }
+    final total = _length;
     final walkTime = total / pace;
     final cycle = (walkTime + turnTime) * 2;
     final t = seconds % cycle;
 
-    // Where along the path, and which way round.
-    final double travelled;
-    var backwards = false;
-    var turning = 0.0; // 0 to 1 through a turn
+    // How far along, and how far through a turn. The yaw is built up as one
+    // number that only ever increases through the cycle — heading, then
+    // heading plus half a turn, then a whole one — because a yaw that jumps
+    // back is exactly the snap this had before: the return leg faced one way
+    // and the turn at the end of it started from the other.
+    final double distance;
+    var extraTurn = 0.0;
     if (t < walkTime) {
-      travelled = t * pace;
+      distance = t * pace;
     } else if (t < walkTime + turnTime) {
-      travelled = total;
-      turning = (t - walkTime) / turnTime;
+      distance = total;
+      extraTurn = _ease((t - walkTime) / turnTime);
     } else if (t < walkTime * 2 + turnTime) {
-      travelled = total - (t - walkTime - turnTime) * pace;
-      backwards = true;
+      distance = total - (t - walkTime - turnTime) * pace;
+      extraTurn = 1;
     } else {
-      travelled = 0;
-      backwards = true;
-      turning = (t - walkTime * 2 - turnTime) / turnTime;
+      distance = 0;
+      extraTurn = 1 + _ease((t - walkTime * 2 - turnTime) / turnTime);
     }
 
-    var along = 0.0;
-    var at = _path.first;
-    var heading = _path.last - _path.first;
-    for (var i = 0; i < _path.length - 1; i++) {
-      final leg = _path[i + 1] - _path[i];
-      final length = leg.length;
-      if (travelled <= along + length || i == _path.length - 2) {
-        final f = ((travelled - along) / length).clamp(0.0, 1.0);
-        at = _path[i] + leg * f;
-        heading = leg;
-        break;
-      }
-      along += length;
-    }
-    heading = heading.normalized();
+    final (at, tangent) = _onPath(distance);
 
-    // Which way the body faces: along the path, or back down it.
-    var facing = math.atan2(heading.z, heading.x);
-    if (backwards) facing += math.pi;
+    // The way the body faces. On the return leg the tangent still points the
+    // way the path was drawn, so it is the half-turns that carry the
+    // direction — one of them says "walking back", two says "round again".
+    final yaw = math.atan2(tangent.z, tangent.x) + math.pi * extraTurn;
 
-    // And through a turn, half a rotation eased in and out — a turn that
-    // starts and stops at zero speed, which is what makes it read as a person
-    // rather than a tripod being swung.
-    if (turning > 0) {
-      final eased = turning * turning * (3 - 2 * turning); // smoothstep
-      facing += math.pi * (backwards ? eased - 1 : eased);
-    }
-
-    // Looking about, on top of where the body is pointed. Two slow waves so
-    // it never repeats in an obvious rhythm.
+    // Looking about, on top of that. Two slow waves so it never settles into
+    // an obvious rhythm, and gentle enough not to fight the turn.
     final sweep =
-        math.sin(seconds * 0.19) * 0.5 + math.sin(seconds * 0.081) * 0.22;
-    final yaw = facing + sweep;
+        math.sin(seconds * 0.19) * 0.42 + math.sin(seconds * 0.081) * 0.2;
 
     // The bob. Two steps a second at a walking pace, and a couple of
-    // centimetres — enough to feel, not enough to notice. It stops during a
-    // turn, because somebody turning on the spot is not taking strides.
-    final walkingNow = turning == 0 ? 1.0 : 0.0;
-    final bob = math.sin(seconds * math.pi * 2 * 1.8) * 0.022 * walkingNow;
+    // centimetres — enough to feel, not enough to notice. It fades out
+    // through a turn rather than stopping dead, because somebody turning on
+    // the spot is not taking strides but does not freeze either.
+    final striding =
+        1 - (extraTurn % 1 == 0 ? 0.0 : math.sin(extraTurn % 1 * math.pi));
+    final bob = math.sin(seconds * math.pi * 2 * 1.8) * 0.022 * striding;
     final eye = Vector3(at.x, at.y + bob, at.z);
 
-    // A little up, because the interesting part of this street is above eye
-    // level — the lamps, the signage, the balconies.
+    final look = yaw + sweep;
+    // A little up: the interesting part of this street is above eye level —
+    // the lamps, the signage, the balconies.
     final rise = 0.14 + math.sin(seconds * 0.13) * 0.09;
-    return (eye, eye + Vector3(math.cos(yaw) * 8, rise * 8, math.sin(yaw) * 8));
+    return (
+      eye,
+      eye + Vector3(math.cos(look) * 8, rise * 8, math.sin(look) * 8),
+    );
+  }
+
+  /// Smoothstep: starts and stops at zero speed.
+  static double _ease(double t) {
+    final c = t.clamp(0.0, 1.0);
+    return c * c * (3 - 2 * c);
+  }
+
+  /// The path, as a curve rather than a set of corners.
+  ///
+  /// A polyline was the first attempt and it is where the snap came from:
+  /// between waypoints the direction is constant, and at each one it changes
+  /// instantly. Four waypoints is three sharp turns, however smoothly the
+  /// ends of the walk are handled.
+  ///
+  /// Catmull-Rom passes through every point it is given and has a continuous
+  /// tangent, so both where the camera is and where it is pointed change
+  /// smoothly the whole way along.
+  static Vector3 _spline(double u) {
+    final n = _path.length;
+    final scaled = u.clamp(0.0, 1.0) * (n - 1);
+    final i = scaled.floor().clamp(0, n - 2);
+    final f = scaled - i;
+    // The ends are doubled up so the curve starts and finishes where the
+    // waypoints do rather than overshooting past them.
+    final p0 = _path[(i - 1).clamp(0, n - 1)];
+    final p1 = _path[i];
+    final p2 = _path[(i + 1).clamp(0, n - 1)];
+    final p3 = _path[(i + 2).clamp(0, n - 1)];
+    return (p1 * 2.0 +
+            (p2 - p0) * f +
+            (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * (f * f) +
+            (p1 * 3.0 - p0 - p2 * 3.0 + p3) * (f * f * f)) *
+        0.5;
+  }
+
+  /// The curve's length, measured once by walking it.
+  static final double _length = () {
+    var total = 0.0;
+    var previous = _spline(0);
+    for (var i = 1; i <= _samples; i++) {
+      final next = _spline(i / _samples);
+      total += (next - previous).length;
+      previous = next;
+    }
+    return total;
+  }();
+
+  static const int _samples = 240;
+
+  /// Where the curve is `distance` metres along it, and which way it points.
+  ///
+  /// Walked at constant speed rather than at constant parameter: a spline's
+  /// parameter is not its arc length, so stepping it evenly speeds up through
+  /// the straights and dawdles round the bends.
+  static (Vector3, Vector3) _onPath(double distance) {
+    var travelled = 0.0;
+    var previous = _spline(0);
+    for (var i = 1; i <= _samples; i++) {
+      final u = i / _samples;
+      final next = _spline(u);
+      final step = (next - previous).length;
+      if (travelled + step >= distance) {
+        final f = step > 0 ? (distance - travelled) / step : 0.0;
+        final at = previous + (next - previous) * f;
+        return (at, (next - previous).normalized());
+      }
+      travelled += step;
+      previous = next;
+    }
+    final end = _spline(1);
+    return (end, (end - _spline(1 - 1 / _samples)).normalized());
   }
 
   @override

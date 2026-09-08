@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0
+
+- The walk follows a Catmull-Rom curve rather than a polyline, so both where
+  the camera is and where it points change smoothly the whole way. Measured
+  at a peak of 84 degrees a second with no discontinuity across the cycle;
+  the polyline turned instantly at every one of its waypoints.
+- Walked at constant speed rather than constant parameter, because a spline's
+  parameter is not its arc length.
+
 ## 0.5.0
 
 - The walk turns round instead of reversing. Four phases on a loop — down the
