@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0
+
+- A model whose files are missing says so. The resource loader reports
+  success whether or not a texture opened, so a scene could lose all four
+  hundred of its images and still load "fine", drawing untextured with
+  nothing anywhere explaining why. The files a model names are now checked
+  before the load and the count comes back through `onSceneNotes`.
+
+## 0.4.0
+
+- A shadow distance of zero no longer blacks out the scene. The cascade
+  splits fell back to a hundred metres when it was unset while `shadowFar`
+  stayed at zero, so the two described different distances and every surface
+  sampled as shadowed — a sun at 100,000 lux lit nothing. Both now use the
+  same fallback.
+- Anisotropic filtering on the renderer's own textures. Ground seen at a
+  glancing angle is most of what a camera at head height sees, and a mipmap
+  chain alone either crawls or turns to mud a few metres out.
+
 ## 0.3.0
 
 - Textures load asynchronously. `loadResources` decoded every image before it

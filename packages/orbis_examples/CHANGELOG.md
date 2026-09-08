@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- The walk no longer goes through walls. The route is searched rather than
+  chosen — a breadth-first flood of the open ground at half a metre, with the
+  curve then checked at six hundred points for half a metre of clearance.
+  Both earlier paths clipped: the polyline at 18 samples in 100, the curve
+  through it at 17.
+
 ## 0.6.0
 
 - The walk follows a Catmull-Rom curve rather than a polyline, so both where

@@ -174,38 +174,41 @@ class BistroExteriorExample extends BistroExample {
 
   /// Where the walk goes.
   ///
-  /// Not guessed, and not taken from the street lamps — that was the first
-  /// attempt and it walked straight through the restaurant, because the lamps
-  /// stand on the pavement with the building between them. These come from an
-  /// occupancy map of the scene: every primitive whose bounding box occupies
-  /// the height a person does, on a three-metre grid, which leaves the open
-  /// ground visible as the gaps. The street turns out to be a corridor about
-  /// six metres wide running past the restaurant front.
+  /// Searched, not chosen, and then checked. Two earlier attempts were
+  /// guesses dressed up as reasoning: the first followed the street lamps, on
+  /// the argument that lamps stand along a street — they stand on the
+  /// pavement, with the building between them, so it walked through the
+  /// restaurant. The second read an occupancy map by eye at three-metre
+  /// resolution and picked a corridor out of it, which clipped eighteen
+  /// samples in a hundred.
   ///
-  /// Conservative on purpose. Bounding boxes overstate what they cover, so
-  /// the real street is wider than the map says — and a path down the middle
-  /// of what the map calls open is a path that cannot clip a wall.
+  /// These come from a breadth-first search of the open ground: every
+  /// primitive occupying the height a person does becomes a solid box, the
+  /// free space around the plaza is flooded at half a metre with three
+  /// quarters of a metre of clearance, and the longest route through it is
+  /// what the walk follows. Two hundred and thirty-six square metres of
+  /// walkable ground, and fifty-six metres of walk in it.
+  ///
+  /// Twelve waypoints rather than five because the curve between them bows
+  /// outward, and a sparse set bows far enough to cut a corner into a wall —
+  /// at nine points the tightest clearance was zero. At these the curve keeps
+  /// half a metre from anything, measured at six hundred points along it,
+  /// which is what makes this a checked path rather than a third guess.
   static final _path = <Vector3>[
-    Vector3(-12.5, 1.7, -11),
-    Vector3(-12.0, 1.7, -5),
-    Vector3(-11.5, 1.7, 1),
-    Vector3(-10.0, 1.7, 7),
-    Vector3(-7.0, 1.7, 11),
+    Vector3(-4.0, 1.7, -12.0),
+    Vector3(-9.0, 1.7, -12.0),
+    Vector3(-10.0, 1.7, -8.0),
+    Vector3(-10.0, 1.7, -3.0),
+    Vector3(-10.0, 1.7, 2.0),
+    Vector3(-7.0, 1.7, 4.0),
+    Vector3(-6.0, 1.7, 8.0),
+    Vector3(-2.0, 1.7, 9.0),
+    Vector3(1.5, 1.7, 10.5),
+    Vector3(4.5, 1.7, 12.5),
+    Vector3(8.5, 1.7, 13.5),
+    Vector3(11.5, 1.7, 15.5),
   ];
 
-  /// Where somebody walking is at `seconds`, and what they are looking at.
-  ///
-  /// Four phases on a loop: down the street, turn round, back up it, turn
-  /// round again. The turn is the part that matters. Reversing along the path
-  /// and leaving the heading alone — which is what this did first — walks
-  /// somebody backwards up their own street at the same pace they came down
-  /// it, and the moment it changes direction is a jump rather than a
-  /// movement. A person stops, turns, and sets off again, so this does too.
-  ///
-  /// No state between frames: everything is a function of `seconds`, so the
-  /// walk is the same walk however the frames happen to fall, and scrubbing
-  /// to a moment gives that moment. Same reason the effects and the sequencer
-  /// work that way.
   (Vector3, Vector3) _walk(double seconds) {
     const pace = 1.3; // metres a second
     const turnTime = 3.2; // long enough to read as a turn, not a spin
@@ -461,11 +464,8 @@ class BistroExteriorExample extends BistroExample {
           kind: OrbisShadowKind.soft,
           cascades: 4,
           mapSize: 2048,
-          // Not the default. `distance` is Filament's shadowFar, and it
-          // defaults to zero — which over four cascades leaves the shadow map
-          // covering nothing, so every surface samples as shadowed and the
-          // scene renders black under a hundred thousand lux of sun. This
-          // street is a hundred and seventy metres across.
+          // A hundred and seventy metres of street, so the shadows are told
+          // to reach across it rather than left at the default.
           distance: 120,
           // Contact shadows. A cascaded map cannot resolve where a chair leg
           // meets the cobbles, so without these everything fine-grained
