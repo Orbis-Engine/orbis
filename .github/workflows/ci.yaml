@@ -135,6 +135,16 @@ jobs:
       # change — which is exactly how this job first failed. The viewport
       # depends on the renderer and nothing else, so the override is two
       # lines and owning them is cheaper than the coupling.
+      # Fetches the Filament SDK and compiles the materials into the C
+      # arrays the renderer includes. This runs from the podspec's
+      # prepare_command under CocoaPods, and Swift Package Manager has no
+      # equivalent hook — a package plugin runs sandboxed, with no network —
+      # so on the SPM path, which is now Flutter's default for macOS, nothing
+      # runs it and the build fails on a missing generated header. It is
+      # idempotent, so calling it here is free when the cache is warm.
+      - name: Fetch Filament and compile materials
+        run: bash orbis/packages/orbis_filament/macos/setup.sh
+
       - name: Point the viewport at this checkout
         run: |
           cat > orbis-examples/viewport/pubspec_overrides.yaml <<YAML
