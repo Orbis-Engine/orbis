@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.19.0
+
+- **Rectangular area lights.** `OrbisLightKind.area` is a panel that emits
+  from one face: a window, a softbox, a strip in a ceiling. It takes the
+  `width` and `height` of the rectangle and a `tangent` saying which way the
+  width runs, because a face alone leaves a panel free to spin in its own
+  plane and a strip light on its side is a different light.
+
+  Filament has no area light, so this one is shaded by the surface material
+  itself and handed back through `postLightingColor`. The maths is linearly
+  transformed cosines (Heitz, Dupuy, Hill and Neubelt, SIGGRAPH 2016): a
+  fitted matrix per roughness and viewing angle bends the clamped cosine lobe
+  into the GGX lobe, so integrating the rectangle against the *cosine* — which
+  has a closed form — answers for the rectangle against GGX, which does not.
+  One polygon integral per light, no marching and no sampling. The two fitted
+  tables are fetched by `setup.sh` in the authors' own packing, the way SMAA's
+  are; see `LICENSES/LTC.txt`.
+
+  Checked against physics rather than against a screenshot. Shrunk to four
+  centimetres a panel has to converge on a point light of the same flux, and
+  be **exactly four times** as bright — a one-sided panel puts its lumens into
+  pi steradians and a point puts them into 4pi. Measured on a common mask,
+  the ratio is **3.94**. Held at one flux and grown from 4 cm to 6 m, the
+  total light in frame stays put (93.6, 93.4, 86.6) while the lit area
+  spreads — the same light over more of the scene, which is what an area
+  light is for.
+
+  Two things worth knowing rather than discovering. It casts no shadow: it is
+  outside Filament's lighting, so nothing shadows it. And it lights the
+  standard surface only — a glTF file keeps its own materials, and those are
+  Filament's, not this one's.
+
+- Sixteen of them per view, past which the ones over the budget are reported
+  and light nothing. They are not free the way a punctual light is: a
+  rectangle is a polygon integral paid by every lit fragment, with no culling
+  in front of it.
 ## 0.18.0
 
 - **`OrbisField`: light kept in the world rather than on the screen.** A

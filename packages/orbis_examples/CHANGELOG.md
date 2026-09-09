@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.0
+
+- The Lights example has a fourth kind, **Panel**, with its two edges as
+  settings — so the thing area lights are for is visible by dragging: the
+  same lumens spread wider and softer as the panel grows, rather than getting
+  brighter.
 ## 0.18.0
 
 - **A new example, Irradiance field.** The same room as the bounced-light one

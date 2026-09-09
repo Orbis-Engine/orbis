@@ -19,6 +19,10 @@
 ///   ORBIS_SHARPEN          run the sharpen effect, 0 to 1, over the frame
 ///   ORBIS_EFFECT           an effect by name, shown on its own over the frame
 ///   ORBIS_SMAA=1           the whole three-pass SMAA chain
+///   ORBIS_LIGHT            which light the Lights example shows
+///   ORBIS_LUMENS           how bright it is
+///   ORBIS_PANEL_W / _H     the panel's size in metres
+///   ORBIS_CIRCLING=0       stop it going round, so two renders compare
 ///   ORBIS_BOUNCE_OFF=1     turn the Bounced light example's effect off
 ///   ORBIS_BOUNCE           with ORBIS_EFFECT=bounce, how much light bounces
 ///   ORBIS_BOUNCE_RADIUS    how far it looks, in metres
@@ -287,6 +291,18 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       final far = _number('ORBIS_RANGE');
       if (far != null) example.range = far;
       if (Platform.environment['ORBIS_TREES'] == '0') example.trees = false;
+    }
+    if (example is LightsExample) {
+      final kind = Platform.environment['ORBIS_LIGHT'];
+      if (kind != null) example.kind = kind;
+      final lumens = _number('ORBIS_LUMENS');
+      if (lumens != null) example.intensity = lumens;
+      example.panelWidth = _number('ORBIS_PANEL_W') ?? example.panelWidth;
+      example.panelHeight = _number('ORBIS_PANEL_H') ?? example.panelHeight;
+      // Still, so two renders of the same angle are the same picture.
+      if (Platform.environment['ORBIS_CIRCLING'] == '0') {
+        example.orbiting = false;
+      }
     }
     if (example is FieldExample) {
       example.intensity = _number('ORBIS_FIELD') ?? example.intensity;

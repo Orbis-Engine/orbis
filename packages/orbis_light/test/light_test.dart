@@ -142,17 +142,45 @@ void main() {
       expect(derived.falloffRadius, isNot(12));
     });
 
-    test('an area light says it was approximated', () {
-      final rendered = Light(type: LightType.area).toRenderer();
-      expect(
-        rendered.approximated,
-        isTrue,
-        reason:
-            'no target renderer has a true area light, and silently '
-            'substituting a point is how a scene stops matching its '
-            'reference without anyone knowing why',
-      );
+    test('a straight-edged area light is not approximated at all', () {
+      // It used to be: there was no true area light to convert to, so one
+      // arrived as a point and said so. The renderer shades rectangles now,
+      // and a square is a rectangle, so nothing is lost on the way.
+      final square = Light(type: LightType.area).toRenderer();
+      expect(square.kind, RendererLightKind.area);
+      expect(square.approximated, isFalse);
       expect(Light(type: LightType.point).toRenderer().approximated, isFalse);
+    });
+
+    test('a round area light is squared off, and says so', () {
+      // The closed form the shading uses is for polygons, so a disk has to
+      // become a rectangle. Silently substituting one is how a scene stops
+      // matching its reference without anyone knowing why.
+      final disk = Light(
+        type: LightType.area,
+        shape: AreaShape.disk,
+        sizeX: 2,
+      ).toRenderer();
+      expect(disk.kind, RendererLightKind.area);
+      expect(
+        disk.approximated,
+        isTrue,
+        reason: 'a disk is not a rectangle and the outline it reflects differs',
+      );
+      // Matched on area, not on bounding box: the square around a disk is
+      // over a quarter too big, and area is what sets the brightness.
+      expect(disk.width * disk.height, closeTo(math.pi * 1 * 1, 1e-9));
+    });
+
+    test('a rectangle keeps the edges it was given', () {
+      final rendered = Light(
+        type: LightType.area,
+        shape: AreaShape.rectangle,
+        sizeX: 3,
+        sizeY: 0.5,
+      ).toRenderer();
+      expect(rendered.width, 3);
+      expect(rendered.height, 0.5);
     });
 
     test('an approximated area light keeps a believable penumbra', () {
