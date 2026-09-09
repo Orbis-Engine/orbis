@@ -440,6 +440,10 @@ private final class Viewport {
       }
     }
 
+    if !scene.fieldParams.isEmpty {
+      renderer.applyField(scene.fieldParams, from: scene.fieldFrom)
+    }
+
     renderer.setSkyColour(scene.skyColour,
                           ambient: scene.ambient,
                           showBody: scene.showBody)
@@ -512,6 +516,8 @@ private struct Scene {
   let lightKinds: [Int32]
   let lightFlags: [Int32]
   let lightParams: [Float]
+  let fieldParams: [Float]
+  let fieldFrom: String
   let cameraPosition: [Float]
   let cameraTarget: [Float]
   let fieldOfView: Float
@@ -571,6 +577,7 @@ private struct Scene {
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
   private static let lightStride = 18
+  private static let fieldStride = 14
 
   /// How many floats a graph pass and a graph target take. Must match
   /// OrbisRenderGraph on the Dart side and the constants in the renderer.
@@ -636,6 +643,13 @@ private struct Scene {
           skyParams.count == Scene.skyStride,
           skyColour.count == 3,
           cameraPosition.count == 3, cameraTarget.count == 3 else { return nil }
+
+    // A field is optional in the same way the environment is.
+    let fieldParams =
+      (arguments["fieldParams"] as? FlutterStandardTypedData)?.floats ?? []
+    self.fieldParams =
+      fieldParams.count == Scene.fieldStride ? fieldParams : []
+    self.fieldFrom = arguments["fieldFrom"] as? String ?? ""
 
     // Not in the guard above: a scene without it is a scene with the
     // defaults, not a scene that fails to arrive.

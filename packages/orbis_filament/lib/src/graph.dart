@@ -155,7 +155,16 @@ enum OrbisEffect {
   /// shading, so it scales the light already there rather than being
   /// reflected by each surface's own colour — which is why it can tint a lit
   /// surface but can never light an unlit one.
-  bounce('Bounce');
+  bounce('Bounce'),
+
+  /// A target, put on the screen, and nothing else.
+  ///
+  /// The plainest pass there is, and the one that makes the others possible.
+  /// Anything that reads what the scene drew needs the scene drawn into a
+  /// target rather than onto the screen — and then needs something to put
+  /// that target on the screen. Without this the only way to present one is
+  /// to run an effect that also changes it.
+  copy('Copy');
 
   const OrbisEffect(this.label);
 

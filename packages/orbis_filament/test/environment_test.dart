@@ -3,6 +3,60 @@ import 'package:orbis_filament/orbis_filament.dart';
 import 'package:vector_math/vector_math_64.dart';
 
 void main() {
+  group('a world-space irradiance field', () {
+    OrbisScene sceneWith(OrbisField field) => OrbisScene(
+      objects: const [],
+      camera: OrbisCamera(position: Vector3(0, 0, 5), target: Vector3.zero()),
+      field: field,
+    );
+
+    test('a scene that says nothing about one still sends its numbers', () {
+      // The renderer reads a fixed stride whether or not there is a field, so
+      // "off" has to be a number in the block rather than an absent block.
+      final params =
+          sceneWith(OrbisField.none).toMessage(1)['fieldParams']!
+              as List<double>;
+      expect(params, hasLength(OrbisField.stride));
+      expect(params.first, 0, reason: 'off');
+    });
+
+    test('the lattice crosses in the order the renderer reads it', () {
+      final params =
+          sceneWith(
+                OrbisField(
+                  enabled: true,
+                  origin: Vector3(-4, -2, -4),
+                  spacing: Vector3(1.5, 2, 2.5),
+                  counts: Vector3(5, 4, 6),
+                  intensity: 1.6,
+                  retention: 0.9,
+                  bias: 0.3,
+                ),
+              ).toMessage(1)['fieldParams']!
+              as List<double>;
+      expect(params[0], 1, reason: 'on');
+      expect(params.sublist(1, 4), [-4, -2, -4], reason: 'the corner probe');
+      expect(params.sublist(4, 7), [1.5, 2, 2.5], reason: 'metres between');
+      expect(params.sublist(7, 10), [5, 4, 6], reason: 'how many');
+      expect(params[10], closeTo(1.6, 1e-6), reason: 'how much reaches');
+      expect(params[11], closeTo(0.9, 1e-6), reason: 'what survives a frame');
+      expect(params[12], closeTo(0.3, 1e-6), reason: 'the normal bias');
+    });
+
+    test('it names the target it fills itself from', () {
+      // A field is built by reading the picture the scene drew, so there has
+      // to be one to read. The name travels with it.
+      final message = sceneWith(
+        OrbisField(enabled: true, from: 'lit'),
+      ).toMessage(1);
+      expect(message['fieldFrom'], 'lit');
+    });
+
+    test('the probe count is the lattice multiplied out', () {
+      expect(OrbisField(counts: Vector3(5, 4, 6)).probeCount, 120);
+    });
+  });
+
   OrbisScene sceneWith(OrbisEnvironment? environment) => OrbisScene(
     objects: const [],
     environment: environment,

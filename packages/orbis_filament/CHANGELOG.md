@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.18.0
+
+- **`OrbisField`: light kept in the world rather than on the screen.** A
+  lattice of probes standing in the scene, each holding what light reaches it
+  from every direction, built up over many frames and read by every surface
+  near it. Where a screen-space bounce answers *how much light is here, worked
+  out now*, a field answers *how much light is at that point in the room* —
+  and still has the answer when what lit it has left the frame.
+
+  Probes are filled by marching the depth buffer outward from each probe and
+  taking what it finds, then folding that into what the probe already held.
+  The reference implementations scatter instead — they reconstruct each screen
+  texel and add it to the probes enclosing it, which needs an instanced draw
+  with one instance per texel and cage corner. Marching is the same trace the
+  bounce pass already does and needs no geometry at all.
+
+  Read in the surface shader rather than composited over the finished picture,
+  because indirect light is light: it has to be reflected by each surface's
+  own colour, and a pass over the frame does not have one. Eight probes at the
+  corners of the cell are mixed by distance, by whether the surface faces
+  them, and by whether they can see it — the last from a distance the probe
+  stores alongside its colour, which is what stops a field lighting the inside
+  of a wall with the sunshine outside it.
+
+  Measured in a room with one red wall and one blue one, across five runs: the
+  field lifts the shadowed surfaces by **+9.8 to +19.0** of 255, and the half
+  of the room by the red wall comes out **+8.6 to +17.9 warmer** than the half
+  by the blue one. The direction is the test — a field that merely brightened
+  would move both halves together. The spread is how far the accumulation has
+  got by the frame that is measured.
+
+- **`OrbisEffect.copy`**, the plainest pass there is and the one that makes the
+  others possible: a target, put on the screen. Anything that reads what the
+  scene drew needs the scene drawn into a target, and then needs something to
+  put that target on the screen; without this the only way to present one was
+  to run an effect that also changed it.
+
+### Two ways this can go wrong, both now guarded
+
+A field reads the picture the scene drew, and that picture already contains
+what the field contributed to it. The light goes round, multiplying by the
+surfaces' albedo each lap, and an infinite series of that converges only while
+the product stays below one. Undamped it does not — and it does not fail by
+getting brighter, it fails by **drifting in hue**, because the channel with the
+highest gain wins the race. This room turned green, a colour nowhere in it.
+The injection damps the sub-unit part of the light to nought point six, and
+the renderer holds the strength below where that stops being enough.
+
+Both numbers are measured rather than picked, over six hundred frames in a
+room with a red wall and a blue one. The light that arrives matches what was
+asked for to within three per cent up to a strength of **four**, is ten per
+cent over at five, and **fifty-seven** per cent over at six — where the room
+had visibly turned. The cap is at three: the last fully linear point with a
+whole step of margin under the knee. Asking for more is **reported** through
+the scene's notes rather than silently substituted, because a host that asks
+for six and quietly gets three has a scene that does not match its reference
+and no way to find out why.
+
+The damping and the cap are one constant divided by another, in one place, so
+that changing the damping moves the cap with it. They are two halves of the
+same statement and drifting apart would put the loop back over one.
+
+The atlas textures are also **cleared when they are built**. A texture Filament
+allocates holds whatever the driver last had there, and surfaces read it before
+the first pass has written it. That was the *other* source of the green, and it
+survived turning the temporal blend off — which is what told the two apart.
+
 ## 0.17.0
 
 - **`OrbisEffect.bounce`: one bounce of light, taken from the picture already
