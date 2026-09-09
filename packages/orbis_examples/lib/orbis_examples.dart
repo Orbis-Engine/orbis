@@ -39,6 +39,7 @@ export 'src/examples/many.dart' show ManyExample;
 export 'src/examples/materials.dart' show MaterialsExample;
 export 'src/examples/meshes.dart' show MeshesExample;
 export 'src/examples/pipeline.dart' show PipelineExample;
+export 'src/examples/probes.dart' show ProbesExample;
 export 'src/examples/runner.dart' show RunnerExample;
 export 'src/examples/post.dart' show PostExample;
 export 'src/examples/video.dart' show VideoExample;
@@ -58,6 +59,7 @@ import 'src/examples/many.dart';
 import 'src/examples/materials.dart';
 import 'src/examples/meshes.dart';
 import 'src/examples/pipeline.dart';
+import 'src/examples/probes.dart';
 import 'src/examples/runner.dart';
 import 'src/examples/post.dart';
 import 'src/examples/surface.dart';
@@ -77,6 +79,7 @@ import 'src/examples/weather.dart';
 List<Example> engineExamples() => [
   SurfaceExample(),
   LightsExample(),
+  ProbesExample(),
   DayAndNightExample(),
   WeatherExample(),
   ManyExample(),

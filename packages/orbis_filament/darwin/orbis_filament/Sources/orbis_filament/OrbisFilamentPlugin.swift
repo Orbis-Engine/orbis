@@ -440,6 +440,17 @@ private final class Viewport {
       }
     }
 
+    let probeCount = scene.probeKeys.count
+    let probeKeys = probeCount == 0 ? [Int64(0)] : scene.probeKeys
+    let probeParams = probeCount == 0 ? [Float(0)] : scene.probeParams
+    probeKeys.withUnsafeBufferPointer { keyPointer in
+      probeParams.withUnsafeBufferPointer { paramPointer in
+        renderer.applyProbes(keyPointer.baseAddress!,
+                             params: paramPointer.baseAddress!,
+                             count: UInt32(probeCount))
+      }
+    }
+
     renderer.setSkyColour(scene.skyColour,
                           ambient: scene.ambient,
                           showBody: scene.showBody)
@@ -512,6 +523,8 @@ private struct Scene {
   let lightKinds: [Int32]
   let lightFlags: [Int32]
   let lightParams: [Float]
+  let probeKeys: [Int64]
+  let probeParams: [Float]
   let cameraPosition: [Float]
   let cameraTarget: [Float]
   let fieldOfView: Float
@@ -571,6 +584,7 @@ private struct Scene {
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
   private static let lightStride = 18
+  private static let probeStride = 8
 
   /// How many floats a graph pass and a graph target take. Must match
   /// OrbisRenderGraph on the Dart side and the constants in the renderer.
@@ -636,6 +650,21 @@ private struct Scene {
           skyParams.count == Scene.skyStride,
           skyColour.count == 3,
           cameraPosition.count == 3, cameraTarget.count == 3 else { return nil }
+
+    // Probes are optional in the same way the environment is: a scene with
+    // none is a scene lit as it was, not a scene that fails to arrive. The
+    // lengths still have to agree, because both are pointers C++ walks.
+    let probeKeys =
+      (arguments["probeKeys"] as? FlutterStandardTypedData)?.int64s ?? []
+    let probeParams =
+      (arguments["probeParams"] as? FlutterStandardTypedData)?.floats ?? []
+    if probeParams.count == probeKeys.count * Scene.probeStride {
+      self.probeKeys = probeKeys
+      self.probeParams = probeParams
+    } else {
+      self.probeKeys = []
+      self.probeParams = []
+    }
 
     // Not in the guard above: a scene without it is a scene with the
     // defaults, not a scene that fails to arrive.
