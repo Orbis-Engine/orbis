@@ -33,8 +33,38 @@ fetch() {
   rm -f "$into/filament.tgz"
 }
 
-fetch "$SDK_DIR" mac
-fetch "$IOS_SDK_DIR" ios
+# A Filament built here, rather than the release Google publishes.
+#
+# ORBIS_FILAMENT_SRC points at a checkout of Orbis-Engine/orbis-filament that
+# has been built (`./build.sh -p desktop -i release`). Everything downstream —
+# headers, archives, matc — comes from `out/release/filament` instead of the
+# tarball, and nothing else in this script or the package changes.
+#
+# Unset by default, deliberately. A source build is twenty minutes and several
+# gigabytes, and almost nothing wanted here needs one: a new post-process pass
+# or a reflection probe is written in Orbis's own render graph against the same
+# public API. What genuinely needs it is a *backend* — a console platform, a
+# driver Filament does not ship — because that lives inside Filament and
+# nowhere else. So the fork is wired up and the fast path stays the default
+# until something actually requires the slow one.
+if [ -n "${ORBIS_FILAMENT_SRC:-}" ]; then
+  BUILT="$ORBIS_FILAMENT_SRC/out/release/filament"
+  if [ ! -d "$BUILT/lib" ]; then
+    echo "orbis_filament: ORBIS_FILAMENT_SRC is set but $BUILT/lib is missing."
+    echo "  Build it:  cd $ORBIS_FILAMENT_SRC && ./build.sh -p desktop -i release"
+    exit 1
+  fi
+  echo "orbis_filament: using the Filament built at $BUILT"
+  mkdir -p "$SDK_DIR"
+  rm -rf "${SDK_DIR:?}/filament"
+  ln -s "$BUILT" "$SDK_DIR/filament"
+  # iOS still comes from the release. A desktop build carries no iOS slices,
+  # and pretending otherwise fails at link time rather than here.
+  fetch "$IOS_SDK_DIR" ios
+else
+  fetch "$SDK_DIR" mac
+  fetch "$IOS_SDK_DIR" ios
+fi
 
 # Materials are compiled to a C array rather than shipped as an asset, so the
 # renderer has no file to find at runtime and no asset bundle to depend on.
