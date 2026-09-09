@@ -1,0 +1,80 @@
+// SMAA, pass one of three: where are the edges?
+//
+// Enhanced subpixel morphological anti-aliasing, after Jimenez et al. The
+// approach is unlike the two Filament ships. FXAA guesses at an edge from one
+// pixel's neighbours and blurs along it; TAA gathers real samples but spreads
+// them over time, so it is accurate and it smears. SMAA looks at the finished
+// image, works out the *shape* the edge is part of — a corner, a step, a long
+// diagonal — and blends by how much of the pixel that shape actually covers.
+// No history, so nothing to smear, and no guess, so nothing to over-blur.
+//
+// This pass finds the edges and nothing else. It writes red where a pixel
+// differs enough from the one on its left and green where it differs from the
+// one above; the next pass reads that as a picture of the geometry.
+//
+// Adapted from the reference implementation, MIT licensed:
+//   Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia,
+//   Fernando Navarro and Diego Gutierrez. See LICENSES/SMAA.txt.
+material {
+    name : orbisSmaaEdges,
+    shadingModel : unlit,
+    vertexDomain : device,
+    requires : [ uv0 ],
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    parameters : [
+        { type : sampler2d, name : source, precision : high },
+        // One over the width and height, so the shader can step a pixel.
+        { type : float2, name : step },
+        // How different two pixels must be before the line between them is
+        // called an edge. A tenth is the reference default: lower finds more
+        // and costs more, higher starts missing shallow gradients.
+        { type : float, name : threshold }
+    ]
+}
+
+fragment {
+    // Perceived brightness. Edges are found in luma rather than in colour
+    // because that is what the eye resolves — two colours of the same
+    // brightness do not read as an edge, and treating them as one spends the
+    // whole budget on things nobody can see.
+    float luma(vec3 colour) {
+        return dot(colour, vec3(0.2126, 0.7152, 0.0722));
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 at = getUV0();
+        vec2 px = materialParams.step;
+        vec2 limit = vec2(materialParams.threshold);
+
+        float here   = luma(texture(materialParams_source, at).rgb);
+        float left   = luma(texture(materialParams_source, at - vec2(px.x, 0.0)).rgb);
+        float top    = luma(texture(materialParams_source, at - vec2(0.0, px.y)).rgb);
+
+        vec2 delta = abs(vec2(here) - vec2(left, top));
+        vec2 edges = step(limit, delta);
+
+        // Local contrast adaptation, and the reason SMAA does not carve up a
+        // texture the way a plain threshold does. A pixel sitting beside a
+        // much stronger edge is part of that edge's neighbourhood rather than
+        // an edge of its own, so it is dropped — otherwise every busy region
+        // comes out marked and the shape detection has nothing to work with.
+        float right  = luma(texture(materialParams_source, at + vec2(px.x, 0.0)).rgb);
+        float bottom = luma(texture(materialParams_source, at + vec2(0.0, px.y)).rgb);
+        vec2 far = abs(vec2(here) - vec2(right, bottom));
+        vec2 biggest = max(delta, far);
+
+        float leftleft = luma(texture(materialParams_source, at - vec2(px.x * 2.0, 0.0)).rgb);
+        float toptop   = luma(texture(materialParams_source, at - vec2(0.0, px.y * 2.0)).rgb);
+        far = abs(vec2(left, top) - vec2(leftleft, toptop));
+        biggest = max(biggest, far);
+
+        float strongest = max(biggest.x, biggest.y);
+        edges *= step(strongest, 2.0 * delta);
+
+        material.baseColor = vec4(edges, 0.0, 1.0);
+    }
+}

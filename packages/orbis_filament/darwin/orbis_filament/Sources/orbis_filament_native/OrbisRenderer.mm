@@ -59,6 +59,7 @@
 
 #include "generated/lit_opaque_material.h"
 #include "generated/sharpen_material.h"
+#include "generated/smaa_edges_material.h"
 #include "generated/lit_transparent_material.h"
 #include "generated/lit_fade_material.h"
 #include "generated/lit_masked_material.h"
@@ -501,6 +502,7 @@ constexpr int kPassEffect = 2;
 
 /// Which effect, matching OrbisEffect. Minus one is none.
 constexpr int kEffectSharpen = 0;
+constexpr int kEffectSmaaEdges = 1;
 
 /// Where a material's texture says it comes from a pass rather than a file.
 static const char *const kTargetScheme = "orbis:target/";
@@ -891,9 +893,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// once, because every draw wants the same nothing.
   filament::InstanceBuffer *_identityInstances;
 
-  /// The sharpen effect's material, built on first use and shared by every
-  /// pass that runs it.
-  filament::Material *_sharpenMaterial;
+  /// One material per effect, built on first use and shared by every pass
+  /// that runs it. Indexed by the effect's own number.
+  std::map<int, filament::Material *> _effectMaterials;
 
   /// Assets that could not be loaded. Sticky, because a file is read once and
   /// a failure that reported itself only on the frame of the attempt would
@@ -3289,6 +3291,34 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 }
 
 /// The view a pass draws through, made on first use and kept.
+/// The compiled material one effect runs, built the first time it is asked
+/// for. An effect nobody has a material for draws nothing rather than
+/// drawing wrongly.
+- (filament::Material *)materialForEffect:(int)effect {
+  auto found = _effectMaterials.find(effect);
+  if (found != _effectMaterials.end()) return found->second;
+
+  const uint8_t *package = nullptr;
+  size_t length = 0;
+  switch (effect) {
+    case kEffectSharpen:
+      package = ksharpenMaterial;
+      length = ksharpenMaterial_len;
+      break;
+    case kEffectSmaaEdges:
+      package = ksmaa_edgesMaterial;
+      length = ksmaa_edgesMaterial_len;
+      break;
+    default:
+      _effectMaterials[effect] = nullptr;
+      return nullptr;
+  }
+
+  Material *built = Material::Builder().package(package, length).build(*_engine);
+  _effectMaterials[effect] = built;
+  return built;
+}
+
 /// Builds the one triangle an effect pass draws, and dresses it.
 ///
 /// A triangle rather than a quad, and bigger than the screen rather than
@@ -3301,13 +3331,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 /// reads the source image by.
 - (bool)buildEffect:(GraphPass &)pass {
   if (pass.effectScene != nullptr) return true;
-  if (pass.effect != kEffectSharpen) return false;
 
-  if (_sharpenMaterial == nullptr) {
-    _sharpenMaterial = Material::Builder()
-                           .package(ksharpenMaterial, ksharpenMaterial_len)
-                           .build(*_engine);
-  }
+  Material *material = [self materialForEffect:pass.effect];
+  if (material == nullptr) return false;
 
   static const float kCorners[] = {
       -1.0f, -1.0f, 0.0f, 0.0f,  //
@@ -3339,7 +3365,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   indices->setBuffer(*_engine, IndexBuffer::BufferDescriptor(
                                    kOrder, sizeof(kOrder), nullptr));
 
-  pass.effectMaterial = _sharpenMaterial->createInstance();
+  pass.effectMaterial = material->createInstance();
   pass.effectEntity = utils::EntityManager::get().create();
   RenderableManager::Builder(1)
       // Never culled: it is the screen, so a box that decides otherwise is a
@@ -3397,9 +3423,25 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   const TextureSampler smooth(TextureSampler::MinFilter::LINEAR,
                               TextureSampler::MagFilter::LINEAR);
   pass.effectMaterial->setParameter("source", from->colour, smooth);
-  pass.effectMaterial->setParameter("amount", pass.plane[0] > 0.0f
-                                                  ? pass.plane[0]
-                                                  : 0.6f);
+
+  // What each effect needs beyond the image. The first of the plane's four
+  // numbers is the effect's one dial — a reflection uses those for its
+  // mirror and an effect has no mirror.
+  const float dial = pass.plane[0];
+  const float wide = float(from->builtWidth);
+  const float tall = float(from->builtHeight);
+  switch (pass.effect) {
+    case kEffectSharpen:
+      pass.effectMaterial->setParameter("amount", dial > 0.0f ? dial : 0.6f);
+      break;
+    case kEffectSmaaEdges:
+      pass.effectMaterial->setParameter(
+          "step", filament::math::float2{1.0f / wide, 1.0f / tall});
+      pass.effectMaterial->setParameter("threshold", dial > 0.0f ? dial : 0.1f);
+      break;
+    default:
+      break;
+  }
 
   View *view = [self viewForPass:pass];
   view->setScene(pass.effectScene);
@@ -5107,10 +5149,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     _identityInstances = nullptr;
   }
 
-  if (_sharpenMaterial != nullptr) {
-    _engine->destroy(_sharpenMaterial);
-    _sharpenMaterial = nullptr;
+  for (auto &pair : _effectMaterials) {
+    if (pair.second != nullptr) _engine->destroy(pair.second);
   }
+  _effectMaterials.clear();
 
   delete _resourceLoader;
   _resourceLoader = nullptr;
