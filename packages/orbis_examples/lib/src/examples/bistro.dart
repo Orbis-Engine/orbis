@@ -140,6 +140,15 @@ class BistroExteriorExample extends BistroExample {
   BistroExteriorExample();
 
   @override
+  Downloadable? get needs => const Downloadable(
+    what: 'the Bistro exterior',
+    size: 'about 700 MB',
+    from: 'Amazon Lumberyard Bistro, via ORCA',
+    licence: 'CC BY 4.0',
+    command: ['tool/fetch_bistro.sh', 'exterior'],
+  );
+
+  @override
   String get name => 'Bistro exterior';
 
   @override
@@ -616,6 +625,15 @@ OrbisSky(zenith: Color(0xFF0B1224), horizon: Color(0xFF243046), ambient: 120)
 /// here and nowhere else in this gallery, which is the reason to have it.
 class BistroInteriorExample extends BistroExample {
   BistroInteriorExample();
+
+  @override
+  Downloadable? get needs => const Downloadable(
+    what: 'the Bistro interior',
+    size: 'about 1.4 GB',
+    from: 'Amazon Lumberyard Bistro, via ORCA',
+    licence: 'CC BY 4.0',
+    command: ['tool/fetch_bistro.sh', 'interior'],
+  );
 
   @override
   String get name => 'Bistro interior';

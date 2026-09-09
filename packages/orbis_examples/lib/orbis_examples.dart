@@ -19,7 +19,14 @@
 library;
 
 export 'src/example.dart'
-    show Choice, Example, GalleryCamera, Setting, Toggle, ViewPoint;
+    show
+        Choice,
+        Downloadable,
+        Example,
+        GalleryCamera,
+        Setting,
+        Toggle,
+        ViewPoint;
 export 'src/examples/benchmark.dart' show BenchmarkExample;
 export 'src/examples/blend.dart' show BlendExample;
 export 'src/examples/bistro.dart'

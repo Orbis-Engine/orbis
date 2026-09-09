@@ -36,6 +36,14 @@ abstract class Example {
   /// The lines that matter, as somebody would write them.
   String get code;
 
+  /// What this example needs that the repository does not carry, or null.
+  ///
+  /// Some scenes are somebody else's art and hundreds of megabytes of it, so
+  /// they are fetched rather than committed. Until they are, the example draws
+  /// a placeholder and says why — and the useful thing to say next to that is
+  /// not an explanation but a button.
+  Downloadable? get needs => null;
+
   /// What the renderer had to say about this example's scene, or null.
   ///
   /// A model that could not be read still draws — as a placeholder cube,
@@ -322,4 +330,39 @@ class Toggle extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Something an example needs, and how to get it.
+///
+/// A description rather than a download: the example says what it wants and
+/// which command brings it, and whatever is showing the example decides
+/// whether that is a button, a line in a script, or nothing at all. An
+/// example that ran a download itself would be an example that cannot be run
+/// on a machine where downloading is somebody else's decision.
+class Downloadable {
+  const Downloadable({
+    required this.what,
+    required this.size,
+    required this.from,
+    required this.licence,
+    required this.command,
+  });
+
+  /// What is missing, as somebody would say it: "the Bistro interior".
+  final String what;
+
+  /// Roughly how much, so nobody starts a seven-hundred-megabyte download
+  /// wondering whether it is seven hundred kilobytes.
+  final String size;
+
+  /// Where it comes from.
+  final String from;
+
+  /// Under what terms — shown rather than buried, because a download button
+  /// that does not say what it is fetching is one nobody should press.
+  final String licence;
+
+  /// The command that fetches it, and its arguments. Run from the engine
+  /// repository's root.
+  final List<String> command;
 }

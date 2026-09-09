@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+- An example can say what it needs that the repository does not carry, and
+  under what terms. The Bistro scenes are somebody else's art and hundreds of
+  megabytes of it, so they are fetched rather than committed — and until they
+  are, the example drew a placeholder and explained itself to somebody who
+  then had to go and find a shell script. A description rather than a
+  download: the example says what it wants and which command brings it, and
+  whatever is showing it decides whether that becomes a button.
+
 ## 0.12.1
 
 - The runner's black shapes were shadows. Three things at once: the track was
