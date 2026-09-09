@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.13.0
+## 0.14.0
 
 - An example can say what it needs that the repository does not carry, and
   under what terms. The Bistro scenes are somebody else's art and hundreds of
@@ -9,6 +9,38 @@
   then had to go and find a shell script. A description rather than a
   download: the example says what it wants and which command brings it, and
   whatever is showing it decides whether that becomes a button.
+
+## 0.13.0
+
+- Blocks generates a world rather than a heightfield. Four climate fields
+  instead of one height: continentalness decides how far above the sea a
+  region sits and is what makes coasts, erosion decides how much the land is
+  allowed to vary there, and temperature and humidity decide what grows.
+  Height is continentalness through a curve, scaled by erosion — the curve
+  matters, because a straight line gives as much land at every altitude and a
+  real world has a lot of coast, a lot of gentle ground and a little that is
+  high. Surface rules by biome give beaches, deserts, a snow line that moves
+  with temperature, and trees where it is warm and damp enough. The shape of
+  that is Pebble's approach read as a reference and written again; none of its
+  code is here.
+
+- The runner's buildings stood in the road. The track is 4.6 either side of
+  the middle and the scenery started at 4.2, so a tower could be in the third
+  lane — which is what "it keeps generating really long objects" was: a
+  building with the road running through it. They also varied only in height,
+  all of them the same 1.8 across and up to eleven high, which is a six-to-one
+  slab; a row of those beside the camera is a wall with slots in it rather
+  than a city. And there is ground under them now, because a tower with
+  nothing beneath it reads as a bug rather than as distance.
+
+- Blocks is a world you are in rather than one you look at. WASD and space to
+  walk and jump, drag to look, click to dig and right-click to put a block
+  back. The world is a grid of bytes now instead of a list of what to draw —
+  the moment somebody can dig, "what is at this point" is asked constantly, by
+  the body falling and by every ray under the crosshair, and a grid answers
+  that in one lookup rather than sixty thousand comparisons. Only blocks with
+  air beside them are drawn, which in a world of solid hills is about an
+  eighth of them.
 
 ## 0.12.1
 

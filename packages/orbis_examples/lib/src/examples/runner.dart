@@ -102,6 +102,20 @@ class RunnerExample extends Example {
         colour: Vector3(1, 1, 1),
         material: 1,
       ),
+      // The ground the city stands on.
+      //
+      // Without it the buildings hang in an orange sky, because the only
+      // other thing in the world is the road — and a tower with nothing
+      // under it reads as a bug rather than as distance.
+      OrbisObject(
+        key: 3,
+        transform: Matrix4.identity()
+          ..setTranslation(Vector3(0, -0.9, -length / 2 + 8))
+          ..multiply(Matrix4.diagonal3(Vector3(90, 0.6, length / 2 + 40))),
+        colour: Vector3(1, 1, 1),
+        material: 6,
+        castShadows: false,
+      ),
       // The track: one long slab, moved so its seams pass underneath.
       OrbisObject(
         key: 2,
@@ -214,6 +228,13 @@ class RunnerExample extends Example {
           key: 5,
           baseColour: Vector4(0.44, 0.30, 0.06, 1),
           roughness: 0.55,
+        ),
+        // The ground: darker than the road, so the road still reads as the
+        // thing being run along rather than as a stripe on a floor.
+        OrbisMaterial(
+          key: 6,
+          baseColour: Vector4(0.115, 0.105, 0.15, 1),
+          roughness: 0.9,
         ),
         // The coins, which are the only thing here that gives off light —
         // it is what makes them read as a reward rather than as an obstacle.
@@ -367,12 +388,24 @@ final z = -((hazard.along - travelled) % length);
       final along = i / 3 * _spacing;
       for (final side in const [-1.0, 1.0]) {
         if (chance.nextDouble() < 0.35) continue;
-        final out = 4.2 + chance.nextDouble() * 9;
-        final tall = 0.6 + chance.nextDouble() * 5.5;
+
+        // Clear of the road, with a verge. The track is 4.6 either side of
+        // the middle and these used to start at 4.2, so a building could
+        // stand in the third lane — which is what "it keeps generating really
+        // long objects" was: a tower with the road running through it.
+        final out = 7.5 + chance.nextDouble() * 15;
+
+        // Wide as well as tall. Every one of these was the same 1.8 across
+        // and up to eleven high, which is a six-to-one slab — a row of them
+        // beside the camera reads as a wall with slots in it rather than as
+        // a city.
+        final wide = 0.9 + chance.nextDouble() * 2.4;
+        final tall = 0.8 + chance.nextDouble() * 6.5;
+
         transforms.addAll([
-          0.9, 0, 0, 0, //
+          wide, 0, 0, 0, //
           0, tall, 0, 0, //
-          0, 0, 0.9, 0, //
+          0, 0, wide, 0, //
           side * out, tall - 0.2, -(along % length), 1, //
         ]);
         final shade = 0.5 + chance.nextDouble() * 0.4;

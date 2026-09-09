@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:orbis_mesh/orbis_mesh.dart';
 import 'package:test/test.dart';
+import 'package:vector_math/vector_math_64.dart';
 
 /// Reads the JSON chunk back out of a glb.
 Map<String, Object?> jsonOf(Uint8List glb) {
@@ -101,8 +102,12 @@ void main() {
     expect(first['bufferView'], 0);
     expect(second['bufferView'], 0, reason: 'the same indices, offset into');
     expect(first['byteOffset'] ?? 0, 0);
-    // Two quads is four triangles is twelve indices, two bytes each.
-    expect(second['byteOffset'], 24);
+    // Two quads is four triangles is twelve indices, four bytes each.
+    //
+    // Four rather than two since indices went to thirty-two bits: sixteen
+    // wraps at sixty-five thousand vertices, which a generated mesh passes
+    // without saying anything and then draws nothing at all.
+    expect(second['byteOffset'], 48);
     expect(first['count'], 12);
   });
 
@@ -164,5 +169,48 @@ void main() {
       [1, 0.5, 0],
     );
     expect(const GlbMaterial(cutout: true).toGltf()['alphaMode'], 'MASK');
+  });
+
+  test('a mesh past sixty-five thousand vertices still draws', () {
+    // What this is really about. Sixteen-bit indices wrap at 65,536, and the
+    // failure is silent in every direction: the file writes, a loader reads
+    // it without complaint, and the mesh renders nothing — because every
+    // triangle past that point names the wrong corners.
+    //
+    // Built as loose quads rather than a shape, because sharing points is
+    // exactly what a generated mesh does not do.
+    final mesh = Mesh();
+    const quads = 20000; // 80,000 vertices
+    for (var i = 0; i < quads; i++) {
+      final at = mesh.positions.length;
+      final x = i.toDouble();
+      mesh.positions.addAll([
+        Vector3(x, 0, 0),
+        Vector3(x + 1, 0, 0),
+        Vector3(x + 1, 1, 0),
+        Vector3(x, 1, 0),
+      ]);
+      mesh.faces.add(Face([at, at + 1, at + 2, at + 3]));
+    }
+
+    final tris = mesh.triangulate();
+    expect(tris.vertexCount, greaterThan(65536));
+
+    // The last triangle must point at the last corners, not at wrapped ones.
+    final highest = tris.indices.reduce((a, b) => a > b ? a : b);
+    expect(
+      highest,
+      tris.vertexCount - 1,
+      reason: 'an index that wrapped is an index pointing at the wrong vertex',
+    );
+
+    final glb = mesh.toGlb();
+    expect(glb.length, greaterThan(0));
+    final box = boundsOfGlb(glb)!;
+    expect(
+      box.max.x,
+      closeTo(quads.toDouble(), 1),
+      reason: 'the far end of the mesh should be where it was put',
+    );
   });
 }
