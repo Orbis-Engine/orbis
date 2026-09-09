@@ -136,11 +136,15 @@ class VoxelExample extends Example {
           // for a camera move.
           revision: _revision,
           range: range,
-          // A block sits on other blocks, not on the ground. Sinking one to
-          // its own bottom leaves it exactly where it was — a cube twelve up
-          // becomes a flat plate twelve up — so the distance fade has to draw
-          // it in towards its middle instead.
-          fade: OrbisFade.shrink,
+          // Nothing is faded, because this is a continuous surface and no
+          // shape a single cube can take on its way out leaves it whole.
+          // Sinking one to its own bottom leaves it where it was — a cube
+          // twelve up becomes a plate twelve up — and shrinking each one
+          // separately opens gaps and turns the landscape into a cloud of
+          // small cubes. So the draws are culled at the range and the fog
+          // below hides the boundary, which is how a block game has always
+          // done it.
+          fade: OrbisFade.none,
           castShadows: true,
         ),
       ],
@@ -159,6 +163,30 @@ class VoxelExample extends Example {
           castShadows: true,
         ),
       ],
+      // Air, and it is load-bearing rather than decoration.
+      //
+      // Nothing fades here — a solid world cannot be taken apart a cube at a
+      // time without tearing — so the draws are simply culled at `range`, in
+      // clumps of sixty-four. That is a hard edge, and this is what hides it:
+      // the fog reaches the sky's own colour well before the range, so a
+      // clump leaving is a clump nobody could see anyway.
+      // Nothing to hide when nothing is culled, and the density below is a
+      // division by the range — which at nought is a world lost in white.
+      fog: range <= 0
+          ? OrbisFog.none
+          : OrbisFog(
+              colour: linearOf(const Color(0xFFC5DAEC)),
+              // Worked out from the range rather than chosen by eye, because
+              // the one thing this fog has to do is be *finished* before the
+              // culling starts. Filament leaves exp(-density x depth) of a
+              // surface showing, so going from clear at 0.55 of the range to
+              // two per cent left at 0.95 of it — which is where Pebble puts
+              // the same two numbers — needs density x span = 3.9.
+              density: 3.9 / (range * 0.4),
+              // Clear over what is being looked at; only the far part veiled.
+              distance: range * 0.55,
+              maximumOpacity: 1,
+            ),
       sky: OrbisSky(
         zenith: linearOf(const Color(0xFF4E86C4)),
         horizon: linearOf(const Color(0xFFC5DAEC)),

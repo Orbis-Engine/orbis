@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.12.0
+
+- A population's distance is measured **flat, and from the cell a member
+  stands in** rather than from the member. Sixteen blocks square, which is the
+  grain a block game has always culled at.
+
+  Both halves matter. Measured as a straight line, a member's fate depends on
+  how high it stands: a canopy fifteen blocks up is further off than the ground
+  under it, so it crosses the range first and the tree goes while the hill
+  stays. Measured per member, the boundary cuts through anything wider than a
+  block: a canopy reaches two blocks past its trunk, so the trunk falls outside
+  the range while a leaf falls inside, and a lid of leaves is left hanging over
+  nothing. By cell and flat, everything standing in the same square shares one
+  verdict, so a world can only lose whole sections and a tree always leaves
+  with the ground it grew on.
+
+- `OrbisFade.none` joins `sink` and `shrink`: the member does not change shape
+  at all and `range` simply stops whole draws. For a continuous surface there
+  is no shape one member can take on its way out that does not tear it, so the
+  boundary is left to fog.
+
+- Population draws are given an `InstanceBuffer` of identities. Asking Filament
+  for copies *without* one leaves every per-copy uniform slot but the first
+  undefined — they hold whatever the renderable drawn before them left there.
+
+- The instanced material takes the camera position as a parameter rather than
+  recovering it from the world position it is handed, which depended on those
+  same per-copy uniforms.
+
 ## 0.11.0
 
 - A population says how its members go when they pass its `range`.

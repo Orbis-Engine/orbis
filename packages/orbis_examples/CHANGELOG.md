@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.0
+
+- Blocks stops taking itself apart at the draw distance. It fades nothing —
+  a solid world has no intermediate shape a cube can hold without tearing it —
+  and pairs the range with fog worked out from that range, so the boundary is
+  reached inside opaque air rather than in plain sight.
+
 ## 0.15.0
 
 - Blocks fades its distance by shrinking rather than sinking, which is what

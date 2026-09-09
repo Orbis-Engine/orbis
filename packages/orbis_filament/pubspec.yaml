@@ -2,7 +2,7 @@ name: orbis_filament
 description: >-
   Filament rendering for Orbis, composited by Flutter. Renders into
   IOSurface-backed pixel buffers the texture registry adopts without a readback.
-version: 0.11.0
+version: 0.12.0
 publish_to: none
 
 environment:
