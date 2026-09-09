@@ -1,0 +1,75 @@
+// SMAA, pass three of three: do the blending.
+//
+// The short one. Pass two worked out how much of this pixel the far side of
+// each edge covers; this reads those four weights — one per side — picks
+// whichever direction won, and mixes this pixel with its neighbour by that
+// much. A pixel with no weight on any side is left exactly as it was, which
+// is most of the picture and the reason SMAA does not soften flat regions the
+// way FXAA does.
+//
+// Adapted from the reference implementation, MIT licensed:
+//   Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia,
+//   Fernando Navarro and Diego Gutierrez. See LICENSES/SMAA.txt.
+material {
+    name : orbisSmaaBlend,
+    shadingModel : unlit,
+    vertexDomain : device,
+    requires : [ uv0 ],
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    parameters : [
+        // The picture as it was drawn.
+        { type : sampler2d, name : source, precision : high },
+        // What pass two decided.
+        { type : sampler2d, name : weights, precision : high },
+        { type : float2, name : step }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 at = getUV0();
+        vec2 px = materialParams.step;
+
+        // Four weights around this pixel, and *which* four is the whole of
+        // it. Two are read from the neighbours they belong to and two from
+        // here; getting the order wrong still touches the right pixels and
+        // still changes them, so it looks like it works and does not.
+        vec4 a;
+        a.x = textureLod(materialParams_weights, at + vec2(px.x, 0.0), 0.0).a;
+        a.y = textureLod(materialParams_weights, at + vec2(0.0, px.y), 0.0).g;
+        vec4 mine = textureLod(materialParams_weights, at, 0.0);
+        a.z = mine.b;
+        a.w = mine.r;
+
+        if (dot(a, vec4(1.0)) < 1e-5) {
+            // No edge near this pixel. Reading the image through a filtered
+            // fetch anyway would soften it for nothing, and most of a picture
+            // is this case.
+            material.baseColor = textureLod(materialParams_source, at, 0.0);
+        } else {
+            // A pixel can sit on a horizontal and a vertical edge at once —
+            // a corner — and blending both would move it twice. Whichever
+            // carries more weight wins outright.
+            bool sideways = max(a.x, a.z) > max(a.y, a.w);
+
+            vec4 offset = sideways ? vec4(a.x, 0.0, a.z, 0.0)
+                                   : vec4(0.0, a.y, 0.0, a.w);
+            vec2 weight = sideways ? a.xz : a.yw;
+            weight /= dot(weight, vec2(1.0));
+
+            // One step each way, opposite signs, so the two fetches land on
+            // either side. Bilinear filtering does the mixing between the
+            // pixel and its neighbour; the weight only says how far to lean.
+            vec4 metrics = vec4(px.x, px.y, -px.x, -px.y);
+            vec4 coord = offset * metrics + vec4(at, at);
+
+            vec4 colour = weight.x * textureLod(materialParams_source, coord.xy, 0.0);
+            colour += weight.y * textureLod(materialParams_source, coord.zw, 0.0);
+            material.baseColor = colour;
+        }
+    }
+}

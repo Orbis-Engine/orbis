@@ -18,6 +18,7 @@
 ///   ORBIS_MORPH            comma-separated shape weights for that model
 ///   ORBIS_SHARPEN          run the sharpen effect, 0 to 1, over the frame
 ///   ORBIS_EFFECT           an effect by name, shown on its own over the frame
+///   ORBIS_SMAA=1           the whole three-pass SMAA chain
 library;
 
 import 'dart:io';
@@ -69,6 +70,109 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     // Two passes when a sharpen is asked for, one otherwise. An effect reads
     // what another pass drew, so the world has to land in a texture before
     // anything can be done to it.
+    // The whole chain: the world into a texture, its edges into another, the
+    // weights into a third, and the blend onto the screen reading the first
+    // and the third.
+    final smaa = Platform.environment['ORBIS_SMAA'];
+    if (smaa == 'edgetarget') {
+      // Edges into a target, then blitted to the screen by a sharpen set to
+      // nothing. Tells apart "the weights shader is wrong" from "a target
+      // does not carry what was drawn into it", which look identical from
+      // the far end.
+      return _sceneWith(
+        path,
+        OrbisRenderGraph(
+          targets: const [
+            OrbisTarget(name: 'frame'),
+            OrbisTarget(name: 'edges'),
+          ],
+          passes: const [
+            OrbisPass(name: 'world', into: 'frame'),
+            OrbisPass(
+              name: 'edges',
+              kind: OrbisPassKind.effect,
+              effect: OrbisEffect.smaaEdges,
+              reads: ['frame'],
+              into: 'edges',
+            ),
+            OrbisPass(
+              name: 'show',
+              kind: OrbisPassKind.effect,
+              effect: OrbisEffect.sharpen,
+              reads: ['edges'],
+            ),
+          ],
+        ),
+      );
+    }
+    if (smaa == 'weights') {
+      // The chain stopped one short, so the weights land on the screen. What
+      // pass two decided is otherwise invisible, and a weights pass that
+      // quietly outputs nothing looks exactly like one that works.
+      return _sceneWith(
+        path,
+        OrbisRenderGraph(
+          targets: const [
+            OrbisTarget(name: 'frame'),
+            OrbisTarget(name: 'edges'),
+          ],
+          passes: const [
+            OrbisPass(name: 'world', into: 'frame'),
+            OrbisPass(
+              name: 'edges',
+              kind: OrbisPassKind.effect,
+              effect: OrbisEffect.smaaEdges,
+              reads: ['frame'],
+              into: 'edges',
+            ),
+            OrbisPass(
+              name: 'weights',
+              kind: OrbisPassKind.effect,
+              effect: OrbisEffect.smaaWeights,
+              reads: ['edges'],
+            ),
+          ],
+        ),
+      );
+    }
+    if (smaa == '1') {
+      return _sceneWith(
+        path,
+        OrbisRenderGraph(
+          targets: const [
+            OrbisTarget(name: 'frame'),
+            OrbisTarget(name: 'edges'),
+            OrbisTarget(name: 'weights'),
+          ],
+          passes: const [
+            OrbisPass(name: 'world', into: 'frame'),
+            OrbisPass(
+              name: 'edges',
+              kind: OrbisPassKind.effect,
+              effect: OrbisEffect.smaaEdges,
+              reads: ['frame'],
+              into: 'edges',
+            ),
+            OrbisPass(
+              name: 'weights',
+              kind: OrbisPassKind.effect,
+              effect: OrbisEffect.smaaWeights,
+              reads: ['edges'],
+              into: 'weights',
+            ),
+            // The picture first, the weights second. The blend reads both and
+            // the order is what tells it which is which.
+            OrbisPass(
+              name: 'blend',
+              kind: OrbisPassKind.effect,
+              effect: OrbisEffect.smaaBlend,
+              reads: ['frame', 'weights'],
+            ),
+          ],
+        ),
+      );
+    }
+
     final named = Platform.environment['ORBIS_EFFECT'];
     final amount = _number('ORBIS_SHARPEN');
     final effect = named == null || named.isEmpty
@@ -94,6 +198,11 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
             ],
           );
 
+    return _sceneWith(path, graph);
+  }
+
+  /// One model, one light, and whatever graph was asked for.
+  OrbisScene _sceneWith(String path, OrbisRenderGraph? graph) {
     return OrbisScene(
       graph: graph,
       camera: _look.toRenderCamera(),

@@ -71,6 +71,26 @@ fi
 GENERATED="orbis_filament/Sources/orbis_filament_native/generated"
 mkdir -p "$GENERATED"
 
+# SMAA's two lookup tables, fetched rather than committed.
+#
+# They are a hundred and eighty kilobytes of precomputed data — the area each
+# edge shape covers, and the search table that walks along one — and the
+# reference implementation already ships them as C arrays with their licence
+# at the top. Downloading them keeps a megabyte of hex out of the history and
+# keeps the notice attached to the data it belongs to, which vendoring a
+# stripped copy would not. Same idea as the Filament SDK above.
+#
+# MIT, Jorge Jimenez et al. See LICENSES/SMAA.txt.
+SMAA_FROM="https://raw.githubusercontent.com/iryoku/smaa/master/Textures"
+for tex in AreaTex SearchTex; do
+  if [ ! -s "$GENERATED/$tex.h" ]; then
+    echo "orbis_filament: fetching SMAA $tex"
+    mkdir -p "$GENERATED"
+    curl -fsSL -o "$GENERATED/$tex.h" "$SMAA_FROM/$tex.h"
+  fi
+done
+
+
 # What the materials were last compiled with. A header is otherwise considered
 # current whenever it is newer than its .mat, which is true right up until the
 # thing that changed was the compiler flags rather than the source — and then

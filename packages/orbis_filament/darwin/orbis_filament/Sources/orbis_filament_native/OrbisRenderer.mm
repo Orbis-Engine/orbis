@@ -60,6 +60,12 @@
 #include "generated/lit_opaque_material.h"
 #include "generated/sharpen_material.h"
 #include "generated/smaa_edges_material.h"
+#include "generated/smaa_weights_material.h"
+#include "generated/smaa_blend_material.h"
+// SMAA's precomputed tables, fetched by setup.sh from the reference
+// implementation. MIT, Jorge Jimenez et al. — see LICENSES/SMAA.txt.
+#include "generated/AreaTex.h"
+#include "generated/SearchTex.h"
 #include "generated/lit_transparent_material.h"
 #include "generated/lit_fade_material.h"
 #include "generated/lit_masked_material.h"
@@ -503,6 +509,8 @@ constexpr int kPassEffect = 2;
 /// Which effect, matching OrbisEffect. Minus one is none.
 constexpr int kEffectSharpen = 0;
 constexpr int kEffectSmaaEdges = 1;
+constexpr int kEffectSmaaWeights = 2;
+constexpr int kEffectSmaaBlend = 3;
 
 /// Where a material's texture says it comes from a pass rather than a file.
 static const char *const kTargetScheme = "orbis:target/";
@@ -896,6 +904,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// One material per effect, built on first use and shared by every pass
   /// that runs it. Indexed by the effect's own number.
   std::map<int, filament::Material *> _effectMaterials;
+
+  /// SMAA's two precomputed tables, uploaded once.
+  filament::Texture *_smaaArea;
+  filament::Texture *_smaaSearch;
 
   /// Assets that could not be loaded. Sticky, because a file is read once and
   /// a failure that reported itself only on the frame of the attempt would
@@ -3291,6 +3303,45 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 }
 
 /// The view a pass draws through, made on first use and kept.
+/// SMAA's lookup tables, uploaded the first time a weights pass runs.
+///
+/// Two channels for the area table, because a coverage answer is two numbers —
+/// how much of the pixel each side of the edge takes. One for the search
+/// table, which holds a distance. Both are read with linear filtering: the
+/// index into them is fractional, and point-sampling a coverage table
+/// quantises the anti-aliasing it is there to provide.
+- (void)buildSmaaTables {
+  if (_smaaArea != nullptr) return;
+
+  _smaaArea = Texture::Builder()
+                  .width(AREATEX_WIDTH)
+                  .height(AREATEX_HEIGHT)
+                  .levels(1)
+                  .format(Texture::InternalFormat::RG8)
+                  .sampler(Texture::Sampler::SAMPLER_2D)
+                  .build(*_engine);
+  _smaaArea->setImage(
+      *_engine, 0,
+      Texture::PixelBufferDescriptor(
+          areaTexBytes, AREATEX_SIZE,
+          Texture::PixelBufferDescriptor::PixelDataFormat::RG,
+          Texture::PixelBufferDescriptor::PixelDataType::UBYTE));
+
+  _smaaSearch = Texture::Builder()
+                    .width(SEARCHTEX_WIDTH)
+                    .height(SEARCHTEX_HEIGHT)
+                    .levels(1)
+                    .format(Texture::InternalFormat::R8)
+                    .sampler(Texture::Sampler::SAMPLER_2D)
+                    .build(*_engine);
+  _smaaSearch->setImage(
+      *_engine, 0,
+      Texture::PixelBufferDescriptor(
+          searchTexBytes, SEARCHTEX_SIZE,
+          Texture::PixelBufferDescriptor::PixelDataFormat::R,
+          Texture::PixelBufferDescriptor::PixelDataType::UBYTE));
+}
+
 /// The compiled material one effect runs, built the first time it is asked
 /// for. An effect nobody has a material for draws nothing rather than
 /// drawing wrongly.
@@ -3308,6 +3359,14 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     case kEffectSmaaEdges:
       package = ksmaa_edgesMaterial;
       length = ksmaa_edgesMaterial_len;
+      break;
+    case kEffectSmaaWeights:
+      package = ksmaa_weightsMaterial;
+      length = ksmaa_weightsMaterial_len;
+      break;
+    case kEffectSmaaBlend:
+      package = ksmaa_blendMaterial;
+      length = ksmaa_blendMaterial_len;
       break;
     default:
       _effectMaterials[effect] = nullptr;
@@ -3422,7 +3481,12 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 
   const TextureSampler smooth(TextureSampler::MinFilter::LINEAR,
                               TextureSampler::MagFilter::LINEAR);
-  pass.effectMaterial->setParameter("source", from->colour, smooth);
+  // Every effect but the weights one calls its input `source`; that one calls
+  // it `edges`, and setting a parameter a material does not declare is a
+  // Filament precondition, which ends the process rather than the frame.
+  if (pass.effect != kEffectSmaaWeights) {
+    pass.effectMaterial->setParameter("source", from->colour, smooth);
+  }
 
   // What each effect needs beyond the image. The first of the plane's four
   // numbers is the effect's one dial — a reflection uses those for its
@@ -3439,12 +3503,52 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
           "step", filament::math::float2{1.0f / wide, 1.0f / tall});
       pass.effectMaterial->setParameter("threshold", dial > 0.0f ? dial : 0.1f);
       break;
+    case kEffectSmaaWeights: {
+      [self buildSmaaTables];
+      const TextureSampler tables(TextureSampler::MinFilter::LINEAR,
+                                  TextureSampler::MagFilter::LINEAR);
+      // The edges are what this pass reads; `source` above already bound them.
+      pass.effectMaterial->setParameter("edges", from->colour, smooth);
+      pass.effectMaterial->setParameter("area", _smaaArea, tables);
+      pass.effectMaterial->setParameter("search", _smaaSearch, tables);
+      pass.effectMaterial->setParameter(
+          "step", filament::math::float2{1.0f / wide, 1.0f / tall});
+      pass.effectMaterial->setParameter("reach", dial > 0.0f ? dial : 16.0f);
+      break;
+    }
+    case kEffectSmaaBlend: {
+      // Two inputs, and the order is the graph's to state: the picture first,
+      // the weights second. A blend given them the other way round mixes the
+      // weights together and outputs something that looks like a fault in the
+      // renderer rather than a mistake in the graph.
+      GraphTarget *weights = nullptr;
+      for (int r = 1; r < 4; r++) {
+        if (pass.reads[r] < 0) continue;
+        if (_targets[pass.reads[r]].colour == nullptr) continue;
+        weights = &_targets[pass.reads[r]];
+        break;
+      }
+      if (weights == nullptr) return;
+      pass.effectMaterial->setParameter("weights", weights->colour, smooth);
+      pass.effectMaterial->setParameter(
+          "step", filament::math::float2{1.0f / wide, 1.0f / tall});
+      break;
+    }
     default:
       break;
   }
 
   View *view = [self viewForPass:pass];
   view->setScene(pass.effectScene);
+
+  // Neutral exposure, and it is not cosmetic. Filament scales what an unlit
+  // material writes by the camera's exposure, which is right for a surface
+  // being photographed and wrong for a pass whose output is *data*: an edge
+  // written as one lands in the target as a thousandth, and the pass that
+  // reads it back finds nothing there. It looked correct on screen only
+  // because tone mapping was undoing the same scale on the way out.
+  pass.camera->setExposure(1.0f);
+
   if (into != nullptr) {
     view->setRenderTarget(into->target);
     view->setViewport({0, 0, into->builtWidth, into->builtHeight});
@@ -5153,6 +5257,15 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     if (pair.second != nullptr) _engine->destroy(pair.second);
   }
   _effectMaterials.clear();
+
+  if (_smaaArea != nullptr) {
+    _engine->destroy(_smaaArea);
+    _smaaArea = nullptr;
+  }
+  if (_smaaSearch != nullptr) {
+    _engine->destroy(_smaaSearch);
+    _smaaSearch = nullptr;
+  }
 
   delete _resourceLoader;
   _resourceLoader = nullptr;

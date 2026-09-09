@@ -1,0 +1,186 @@
+// SMAA, pass two of three: how much of each pixel does the edge cover?
+//
+// The pass that does the real work, and the one the technique is named for.
+// Pass one said *where* the edges are. This one walks along each edge to find
+// out what shape it belongs to — how far it runs left and right, what it does
+// at each end — and looks that shape up in a table of precomputed coverage.
+// The answer is how much of this pixel the far side of the edge occupies,
+// which is exactly the weight needed to blend it.
+//
+// The lookup is what keeps this cheap. Working the coverage out per pixel is
+// integration over a shape; reading it out of a texture indexed by the
+// distances and the end conditions is one fetch.
+//
+// Adapted from the reference implementation, MIT licensed:
+//   Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia,
+//   Fernando Navarro and Diego Gutierrez. See LICENSES/SMAA.txt.
+material {
+    name : orbisSmaaWeights,
+    shadingModel : unlit,
+    vertexDomain : device,
+    requires : [ uv0 ],
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    parameters : [
+        // What pass one wrote.
+        { type : sampler2d, name : edges, precision : high },
+        // The coverage table, and the table that says how far a search ran.
+        { type : sampler2d, name : area, precision : high },
+        { type : sampler2d, name : search, precision : high },
+        { type : float2, name : step },
+        // How far along an edge to look before giving up. Longer catches
+        // shallower diagonals and costs more; the reference default is
+        // sixteen.
+        { type : float, name : reach }
+    ]
+}
+
+fragment {
+    #define kAreaWide         160.0
+    #define kAreaTall         560.0
+    // How far the coverage table goes, in pixels, along each axis of a cell.
+    #define kAreaMaxDistance   16.0
+    // The grid the search table stands for, and the texels it is stored in.
+    // Both are needed and they are not interchangeable.
+    #define kSearchWide        66.0
+    #define kSearchTall        33.0
+    #define kSearchPackedWide  64.0
+    #define kSearchPackedTall  16.0
+
+    // How far the run of edges reached, read out of the search table.
+    float searchLength(vec2 e, float offset) {
+        vec2 scale = vec2(kSearchWide, kSearchTall) * vec2(0.5, -1.0);
+        vec2 bias  = vec2(kSearchWide, kSearchTall) * vec2(offset, 1.0);
+        scale += vec2(-1.0,  1.0);
+        bias  += vec2( 0.5, -0.5);
+        vec2 packed = 1.0 / vec2(kSearchPackedWide, kSearchPackedTall);
+        scale *= packed;
+        bias  *= packed;
+        return textureLod(materialParams_search, scale * e + bias, 0.0).r;
+    }
+
+    // The four walks. Each tests *before* it samples and steps after, and the
+    // value of `e` when the loop ends is the last one read — the offset maths
+    // below depends on both of those, which is why they are written this way
+    // round rather than the way that reads more naturally.
+    float searchLeft(vec2 texcoord, float end) {
+        vec2 px = materialParams.step;
+        vec2 e = vec2(0.0, 1.0);
+        for (int i = 0; i < 112; i++) {
+            if (!(texcoord.x > end && e.g > 0.8281 && e.r == 0.0)) break;
+            e = textureLod(materialParams_edges, texcoord, 0.0).rg;
+            texcoord -= vec2(2.0, 0.0) * px;
+        }
+        float offset = -(255.0 / 127.0) * searchLength(e, 0.0) + 3.25;
+        return px.x * offset + texcoord.x;
+    }
+
+    float searchRight(vec2 texcoord, float end) {
+        vec2 px = materialParams.step;
+        vec2 e = vec2(0.0, 1.0);
+        for (int i = 0; i < 112; i++) {
+            if (!(texcoord.x < end && e.g > 0.8281 && e.r == 0.0)) break;
+            e = textureLod(materialParams_edges, texcoord, 0.0).rg;
+            texcoord += vec2(2.0, 0.0) * px;
+        }
+        float offset = -(255.0 / 127.0) * searchLength(e, 0.5) + 3.25;
+        return -px.x * offset + texcoord.x;
+    }
+
+    float searchUp(vec2 texcoord, float end) {
+        vec2 px = materialParams.step;
+        vec2 e = vec2(1.0, 0.0);
+        for (int i = 0; i < 112; i++) {
+            if (!(texcoord.y > end && e.r > 0.8281 && e.g == 0.0)) break;
+            e = textureLod(materialParams_edges, texcoord, 0.0).rg;
+            texcoord -= vec2(0.0, 2.0) * px;
+        }
+        float offset = -(255.0 / 127.0) * searchLength(e.gr, 0.0) + 3.25;
+        return px.y * offset + texcoord.y;
+    }
+
+    float searchDown(vec2 texcoord, float end) {
+        vec2 px = materialParams.step;
+        vec2 e = vec2(1.0, 0.0);
+        for (int i = 0; i < 112; i++) {
+            if (!(texcoord.y < end && e.r > 0.8281 && e.g == 0.0)) break;
+            e = textureLod(materialParams_edges, texcoord, 0.0).rg;
+            texcoord += vec2(0.0, 2.0) * px;
+        }
+        float offset = -(255.0 / 127.0) * searchLength(e.gr, 0.5) + 3.25;
+        return -px.y * offset + texcoord.y;
+    }
+
+    // The coverage table, indexed by how far the run reached each way and by
+    // what the edge did at each end. The rounding is not tidiness: the index
+    // is fractional and bilinear filtering across a cell boundary would blend
+    // two unrelated answers together.
+    vec2 area(vec2 distance, float e1, float e2) {
+        vec2 at = kAreaMaxDistance * round(4.0 * vec2(e1, e2)) + distance;
+        vec2 texel = 1.0 / vec2(kAreaWide, kAreaTall);
+        at = texel * at + 0.5 * texel;
+        return textureLod(materialParams_area, at, 0.0).rg;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 at = getUV0();
+        vec2 px = materialParams.step;
+        float reach = materialParams.reach;
+        vec4 weights = vec4(0.0);
+        vec2 e = textureLod(materialParams_edges, at, 0.0).rg;
+
+        // Green: an edge along the top, so the run goes left and right.
+        if (e.g > 0.0) {
+            // A quarter of a pixel back and an eighth up. The offsets are the
+            // reference's and they are load-bearing: the walk reads between
+            // texels so that one fetch answers for two, and moving it to the
+            // texel centre quietly halves the search.
+            vec2 startL = at + px * vec2(-0.25, -0.125);
+            vec2 startR = at + px * vec2( 1.25, -0.125);
+            float endL = startL.x - 2.0 * reach * px.x;
+            float endR = startR.x + 2.0 * reach * px.x;
+
+            float left  = searchLeft(startL, endL);
+            float right = searchRight(startR, endR);
+
+            // The crossing row: a quarter of a pixel up from here, not a
+            // whole one. This is what says whether the run turns at its end
+            // or simply stops, which is the difference between a step and a
+            // diagonal.
+            float crossing = at.y - 0.25 * px.y;
+            float e1 = textureLod(materialParams_edges, vec2(left, crossing), 0.0).r;
+            float e2 = textureLod(materialParams_edges,
+                                  vec2(right + px.x, crossing), 0.0).r;
+
+            // In whole pixels, rounded, because the table is indexed by a
+            // count of pixels and a fraction of one indexes between entries.
+            vec2 d = abs(round((vec2(left, right) - vec2(at.x)) / px.x));
+            weights.rg = area(sqrt(d), e1, e2);
+        }
+
+        // Red: an edge down the left, so the run goes up and down. The same
+        // walk turned ninety degrees.
+        if (e.r > 0.0) {
+            vec2 startU = at + px * vec2(-0.125, -0.25);
+            vec2 startD = at + px * vec2(-0.125,  1.25);
+            float endU = startU.y - 2.0 * reach * px.y;
+            float endD = startD.y + 2.0 * reach * px.y;
+
+            float up   = searchUp(startU, endU);
+            float down = searchDown(startD, endD);
+
+            float crossing = at.x - 0.25 * px.x;
+            float e1 = textureLod(materialParams_edges, vec2(crossing, up), 0.0).g;
+            float e2 = textureLod(materialParams_edges,
+                                  vec2(crossing, down + px.y), 0.0).g;
+
+            vec2 d = abs(round((vec2(up, down) - vec2(at.y)) / px.y));
+            weights.ba = area(sqrt(d), e1, e2);
+        }
+
+        material.baseColor = weights;
+    }
+}
