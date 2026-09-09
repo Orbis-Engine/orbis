@@ -1,0 +1,297 @@
+// Light bouncing off what is already on the screen.
+//
+// Direct lighting stops at the first surface it meets: a red wall lit by the
+// sun is red, and the white wall beside it stays white, when in a real room it
+// would be pink. This puts one bounce back, taken from the only place a
+// screen-space pass can take it — the picture already drawn.
+//
+// The method is the visibility bitmask of Therrien, Ansari and Nowrouzezahrai,
+// "Screen Space Indirect Lighting with Visibility Bitmasks" (2023). Each pixel
+// fans a set of slices around its hemisphere and marches the depth buffer both
+// ways along each. Every sample covers a range of angles, which becomes a run
+// of bits in a 32-bit mask of the hemisphere. Bits that were clear and are now
+// set are sectors this pixel has *just* discovered are blocked — so the
+// blocking surface is one it can see, and that surface's colour is credited as
+// light arriving from its direction.
+//
+// Counting sectors is what makes the falloff right with no distance term in
+// it at all. Something twice as far away subtends half the angle and so covers
+// a quarter of the sectors: the inverse square, arrived at by geometry rather
+// than asserted. It is also why this reads better than a horizon-angle method
+// for bounced light — a horizon says only where the skyline is, and treats
+// everything behind it as solid to infinity, while a bitmask lets light
+// through the gap between two objects.
+material {
+    name : orbisBounce,
+    shadingModel : unlit,
+    // A fullscreen triangle, positioned in the vertex shader rather than by a
+    // transform, which is what lets this be an ordinary material rather than
+    // one of Filament's own post-process passes.
+    vertexDomain : device,
+    depthWrite : false,
+    depthCulling : false,
+    requires : [ uv0 ],
+    parameters : [
+        // The lit picture, which is both what is written back out and where
+        // the bounced light is read from.
+        { type : sampler2d, name : source },
+        // The scene's depth, from the same target.
+        { type : sampler2d, name : depth, precision : high },
+
+        // One texel, so a march can step in pixels.
+        { type : float2, name : step },
+
+        // The camera's near plane, which is the whole of what turns a depth
+        // value back into a distance.
+        //
+        // Filament draws with a reversed, infinite-far projection: what lands
+        // in the buffer is near/distance, one at the near plane and falling
+        // towards nought for ever. So the way back is a division, and no
+        // matrix is needed — which is just as well, because the projection
+        // the camera hands out does *not* carry the reversal and inverting it
+        // gives a distance that is wrong everywhere.
+        { type : float,  name : near, precision : high },
+        // The tangents of the half field of view, which turn a screen
+        // position and a distance into a view-space position.
+        { type : float2, name : tangents },
+
+        // How far the march reaches, in metres.
+        { type : float,  name : radius },
+        // How much of the bounce is put back.
+        { type : float,  name : intensity },
+        // How thick the depth buffer's surfaces are assumed to be. A depth
+        // buffer records where a surface is and says nothing about how deep
+        // it goes, so this is the difference between a pillar that occludes
+        // everything behind it forever and one light can pass beside.
+        { type : float,  name : thickness },
+        // How many directions each pixel fans out along, and how far it walks
+        // along each.
+        { type : int,    name : slices },
+        { type : int,    name : steps }
+    ],
+}
+
+fragment {
+    #define kPi 3.14159265359
+    #define kHalfPi 1.57079632679
+    #define kTiny 1e-6
+
+    // Thirty-two sectors because the mask is a uint, and one bit per sector
+    // is what makes discovering a *newly* blocked sector a single and-not.
+    const uint kSectors = 32u;
+
+    uint countBits(uint v) {
+        v = v - ((v >> 1u) & 0x55555555u);
+        v = (v & 0x33333333u) + ((v >> 2u) & 0x33333333u);
+        v = (v + (v >> 4u)) & 0x0F0F0F0Fu;
+        return (v * 0x01010101u) >> 24u;
+    }
+
+    // How far away the surface at [uv] is, in metres.
+    //
+    // Nought is not "at the eye" but "infinitely far": the buffer is reversed,
+    // so the sky and anything past the far plane arrive as nought and are
+    // reported as a distance the march treats as background.
+    float viewDepth(vec2 uv) {
+        float d = textureLod(materialParams_depth, uv, 0.0).r;
+        return d > 0.0 ? materialParams.near / d : 0.0;
+    }
+
+    // Eye at the origin looking down +Z, so the distance is the Z and the
+    // sideways offsets follow from the field of view.
+    vec3 viewPositionAt(vec2 uv) {
+        float z = viewDepth(uv);
+        vec2 ndc = vec2(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y);
+        return vec3(ndc.x * z * materialParams.tangents.x,
+                    ndc.y * z * materialParams.tangents.y, z);
+    }
+
+    // The geometric normal, from how the depth changes across a pixel.
+    //
+    // Central differences where the surface is continuous, and the *smaller*
+    // one-sided difference where it is not. Taking the central difference
+    // across a silhouette would tilt the normal towards whatever is behind
+    // the object, which reads as a dark rectangular halo around everything.
+    vec3 reconstructNormal(vec2 uv, vec3 centre) {
+        vec2 px = materialParams.step;
+        vec3 left   = viewPositionAt(uv - vec2(px.x, 0.0));
+        vec3 right  = viewPositionAt(uv + vec2(px.x, 0.0));
+        vec3 top    = viewPositionAt(uv - vec2(0.0, px.y));
+        vec3 bottom = viewPositionAt(uv + vec2(0.0, px.y));
+
+        float dl = abs(centre.z - left.z);
+        float dr = abs(right.z - centre.z);
+        vec3 dx = abs(dl - dr) < 0.02 * max(centre.z, 0.1)
+            ? (right - left) * 0.5
+            : (dl < dr ? centre - left : right - centre);
+
+        float dt = abs(centre.z - top.z);
+        float db = abs(bottom.z - centre.z);
+        vec3 dy = abs(dt - db) < 0.02 * max(centre.z, 0.1)
+            ? (bottom - top) * 0.5
+            : (dt < db ? centre - top : bottom - centre);
+
+        vec3 n = normalize(cross(dx, dy));
+        // Facing the eye, whichever way the cross product came out.
+        return dot(n, centre) > 0.0 ? -n : n;
+    }
+
+    // The run of sectors one sample covers, as a bit mask.
+    uint sectorMask(vec3 delta, vec3 viewDir, float side, float gamma,
+                    float thickness) {
+        vec3 behind = delta - viewDir * thickness;
+        float front = acos(clamp(
+            dot(delta, viewDir) * inversesqrt(max(dot(delta, delta), kTiny)),
+            -1.0, 1.0));
+        float back = acos(clamp(
+            dot(behind, viewDir) * inversesqrt(max(dot(behind, behind), kTiny)),
+            -1.0, 1.0));
+
+        vec2 range = clamp((side * -vec2(front, back) + gamma + kHalfPi) / kPi,
+                           0.0, 1.0);
+        vec2 span = side >= 0.0 ? range.yx : range.xy;
+
+        uint start = min(uint(span.x * float(kSectors)), kSectors - 1u);
+        uint count = uint(ceil(clamp(span.y - span.x, 0.0, 1.0)
+                               * float(kSectors)));
+        // Built with left shifts only. Shifting an all-ones literal right
+        // runs as an arithmetic shift through some translation layers, which
+        // floods the mask and marks the whole hemisphere blocked.
+        return count >= kSectors ? 0xFFFFFFFFu
+                                 : ((1u << count) - 1u) << start;
+    }
+
+    // Spatial noise, so the slice fan starts at a different angle per pixel.
+    // Without it the fan is the same everywhere and the error shows up as
+    // banding rather than as grain.
+    float gradientNoise(vec2 pixel) {
+        return fract(52.9829189 *
+                     fract(dot(floor(pixel), vec2(0.06711056, 0.00583715))));
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 uv = getUV0();
+        vec4 lit = textureLod(materialParams_source, uv, 0.0);
+        vec3 origin = viewPositionAt(uv);
+        // TEMPORARY DIAGNOSTIC
+
+        // Nothing was drawn here — the sky, or past the far plane. A march
+        // from the background samples the background, and the light it would
+        // find is the light already in the pixel.
+        if (origin.z <= 0.0 || origin.z > 1.0e6 || materialParams.intensity <= 0.0) {
+            material.baseColor = lit;
+            return;
+        }
+
+        vec3 normal = reconstructNormal(uv, origin);
+        vec3 viewDir = -normalize(origin);
+
+        // The march is in pixels, and how many pixels a metre covers depends
+        // on how far away this pixel is.
+        float projected = materialParams.radius
+                        / max(origin.z * materialParams.tangents.y, kTiny);
+        float screenRadius = projected * 0.5 / materialParams.step.y;
+        int stepCount = max(materialParams.steps, 1);
+        int sliceCount = max(materialParams.slices, 1);
+        float stepPixels = screenRadius / (float(stepCount) + 1.0);
+
+        float turn = gradientNoise(gl_FragCoord.xy);
+        float jitter = gradientNoise(gl_FragCoord.xy + vec2(47.0, 17.0));
+
+        vec3 gathered = vec3(0.0);
+
+        for (int i = 0; i < 8; i++) {
+            if (i >= sliceCount) break;
+
+            float phi = (float(i) + turn) * kPi / float(sliceCount);
+            vec2 omega = vec2(cos(phi), sin(phi));
+            // The view's Y runs up and the texture's V runs down.
+            vec3 direction = vec3(omega.x, -omega.y, 0.0);
+
+            vec3 ortho = direction - dot(direction, viewDir) * viewDir;
+            ortho *= inversesqrt(max(dot(ortho, ortho), kTiny));
+            // The slice is the plane through the eye spanned by `ortho` and
+            // the view direction; `axis` is its normal.
+            vec3 axis = cross(ortho, viewDir);
+            vec3 projNormal = normal - axis * dot(normal, axis);
+            float projLength = length(projNormal);
+            float cosNormal = clamp(
+                dot(projNormal, viewDir) / max(projLength, kTiny), 0.0, 1.0);
+            float gamma = sign(dot(ortho, projNormal)) * acos(cosNormal);
+
+            uint blocked = 0u;
+            vec3 lastNear = origin;
+            vec3 lastFar = origin;
+
+            for (int j = 0; j < 16; j++) {
+                if (j >= stepCount) break;
+
+                // At least one pixel a step, or a short radius walks the same
+                // texel repeatedly and finds nothing.
+                float at = max((float(j) + jitter) * stepPixels,
+                               float(j) + 1.0);
+                vec2 offset = omega * at * materialParams.step;
+                vec2 uvNear = uv + offset;
+                vec2 uvFar = uv - offset;
+
+                vec3 nearPos = viewPositionAt(uvNear);
+                vec3 farPos = viewPositionAt(uvFar);
+                vec3 deltaNear = nearPos - origin;
+                vec3 deltaFar = farPos - origin;
+
+                uint maskNear = sectorMask(deltaNear, viewDir, 1.0, gamma,
+                                           materialParams.thickness);
+                uint freshNear = maskNear & ~blocked;
+                blocked |= maskNear;
+
+                uint maskFar = sectorMask(deltaFar, viewDir, -1.0, gamma,
+                                          materialParams.thickness);
+                uint freshFar = maskFar & ~blocked;
+                blocked |= maskFar;
+
+                // A sector that has just been blocked is a surface this pixel
+                // can see, so its colour is light arriving from that
+                // direction — weighted by how squarely this surface faces it,
+                // and by how squarely it faces back.
+                if (freshNear != 0u) {
+                    vec3 toward = normalize(deltaNear);
+                    float receives = max(dot(normal, toward), 0.0);
+                    vec3 emitterNormal =
+                        -cross(normalize(nearPos - lastNear), axis);
+                    float emits = max(dot(emitterNormal, -toward), 0.0);
+                    vec3 radiance = textureLod(materialParams_source, uvNear, 0.0).rgb;
+                    gathered += radiance
+                              * (float(countBits(freshNear)) / float(kSectors))
+                              * receives * emits;
+                }
+                if (freshFar != 0u) {
+                    vec3 toward = normalize(deltaFar);
+                    float receives = max(dot(normal, toward), 0.0);
+                    vec3 emitterNormal =
+                        cross(normalize(farPos - lastFar), axis);
+                    float emits = max(dot(emitterNormal, -toward), 0.0);
+                    vec3 radiance = textureLod(materialParams_source, uvFar, 0.0).rgb;
+                    gathered += radiance
+                              * (float(countBits(freshFar)) / float(kSectors))
+                              * receives * emits;
+                }
+
+                lastNear = nearPos;
+                lastFar = farPos;
+            }
+        }
+
+        gathered *= materialParams.intensity / float(sliceCount);
+
+        // Scaled rather than added. What arrives is light for the surface to
+        // reflect, and how much it reflects is its colour — which a pass over
+        // the finished picture does not have. Multiplying uses the pixel
+        // itself as the stand-in, so a dark surface stays dark and a lit one
+        // takes the colour of what is near it. Adding would light a black
+        // surface, which is the one artefact of this that reads as a fault
+        // rather than as a look.
+        material.baseColor = vec4(lit.rgb * (vec3(1.0) + gathered), lit.a);
+    }
+}

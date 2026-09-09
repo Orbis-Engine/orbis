@@ -64,10 +64,14 @@
 #include "generated/smaa_edges_material.h"
 #include "generated/smaa_weights_material.h"
 #include "generated/smaa_blend_material.h"
+#include "generated/bounce_material.h"
+#include "generated/irradiance_material.h"
+#include "generated/copy_material.h"
 // SMAA's precomputed tables, fetched by setup.sh from the reference
 // implementation. MIT, Jorge Jimenez et al. — see LICENSES/SMAA.txt.
 #include "generated/AreaTex.h"
 #include "generated/SearchTex.h"
+#include "generated/LtcTables.h"
 #include "generated/lit_transparent_material.h"
 #include "generated/lit_fade_material.h"
 #include "generated/lit_masked_material.h"
@@ -468,6 +472,42 @@ struct Probe {
   uint8_t capture_layers = 0xFF;
   uint64_t seen = 0;
 };
+/// How many floats a world-space irradiance field takes on the wire. Must
+/// match `OrbisField.stride` on the Dart side and `fieldStride` in the plugin.
+constexpr uint32_t kFieldStride = 14;
+
+/// A probe's tile in the atlas, and how many of those fit across it.
+///
+/// Eight texels: six of directions with a one-texel gutter each side. The
+/// gutter carries a mirrored copy of the interior edge so that a bilinear
+/// read across the seam of the octahedron lands on the direction actually
+/// next to it rather than on the neighbouring probe's tile.
+constexpr uint32_t kFieldTile = 8;
+constexpr uint32_t kFieldTilesPerRow = 16;
+
+/// How much of the light going round the feedback loop is passed on.
+///
+/// A field reads the picture the scene drew, and that picture already holds
+/// what the field put into it, so the light goes round: field lights room,
+/// room is photographed, photograph lights field. Each lap multiplies by the
+/// surfaces' albedo and by the strength the host asked for, and an infinite
+/// series of that converges only while the product stays below one.
+constexpr float kFieldDamping = 0.6f;
+
+/// The largest product of damping and strength that stays convergent.
+///
+/// Measured in a room with a red wall and a blue one, over six hundred
+/// frames: the light that arrives matches what was asked for to within three
+/// per cent up to a strength of four, is ten per cent over at five, and
+/// **fifty-seven** per cent over at six — and it does not fail by getting
+/// brighter, it fails by drifting in hue, because the channel with the
+/// highest gain wins the race. One point eight is the last fully linear
+/// point with a whole step of margin under the knee.
+constexpr float kFieldSafeGain = 1.8f;
+
+/// The most probes a field may hold. A thousand is a large room at two-metre
+/// spacing, and the atlas for it is 128 by 512.
+constexpr uint32_t kFieldMaxProbes = 1024;
 
 /// How many floats one light takes on the wire.
 ///
@@ -477,7 +517,19 @@ struct Probe {
 /// once: the halo fields took a light from sixteen floats to eighteen, the
 /// kept copy followed and the offset did not, and every light after the first
 /// read a mixture of the one before it and itself.
-constexpr uint32_t kLightStride = 18;
+constexpr uint32_t kLightStride = 22;
+
+/// How many rectangular area lights one view shades.
+///
+/// They cost differently from Filament's own lights: a rectangle is a polygon
+/// integral inside the surface shader, paid by every lit fragment, and there
+/// is no culling in front of it. Sixteen is a room with a wall of windows,
+/// and the number at which the loop is still cheaper than the alternative.
+constexpr uint32_t kAreaLightBudget = 16;
+
+/// How many texels one rectangle occupies: centre, radiance, and the two
+/// edges with their lengths.
+constexpr uint32_t kAreaLightTexels = 4;
 
 /// How many compiled surfaces there are: three shading models in five blend
 /// modes, and the shadow catcher on the end.
@@ -558,6 +610,8 @@ constexpr int kEffectSharpen = 0;
 constexpr int kEffectSmaaEdges = 1;
 constexpr int kEffectSmaaWeights = 2;
 constexpr int kEffectSmaaBlend = 3;
+constexpr int kEffectBounce = 4;
+constexpr int kEffectCopy = 5;
 
 /// Where a material's texture says it comes from a pass rather than a file.
 static const char *const kTargetScheme = "orbis:target/";
@@ -972,8 +1026,51 @@ static constexpr NSUInteger kMaxPostParams = 128;
   std::map<int, filament::Material *> _effectMaterials;
 
   /// SMAA's two precomputed tables, uploaded once.
+  /// The world-space irradiance field: two atlases, written in turn.
+  ///
+  /// Two because a probe's new value is a blend of what it just learned with
+  /// what it already held, and a shader cannot read the texture it is writing.
+  /// One is the answer being read this frame while the other is being built.
+  filament::Texture *_fieldAtlas[2];
+  filament::RenderTarget *_fieldTargets[2];
+  int _fieldFront;
+  bool _fieldHasHistory;
+  uint32_t _fieldProbes;
+
+  /// The triangle the field is drawn with, and what draws it.
+  filament::View *_fieldView;
+  filament::Camera *_fieldCamera;
+  filament::Scene *_fieldScene;
+  utils::Entity _fieldEntity;
+  filament::MaterialInstance *_fieldInstance;
+  filament::Material *_fieldMaterial;
+
+  float _fieldParams[kFieldStride];
+  std::string _fieldFrom;
+
   filament::Texture *_smaaArea;
   filament::Texture *_smaaSearch;
+
+  /// The fitted tables every rectangular area light is shaded against, and
+  /// this frame's rectangles. Both are built once and live as long as the
+  /// renderer: the tables never change, and the lights are rewritten in
+  /// place so that a material instance can bind the texture once and not
+  /// care that its contents moved.
+  /// The fitted tables and this frame's rectangles, in one texture.
+  ///
+  /// One rather than two because a material at Filament's first feature level
+  /// may have nine samplers, and alongside the irradiance field's atlas these
+  /// would have been the tenth. They share without interfering: the tables are
+  /// read with filtering and the lights with texelFetch, which ignores it.
+  /// The tables occupy the first 64 rows and the rectangles the ones below.
+  filament::Texture *_lightData;
+
+  /// The rectangles as the GPU currently holds them, so a frame that changed
+  /// none of them uploads nothing. Almost every scene has no area lights at
+  /// all, and that scene should not pay a texture upload a frame to keep
+  /// saying so.
+  std::vector<float> _areaLightsOnGpu;
+
 
   /// Assets that could not be loaded. Sticky, because a file is read once and
   /// a failure that reported itself only on the frame of the attempt would
@@ -2636,6 +2733,96 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     instance->setParameter(kMapNames[i], blank, sampler);
     instance->setParameter(kMapFlags[i], false);
   }
+
+  // The rectangular area lights, which only the lit surface shades — and this
+  // runs for exactly the lit surfaces, the plain-coloured ones included. Bound
+  // once and never again: both textures outlive every surface that reads them,
+  // because the tables never change and the lights are rewritten in place.
+  [self buildLtcTables];
+  const TextureSampler tables(TextureSampler::MinFilter::LINEAR,
+                              TextureSampler::MagFilter::LINEAR,
+                              TextureSampler::WrapMode::CLAMP_TO_EDGE);
+  // Filtered, which the fitted tables need. The rectangles in the rows below
+  // are read with texelFetch, which ignores the sampler entirely, so they are
+  // not interpolated into each other by sharing this one.
+  instance->setParameter("lightData", _lightData, tables);
+  [self bindFieldTo:instance];
+}
+
+/// How much of the field reaches surfaces, held below where it feeds itself.
+///
+/// Reported rather than silently substituted: a host that asks for six and
+/// quietly gets three has a scene that does not match its reference and no
+/// way to find out why.
+- (float)fieldStrength {
+  const float asked = _fieldParams[10];
+  const float most = kFieldSafeGain / kFieldDamping;
+  if (asked <= most) {
+    [_assetNotes removeObjectForKey:@"fieldStrength"];
+    return asked;
+  }
+  _assetNotes[@"fieldStrength"] = [NSString
+      stringWithFormat:@"An irradiance field at a strength of %.1f feeds "
+                       @"itself: it reads the picture it brightened, so the "
+                       @"light goes round and drifts in hue rather than "
+                       @"settling. Held at %.1f.",
+                       asked, most];
+  return most;
+}
+
+/// Points every lit surface at the atlas holding this frame's answer.
+///
+/// Every frame, and it has to be: the two atlases are written in turn, so
+/// which of them holds the answer changes with them, and a surface left
+/// pointing at the one being written would read what is half-built. Cheap
+/// because it is a handful of parameters over the surfaces that exist, and
+/// skipped entirely by a scene with no field.
+- (void)bindFieldEverywhere {
+  if (_fieldProbes == 0 || _fieldParams[0] <= 0.0f) return;
+  for (auto &entry : _drawn) {
+    if (entry.second.material != nullptr) {
+      [self bindFieldTo:entry.second.material];
+    }
+  }
+  for (auto &entry : _materials) {
+    if (entry.second.instance == nullptr) continue;
+    if ((entry.second.flags & 3) != 0) continue;
+    [self bindFieldTo:entry.second.instance];
+  }
+}
+
+/// Gives one lit surface the field to read.
+///
+/// Every frame rather than once, because the two atlases are written in turn
+/// and which of them holds the answer changes with them. A surface left
+/// pointing at the one being written would read what is half-built.
+- (void)bindFieldTo:(MaterialInstance *)instance {
+  const TextureSampler smooth(TextureSampler::MinFilter::LINEAR,
+                              TextureSampler::MagFilter::LINEAR,
+                              TextureSampler::WrapMode::CLAMP_TO_EDGE);
+  Texture *atlas = _fieldAtlas[_fieldFront];
+  const bool on =
+      atlas != nullptr && _fieldProbes > 0 && _fieldParams[0] > 0.0f;
+  // Bound whether or not there is a field: Filament refuses to draw a
+  // material with a sampler nobody filled.
+  instance->setParameter("fieldAtlas", on ? atlas : [self blankTexture],
+                         smooth);
+  instance->setParameter(
+      "fieldOrigin", float4{_fieldParams[1], _fieldParams[2], _fieldParams[3],
+                            on ? 1.0f : 0.0f});
+  instance->setParameter("fieldSpacing",
+                         float4{_fieldParams[4], _fieldParams[5],
+                                _fieldParams[6], [self fieldStrength]});
+  instance->setParameter("fieldCounts",
+                         float4{_fieldParams[7], _fieldParams[8],
+                                _fieldParams[9], float(kFieldTilesPerRow)});
+  const uint32_t rows =
+      (std::max(_fieldProbes, 1u) + kFieldTilesPerRow - 1) / kFieldTilesPerRow;
+  const float wide = float(kFieldTilesPerRow * kFieldTile);
+  const float tall = float(std::max(rows, 1u) * kFieldTile);
+  instance->setParameter(
+      "fieldAtlasStep",
+      float4{1.0f / wide, 1.0f / tall, _fieldParams[12], 0.0f});
 }
 
 /// Loads an image, or hands back the one already loaded for that path.
@@ -3321,11 +3508,17 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       builder.texture(RenderTarget::AttachmentPoint::COLOR, target.colour);
     }
     if (target.keepsDepth) {
+      // Sampleable as well as attachable, so a later pass can read the
+      // shape of the scene rather than only its colour. That is the whole
+      // difference between an effect that can tint a picture and one that
+      // knows what is in front of what — occlusion, bounced light, contact
+      // shadows all begin here. It costs nothing when nothing samples it.
       target.depth = Texture::Builder()
                          .width(wide)
                          .height(tall)
                          .levels(1)
-                         .usage(Texture::Usage::DEPTH_ATTACHMENT)
+                         .usage(Texture::Usage::DEPTH_ATTACHMENT |
+                                Texture::Usage::SAMPLEABLE)
                          .format(Texture::InternalFormat::DEPTH32F)
                          .build(*_engine);
       builder.texture(RenderTarget::AttachmentPoint::DEPTH, target.depth);
@@ -3408,6 +3601,168 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
           Texture::PixelBufferDescriptor::PixelDataType::UBYTE));
 }
 
+/// One rectangle's four texels, in the coordinates the surface shader reads.
+///
+/// The conversion from what an artist states to what the integral wants
+/// happens here rather than in the shader, because it is the same answer for
+/// every fragment the light touches.
+- (void)packRectangle:(const float *)p into:(float *)out {
+  const float3 colour = {p[0], p[1], p[2]};
+  const float lumens = p[3];
+  const float3 centre = {p[4], p[5], p[6]};
+  float3 normal = {p[7], p[8], p[9]};
+  const float falloff = p[10];
+  const float width = std::max(p[17], 1e-4f);
+  const float height = std::max(p[18], 1e-4f);
+  float3 tangent = {p[19], p[20], p[21]};
+
+  // A direction that is not a direction is the commonest thing to be handed,
+  // and normalising nothing gives NaN, which spreads to every pixel the light
+  // reaches rather than to none of them.
+  if (length(normal) < 1e-6f) normal = {0.0f, -1.0f, 0.0f};
+  normal = normalize(normal);
+
+  // The tangent only has to be roughly right: it is squared up against the
+  // face here. If it was given parallel to the face's normal there is no
+  // rectangle to describe, so any perpendicular will do.
+  tangent = tangent - normal * dot(tangent, normal);
+  if (length(tangent) < 1e-6f) {
+    const float3 other =
+        std::abs(normal.x) < 0.9f ? float3{1, 0, 0} : float3{0, 1, 0};
+    tangent = other - normal * dot(other, normal);
+  }
+  tangent = normalize(tangent);
+
+  // Crossed this way round so that the polygon's own normal — which the
+  // integral takes as cross(right, up) — comes out facing the surfaces the
+  // light travels towards, and the back of the panel stays dark.
+  const float3 up = cross(tangent, normal);
+
+  // Lumens to luminance. A one-sided Lambertian panel of area A emitting a
+  // luminous flux F has a luminance of F / (pi * A), and that is the unit
+  // Filament's own lights arrive in, so a rectangle and a bulb of the same
+  // stated brightness agree. It is also why making a panel larger does not
+  // make a room brighter: the same flux is spread over more surface, which is
+  // what softens the shadow rather than lifting the exposure.
+  const float radiance =
+      lumens / (float(M_PI) * std::max(width * height, 1e-6f));
+
+  out[0] = centre.x;
+  out[1] = centre.y;
+  out[2] = centre.z;
+  out[3] = 0.0f;
+  out[4] = colour.x * radiance;
+  out[5] = colour.y * radiance;
+  out[6] = colour.z * radiance;
+  // The inverse radius, so the shader multiplies rather than divides. Zero
+  // means no window at all, which is a light that reaches as far as it is
+  // bright enough to.
+  out[7] = falloff > 1e-4f ? 1.0f / falloff : 0.0f;
+  out[8] = tangent.x;
+  out[9] = tangent.y;
+  out[10] = tangent.z;
+  out[11] = width;
+  out[12] = up.x;
+  out[13] = up.y;
+  out[14] = up.z;
+  out[15] = height;
+}
+
+/// Puts this frame's rectangles on the GPU, and tells the surfaces if how
+/// many there are has changed.
+- (void)uploadRectangles:(const float *)rectangles count:(uint32_t)count {
+  if (_lightData == nullptr) return;
+
+  const size_t floats = size_t(kAreaLightTexels) * kAreaLightBudget * 4;
+
+  std::vector<float> wanted(floats, 0.0f);
+  memcpy(wanted.data(), rectangles,
+         size_t(count) * kAreaLightTexels * 4 * sizeof(float));
+  // How many, in the first light's spare channel. With no lights the whole
+  // texture is zeros, which reads as a count of nought without needing a
+  // special case for it.
+  wanted[3] = float(count);
+
+  if (wanted == _areaLightsOnGpu) return;
+  _areaLightsOnGpu = wanted;
+
+  // Its own copy rather than the vector's storage: the descriptor keeps the
+  // pointer until the driver thread performs the upload, and the vector is
+  // free to be reassigned before then.
+  float *copy = static_cast<float *>(malloc(floats * sizeof(float)));
+  memcpy(copy, wanted.data(), floats * sizeof(float));
+  // Only the four columns the rectangles use, in the rows below the tables.
+  _lightData->setImage(
+      *_engine, 0, 0, 64, kAreaLightTexels, kAreaLightBudget,
+      Texture::PixelBufferDescriptor(
+          copy, floats * sizeof(float),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+          Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+          [](void *buffer, size_t, void *) { free(buffer); }));
+}
+
+/// The two fitted tables, side by side in one texture.
+///
+/// One texture rather than two because a material's sampler slots are the
+/// scarce thing and a tile is free. Thirty-two bit float rather than half:
+/// the matrix entries reach into the tens of thousands at the smooth end of
+/// the table, which is past what a half can hold, and a table that silently
+/// saturates gives a mirror-smooth surface no highlight at all.
+- (void)buildLtcTables {
+  if (_lightData != nullptr) return;
+
+  constexpr uint32_t kSide = 64;
+  constexpr size_t kTexels = size_t(kSide) * kSide;
+  static_assert(sizeof(kLtcMatrix) / sizeof(float) == kTexels * 4,
+                "the LTC matrix table is not 64x64 RGBA");
+  static_assert(sizeof(kLtcFresnel) / sizeof(float) == kTexels * 4,
+                "the LTC Fresnel table is not 64x64 RGBA");
+
+  // Interleaved row by row, because the two tiles share rows in the texture
+  // and are contiguous only in the source arrays.
+  const size_t floats = kTexels * 4 * 2;
+  float *packed = static_cast<float *>(malloc(floats * sizeof(float)));
+  for (uint32_t y = 0; y < kSide; y++) {
+    const size_t row = size_t(y) * kSide * 4;
+    memcpy(packed + y * kSide * 2 * 4, kLtcMatrix + row, kSide * 4 * sizeof(float));
+    memcpy(packed + y * kSide * 2 * 4 + kSide * 4, kLtcFresnel + row,
+           kSide * 4 * sizeof(float));
+  }
+
+  _lightData = Texture::Builder()
+                   .width(kSide * 2)
+                   .height(kSide + kAreaLightBudget)
+                   .levels(1)
+                   .format(Texture::InternalFormat::RGBA32F)
+                   .sampler(Texture::Sampler::SAMPLER_2D)
+                   .usage(Texture::Usage::SAMPLEABLE |
+                          Texture::Usage::UPLOADABLE)
+                   .build(*_engine);
+  // Freed by the callback rather than after this returns: the descriptor
+  // keeps the pointer until the driver thread performs the upload, which is
+  // later than here.
+  _lightData->setImage(
+      *_engine, 0, 0, 0, kSide * 2, kSide,
+      Texture::PixelBufferDescriptor(
+          packed, floats * sizeof(float),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+          Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+          [](void *buffer, size_t, void *) { free(buffer); }));
+
+  // The rows the rectangles live in, started empty so that a surface binding
+  // this before any light exists reads nought rather than whatever the driver
+  // last had there.
+  const size_t blankFloats = size_t(kAreaLightTexels) * kAreaLightBudget * 4;
+  float *blank = static_cast<float *>(calloc(blankFloats, sizeof(float)));
+  _lightData->setImage(
+      *_engine, 0, 0, kSide, kAreaLightTexels, kAreaLightBudget,
+      Texture::PixelBufferDescriptor(
+          blank, blankFloats * sizeof(float),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+          Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+          [](void *buffer, size_t, void *) { free(buffer); }));
+}
+
 /// The compiled material one effect runs, built the first time it is asked
 /// for. An effect nobody has a material for draws nothing rather than
 /// drawing wrongly.
@@ -3429,6 +3784,14 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     case kEffectSmaaWeights:
       package = ksmaa_weightsMaterial;
       length = ksmaa_weightsMaterial_len;
+      break;
+    case kEffectCopy:
+      package = kcopyMaterial;
+      length = kcopyMaterial_len;
+      break;
+    case kEffectBounce:
+      package = kbounceMaterial;
+      length = kbounceMaterial_len;
       break;
     case kEffectSmaaBlend:
       package = ksmaa_blendMaterial;
@@ -3598,6 +3961,50 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       pass.effectMaterial->setParameter("weights", weights->colour, smooth);
       pass.effectMaterial->setParameter(
           "step", filament::math::float2{1.0f / wide, 1.0f / tall});
+      break;
+    }
+    case kEffectBounce: {
+      // Depth as well as colour, from the same target. A graph names that
+      // target once and gets both, because asking a host to list the depth
+      // of a thing it has already listed is a way of getting the two out of
+      // step.
+      if (from->depth == nullptr) return;
+      // Nearest, and it matters: a linear tap between two depths is a
+      // distance at which nothing stands, and the march would find a surface
+      // in mid-air at every silhouette.
+      const TextureSampler exact(TextureSampler::MinFilter::NEAREST,
+                                 TextureSampler::MagFilter::NEAREST,
+                                 TextureSampler::WrapMode::CLAMP_TO_EDGE);
+      pass.effectMaterial->setParameter("depth", from->depth, exact);
+      pass.effectMaterial->setParameter(
+          "step", filament::math::float2{1.0f / wide, 1.0f / tall});
+
+      // The scene's camera, not this pass's. An effect draws through a camera
+      // of its own — that is what puts a triangle over the whole screen — so
+      // the projection that made the depth has to be handed over rather than
+      // read from the frame.
+      const Camera &scene = _view->getCamera();
+      const filament::math::mat4 clipFromView = scene.getProjectionMatrix();
+      pass.effectMaterial->setParameter("near", float(scene.getNear()));
+      // The half field of view as tangents, which turn a place on the screen
+      // and a distance into a position. Read off the projection so an
+      // orthographic or an off-centre camera cannot disagree with it.
+      pass.effectMaterial->setParameter(
+          "tangents",
+          filament::math::float2{float(1.0 / clipFromView[0][0]),
+                                 float(1.0 / clipFromView[1][1])});
+
+      pass.effectMaterial->setParameter("radius", dial > 0.0f ? dial : 1.5f);
+      pass.effectMaterial->setParameter("intensity", pass.plane[1] > 0.0f
+                                                         ? pass.plane[1]
+                                                         : 1.0f);
+      pass.effectMaterial->setParameter(
+          "thickness", pass.plane[2] > 0.0f ? pass.plane[2] : 0.35f);
+      // Four slices of eight steps is the shape that holds up while staying
+      // affordable; the shader's loops are bounded at eight and sixteen.
+      const int slices = pass.plane[3] > 0.0f ? int(pass.plane[3]) : 4;
+      pass.effectMaterial->setParameter("slices", int32_t(std::clamp(slices, 1, 8)));
+      pass.effectMaterial->setParameter("steps", int32_t(8));
       break;
     }
     default:
@@ -4373,9 +4780,26 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   uint32_t directional = 0;
   uint32_t punctual = 0;
 
+  // This frame's rectangles, gathered as they are met and uploaded once at
+  // the end. They never become Filament lights, so they take no entity, cast
+  // no shadow, and do not count against the punctual budget below.
+  [self buildLtcTables];
+  float rectangles[kAreaLightBudget * kAreaLightTexels * 4] = {};
+  uint32_t rectangleCount = 0;
+  uint32_t rectanglesAsked = 0;
+
   for (uint32_t i = 0; i < count; i++) {
     const int32_t kind = kinds[i];
     const float *p = params + i * kLightStride;
+
+    if (kind == 3) {
+      rectanglesAsked++;
+      if (rectangleCount < kAreaLightBudget) {
+        [self packRectangle:p into:rectangles + rectangleCount * kAreaLightTexels * 4];
+        rectangleCount++;
+      }
+      continue;
+    }
 
     // Filament shades one directional light per view. A second is dropped
     // rather than blended, and being told is the difference between a scene
@@ -4422,6 +4846,14 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       if (instance) lights.setShadowCaster(instance, (flags[i] & 1) != 0);
     }
   }
+
+  if (rectanglesAsked > kAreaLightBudget) {
+    notes[@"area"] = [NSString
+        stringWithFormat:@"%u rectangular lights is past the %u this view "
+                         @"shades. The ones past it light nothing.",
+                         rectanglesAsked, kAreaLightBudget];
+  }
+  [self uploadRectangles:rectangles count:rectangleCount];
 
   if (punctual > kPunctualLightBudget) {
     notes[@"punctual"] = [NSString
@@ -4713,6 +5145,218 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     return;
   }
   _scene->setIndirectLight(_probes[wanted].light);
+}
+
+/// Takes the field's numbers, and builds its atlases when their size changes.
+- (void)applyField:(const float *)params from:(NSString *)from {
+  if (_disposed || params == nullptr) return;
+  memcpy(_fieldParams, params, sizeof(_fieldParams));
+  _fieldFrom = from != nil ? from.UTF8String : "";
+
+  const uint32_t wanted = std::min(
+      uint32_t(std::max(0.0f, params[7])) * uint32_t(std::max(0.0f, params[8])) *
+          uint32_t(std::max(0.0f, params[9])),
+      kFieldMaxProbes);
+  if (wanted == _fieldProbes) return;
+
+  [self releaseField];
+  _fieldProbes = wanted;
+  if (wanted == 0) return;
+
+  const uint32_t rows = (wanted + kFieldTilesPerRow - 1) / kFieldTilesPerRow;
+  const uint32_t wide = kFieldTilesPerRow * kFieldTile;
+  const uint32_t tall = rows * kFieldTile;
+
+  for (int i = 0; i < 2; i++) {
+    _fieldAtlas[i] = Texture::Builder()
+                         .width(wide)
+                         .height(tall)
+                         .levels(1)
+                         .format(Texture::InternalFormat::RGBA16F)
+                         // Uploadable as well, only so it can be cleared
+                         // once at the start. Filament refuses setImage on a
+                         // texture without it.
+                         .usage(Texture::Usage::COLOR_ATTACHMENT |
+                                Texture::Usage::SAMPLEABLE |
+                                Texture::Usage::UPLOADABLE)
+                         .build(*_engine);
+    _fieldTargets[i] = RenderTarget::Builder()
+                           .texture(RenderTarget::AttachmentPoint::COLOR,
+                                    _fieldAtlas[i])
+                           .build(*_engine);
+    // Cleared, because a texture Filament allocates holds whatever the
+    // driver last had there. A surface reads this before the first pass has
+    // written it, and what it found was a constant that looked like light —
+    // this room came back green, a colour nowhere in it.
+    const size_t floats = size_t(wide) * tall * 4;
+    float *blank = static_cast<float *>(calloc(floats, sizeof(float)));
+    _fieldAtlas[i]->setImage(
+        *_engine, 0, 0, 0, wide, tall,
+        Texture::PixelBufferDescriptor(
+            blank, floats * sizeof(float),
+            Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+            Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+            [](void *buffer, size_t, void *) { free(buffer); }));
+  }
+  _fieldFront = 0;
+  // Nothing to blend against on the first frame, so the first pass takes
+  // what it finds rather than mixing it with an atlas that has never been
+  // written. Otherwise a field fades in from whatever the allocation held.
+  _fieldHasHistory = false;
+}
+
+/// Builds the triangle the field is drawn with, once.
+- (bool)buildField {
+  if (_fieldScene != nullptr) return true;
+
+  _fieldMaterial = Material::Builder()
+                       .package(kirradianceMaterial, kirradianceMaterial_len)
+                       .build(*_engine);
+  if (_fieldMaterial == nullptr) return false;
+
+  static const float kCorners[] = {
+      -1.0f, -1.0f, 0.0f, 0.0f,  //
+       3.0f, -1.0f, 2.0f, 0.0f,  //
+      -1.0f,  3.0f, 0.0f, 2.0f,  //
+  };
+  static const uint16_t kOrder[] = {0, 1, 2};
+
+  auto *vertices = VertexBuffer::Builder()
+                       .vertexCount(3)
+                       .bufferCount(1)
+                       .attribute(VertexAttribute::POSITION, 0,
+                                  VertexBuffer::AttributeType::FLOAT2, 0,
+                                  sizeof(float) * 4)
+                       .attribute(VertexAttribute::UV0, 0,
+                                  VertexBuffer::AttributeType::FLOAT2,
+                                  sizeof(float) * 2, sizeof(float) * 4)
+                       .build(*_engine);
+  vertices->setBufferAt(*_engine, 0,
+                        VertexBuffer::BufferDescriptor(
+                            kCorners, sizeof(kCorners), nullptr));
+  auto *indices = IndexBuffer::Builder()
+                      .indexCount(3)
+                      .bufferType(IndexBuffer::IndexType::USHORT)
+                      .build(*_engine);
+  indices->setBuffer(*_engine, IndexBuffer::BufferDescriptor(
+                                   kOrder, sizeof(kOrder), nullptr));
+
+  _fieldInstance = _fieldMaterial->createInstance();
+  _fieldEntity = utils::EntityManager::get().create();
+  RenderableManager::Builder(1)
+      .boundingBox({{-1, -1, -1}, {1, 1, 1}})
+      .culling(false)
+      .material(0, _fieldInstance)
+      .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, vertices,
+                indices, 0, 3)
+      .castShadows(false)
+      .receiveShadows(false)
+      .build(*_engine, _fieldEntity);
+
+  _fieldScene = _engine->createScene();
+  _fieldScene->addEntity(_fieldEntity);
+  _fieldView = _engine->createView();
+  _fieldView->setScene(_fieldScene);
+  _fieldCamera = _engine->createCamera(utils::EntityManager::get().create());
+  _fieldView->setCamera(_fieldCamera);
+  _fieldView->setPostProcessingEnabled(false);
+  return true;
+}
+
+/// Adds this frame's light to the field.
+///
+/// Runs after the scene has been drawn, because what it reads is the picture
+/// the scene just made. The atlas it writes is therefore one frame behind the
+/// surfaces that sample it, which is what every temporal method trades and is
+/// invisible at anything above a few frames a second.
+- (void)runField {
+  if (_fieldProbes == 0 || _fieldParams[0] <= 0.0f) return;
+  if (![self buildField]) return;
+
+  // The picture to read. A field that names a target which does not exist
+  // stays dark rather than sampling whatever was bound last.
+  GraphTarget *source = nullptr;
+  for (auto &target : _targets) {
+    if (target.name == _fieldFrom && target.colour != nullptr &&
+        target.depth != nullptr) {
+      source = &target;
+      break;
+    }
+  }
+  if (source == nullptr) {
+    // Said rather than left dark. A field whose target does not exist looks
+    // exactly like a field that is not working, and the difference is a name
+    // in a graph.
+    _assetNotes[@"field"] = [NSString
+        stringWithFormat:@"The irradiance field fills itself from a target "
+                         @"called \"%s\", which this graph has no colour and "
+                         @"depth for. No light is reaching it.",
+                         _fieldFrom.c_str()];
+    return;
+  }
+  [_assetNotes removeObjectForKey:@"field"];
+
+  const int back = 1 - _fieldFront;
+  const TextureSampler smooth(TextureSampler::MinFilter::LINEAR,
+                              TextureSampler::MagFilter::LINEAR,
+                              TextureSampler::WrapMode::CLAMP_TO_EDGE);
+  const TextureSampler exact(TextureSampler::MinFilter::NEAREST,
+                             TextureSampler::MagFilter::NEAREST,
+                             TextureSampler::WrapMode::CLAMP_TO_EDGE);
+
+  _fieldInstance->setParameter("source", source->colour, smooth);
+  _fieldInstance->setParameter("depth", source->depth, exact);
+  _fieldInstance->setParameter("history", _fieldAtlas[_fieldFront], exact);
+  _fieldInstance->setParameter(
+      "origin", float3{_fieldParams[1], _fieldParams[2], _fieldParams[3]});
+  _fieldInstance->setParameter(
+      "spacing", float3{_fieldParams[4], _fieldParams[5], _fieldParams[6]});
+  _fieldInstance->setParameter(
+      "counts", float3{_fieldParams[7], _fieldParams[8], _fieldParams[9]});
+  _fieldInstance->setParameter("tilesPerRow", float(kFieldTilesPerRow));
+
+  const uint32_t rows =
+      (_fieldProbes + kFieldTilesPerRow - 1) / kFieldTilesPerRow;
+  const float wide = float(kFieldTilesPerRow * kFieldTile);
+  const float tall = float(rows * kFieldTile);
+  _fieldInstance->setParameter("atlasSize", float2{wide, tall});
+
+  const Camera &scene = _view->getCamera();
+  _fieldInstance->setParameter(
+      "clipFromWorld",
+      mat4f(scene.getProjectionMatrix() * scene.getViewMatrix()));
+  _fieldInstance->setParameter("near", float(scene.getNear()));
+  const math::mat4 projection = scene.getProjectionMatrix();
+  _fieldInstance->setParameter("tangents",
+                               float2{float(1.0 / projection[0][0]),
+                                      float(1.0 / projection[1][1])});
+  _fieldInstance->setParameter("eye", float3(scene.getPosition()));
+  _fieldInstance->setParameter("retention", _fieldParams[11]);
+  _fieldInstance->setParameter("damping", kFieldDamping);
+  _fieldInstance->setParameter("hasHistory", _fieldHasHistory ? 1.0f : 0.0f);
+
+  _fieldCamera->setExposure(1.0f);
+  _fieldView->setRenderTarget(_fieldTargets[back]);
+  _fieldView->setViewport({0, 0, uint32_t(wide), uint32_t(tall)});
+  _renderer->render(_fieldView);
+
+  _fieldFront = back;
+  _fieldHasHistory = true;
+}
+
+- (void)releaseField {
+  for (int i = 0; i < 2; i++) {
+    if (_fieldTargets[i] != nullptr) {
+      _engine->destroy(_fieldTargets[i]);
+      _fieldTargets[i] = nullptr;
+    }
+    if (_fieldAtlas[i] != nullptr) {
+      _engine->destroy(_fieldAtlas[i]);
+      _fieldAtlas[i] = nullptr;
+    }
+  }
+  _fieldProbes = 0;
+  _fieldHasHistory = false;
 }
 
 - (void)setPostProcess:(const float *)params count:(NSUInteger)count {
@@ -5433,7 +6077,14 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // in, then the frame itself.
   [self captureOwedProbes];
   [self chooseProbe];
+  // The surfaces read the atlas built up to last frame, so they are pointed
+  // at it before anything is drawn.
+  [self bindFieldEverywhere];
   [self renderPasses];
+  // After the scene, because what the field reads is the picture the scene
+  // just made. The atlas it writes is therefore what next frame's surfaces
+  // sample — one frame behind, which is what every temporal method trades.
+  [self runField];
   _renderer->endFrame();
 
   // Flutter may sample the moment this returns, so the frame has to be on the
@@ -5599,6 +6250,26 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   }
   _effectMaterials.clear();
 
+  [self releaseField];
+  if (_fieldScene != nullptr) {
+    _engine->destroy(_fieldScene);
+    _fieldScene = nullptr;
+  }
+  if (_fieldView != nullptr) {
+    _engine->destroy(_fieldView);
+    _fieldView = nullptr;
+  }
+  if (_fieldCamera != nullptr) {
+    utils::Entity entity = _fieldCamera->getEntity();
+    _engine->destroyCameraComponent(entity);
+    utils::EntityManager::get().destroy(entity);
+    _fieldCamera = nullptr;
+  }
+  if (_fieldMaterial != nullptr) {
+    _engine->destroy(_fieldMaterial);
+    _fieldMaterial = nullptr;
+  }
+
   if (_smaaArea != nullptr) {
     _engine->destroy(_smaaArea);
     _smaaArea = nullptr;
@@ -5606,6 +6277,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   if (_smaaSearch != nullptr) {
     _engine->destroy(_smaaSearch);
     _smaaSearch = nullptr;
+  }
+  if (_lightData != nullptr) {
+    _engine->destroy(_lightData);
+    _lightData = nullptr;
   }
 
   for (auto &entry : _probes) [self releaseProbe:entry.second];

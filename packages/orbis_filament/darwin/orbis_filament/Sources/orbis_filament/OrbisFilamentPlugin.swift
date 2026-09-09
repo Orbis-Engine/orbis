@@ -451,6 +451,10 @@ private final class Viewport {
       }
     }
 
+    if !scene.fieldParams.isEmpty {
+      renderer.applyField(scene.fieldParams, from: scene.fieldFrom)
+    }
+
     renderer.setSkyColour(scene.skyColour,
                           ambient: scene.ambient,
                           showBody: scene.showBody)
@@ -525,6 +529,8 @@ private struct Scene {
   let lightParams: [Float]
   let probeKeys: [Int64]
   let probeParams: [Float]
+  let fieldParams: [Float]
+  let fieldFrom: String
   let cameraPosition: [Float]
   let cameraTarget: [Float]
   let fieldOfView: Float
@@ -583,8 +589,9 @@ private struct Scene {
   /// How many floats one light occupies, and how many the fog does. Both
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
-  private static let lightStride = 18
   private static let probeStride = 8
+  private static let lightStride = 22
+  private static let fieldStride = 14
 
   /// How many floats a graph pass and a graph target take. Must match
   /// OrbisRenderGraph on the Dart side and the constants in the renderer.
@@ -643,8 +650,10 @@ private struct Scene {
           lightKinds.count == lightCount, lightFlags.count == lightCount,
           lightParams.count == lightCount * Scene.lightStride,
           // A kind the renderer does not know would select a light type by
-          // falling through, which is a silent wrong answer.
-          lightKinds.allSatisfy({ $0 >= 0 && $0 <= 2 }),
+          // falling through, which is a silent wrong answer. Three is the
+          // rectangle, which is shaded by the surface material rather than by
+          // Filament and so never becomes a light type at all.
+          lightKinds.allSatisfy({ $0 >= 0 && $0 <= 3 }),
           fogParams.count == Scene.fogStride,
           precipitationParams.count == Scene.precipitationStride,
           skyParams.count == Scene.skyStride,
@@ -665,6 +674,12 @@ private struct Scene {
       self.probeKeys = []
       self.probeParams = []
     }
+    // A field is optional in the same way the environment is.
+    let fieldParams =
+      (arguments["fieldParams"] as? FlutterStandardTypedData)?.floats ?? []
+    self.fieldParams =
+      fieldParams.count == Scene.fieldStride ? fieldParams : []
+    self.fieldFrom = arguments["fieldFrom"] as? String ?? ""
 
     // Not in the guard above: a scene without it is a scene with the
     // defaults, not a scene that fails to arrive.

@@ -3,6 +3,67 @@ import 'package:orbis_filament/orbis_filament.dart';
 import 'package:vector_math/vector_math_64.dart';
 
 void main() {
+  group('a rectangle of light', () {
+    OrbisScene sceneWith(OrbisLight light) => OrbisScene(
+      objects: const [],
+      camera: OrbisCamera(position: Vector3(0, 0, 5), target: Vector3.zero()),
+      lights: [light],
+    );
+
+    test('its size and its edge reach the renderer', () {
+      // A rectangle is the one light whose orientation is not settled by
+      // where it points: the face leaves it free to spin in its own plane.
+      // So the edge crosses as well as the aim, and both have to arrive.
+      final params =
+          sceneWith(
+                OrbisLight(
+                  key: 1,
+                  kind: OrbisLightKind.area,
+                  intensity: 5000,
+                  position: Vector3(0, 3, 0),
+                  direction: Vector3(0, -1, 0),
+                  tangent: Vector3(0, 0, 1),
+                  width: 2.5,
+                  height: 0.75,
+                ),
+              ).toMessage(1)['lightParams']!
+              as List<double>;
+
+      expect(params, hasLength(OrbisLight.stride));
+      expect(params[17], 2.5, reason: 'width');
+      expect(params[18], 0.75, reason: 'height');
+      expect(params[19], 0, reason: 'tangent x');
+      expect(params[20], 0, reason: 'tangent y');
+      expect(params[21], 1, reason: 'tangent z');
+    });
+
+    test('it is a kind of its own, not a point in disguise', () {
+      // The renderer refuses a kind it does not know rather than falling
+      // through to one it does, so the index matters as much as the floats.
+      final kinds =
+          sceneWith(
+                OrbisLight(key: 1, kind: OrbisLightKind.area, intensity: 5000),
+              ).toMessage(1)['lightKinds']!
+              as List<int>;
+      expect(kinds.single, OrbisLightKind.area.index);
+      expect(OrbisLightKind.area.index, 3);
+    });
+
+    test('a rectangle left undescribed is still a rectangle', () {
+      // Nought width would divide by nothing when the flux is turned into a
+      // luminance, so the defaults have to be a real panel rather than a
+      // degenerate one.
+      final light = OrbisLight(
+        key: 1,
+        kind: OrbisLightKind.area,
+        intensity: 100,
+      );
+      expect(light.width, greaterThan(0));
+      expect(light.height, greaterThan(0));
+      expect(light.tangent.length, greaterThan(0));
+    });
+  });
+
   group('what crosses to the renderer keeps its shape', () {
     test('a light writes exactly the stride it declares', () {
       // The renderer walks this array by a stride of its own. When the two

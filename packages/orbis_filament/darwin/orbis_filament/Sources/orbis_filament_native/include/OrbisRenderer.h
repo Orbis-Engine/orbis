@@ -151,6 +151,14 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)applyProbes:(const int64_t *)keys
              params:(const float *)params
               count:(uint32_t)count;
+/// The light the scene keeps in the world rather than on the screen.
+///
+/// `params` is fourteen floats: whether it is on, where the corner probe
+/// stands, the metres between probes, how many there are along each axis, how
+/// much of it reaches surfaces, how much of a probe survives each frame, and
+/// how far off a surface it is sampled from. `from` names the target the
+/// probes are filled by reading.
+- (void)applyField:(const float *)params from:(NSString *)from;
 
 /// Sets the place the scene is standing in: the light it casts, and the
 /// backdrop it is seen against.

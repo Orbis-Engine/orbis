@@ -30,6 +30,8 @@ class LightsExample extends Example {
   double intensity = 82000;
   double cone = 45;
   double sourceWidth = 0.5;
+  double panelWidth = 3;
+  double panelHeight = 1.4;
   bool shadows = true;
   bool orbiting = true;
 
@@ -99,6 +101,25 @@ class LightsExample extends Example {
             castShadows: shadows,
             colour: linearOf(const Color(0xFFFFF0D8)),
           ),
+          'Panel' => OrbisLight(
+            key: 200,
+            kind: OrbisLightKind.area,
+            // Lumens, like a bulb — but coming off a surface rather than out
+            // of a point, so making the panel bigger spreads the same light
+            // wider and softens its edge instead of brightening the room.
+            intensity: intensity,
+            position: from,
+            // The face it emits from. A rectangle is one-sided: turn it round
+            // and the scene goes dark.
+            direction: aim,
+            // Which way the width runs. Without it the panel is free to spin
+            // in its own plane, and a strip on its side is a different light.
+            tangent: Vector3(math.cos(turn), 0, -math.sin(turn)),
+            width: panelWidth,
+            height: panelHeight,
+            falloffRadius: 24,
+            colour: linearOf(const Color(0xFFFFF0D8)),
+          ),
           _ => OrbisLight(
             key: 200,
             kind: OrbisLightKind.directional,
@@ -126,20 +147,29 @@ class LightsExample extends Example {
   @override
   Widget settings(BuildContext context, VoidCallback changed) {
     final punctual = kind != 'Sun';
+    // A panel states its size as two edges, so the single 'how wide is the
+    // source' slider has nothing to say about it.
+    final hasSource = kind != 'Panel';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Choice(
           label: 'Kind',
-          options: const ['Sun', 'Point', 'Spot'],
+          options: const ['Sun', 'Point', 'Spot', 'Panel'],
           selected: kind,
           onSelect: (option) {
             kind = option;
             // The units change with the kind, so the number does too. A
             // hundred thousand lumens is a floodlight; a hundred thousand lux
-            // is the sun.
-            intensity = option == 'Sun' ? 82000 : 12000;
+            // is the sun. A panel wants more than a bulb for the same effect
+            // in shot: its flux leaves a whole surface rather than a filament,
+            // so the same lumens land as a gentler wash.
+            intensity = switch (option) {
+              'Sun' => 82000.0,
+              'Panel' => 260000.0,
+              _ => 12000.0,
+            };
             changed();
           },
         ),
@@ -147,13 +177,41 @@ class LightsExample extends Example {
           label: punctual ? 'Lumens' : 'Lux',
           value: intensity,
           min: 0,
-          max: punctual ? 60000 : 140000,
+          max: kind == 'Panel'
+              ? 600000
+              : punctual
+              ? 60000
+              : 140000,
           decimals: 0,
           onChanged: (value) {
             intensity = value;
             changed();
           },
         ),
+        if (kind == 'Panel') ...[
+          Setting(
+            label: 'Panel width',
+            value: panelWidth,
+            min: 0.1,
+            max: 8,
+            unit: ' m',
+            onChanged: (value) {
+              panelWidth = value;
+              changed();
+            },
+          ),
+          Setting(
+            label: 'Panel height',
+            value: panelHeight,
+            min: 0.1,
+            max: 8,
+            unit: ' m',
+            onChanged: (value) {
+              panelHeight = value;
+              changed();
+            },
+          ),
+        ],
         if (kind == 'Spot')
           Setting(
             label: 'Cone',
@@ -167,25 +225,27 @@ class LightsExample extends Example {
               changed();
             },
           ),
-        Setting(
-          label: punctual ? 'Bulb radius' : 'Sun size',
-          value: sourceWidth,
-          min: 0.05,
-          max: punctual ? 2 : 8,
-          unit: punctual ? ' m' : '°',
-          onChanged: (value) {
-            sourceWidth = value;
-            changed();
-          },
-        ),
-        Toggle(
-          label: 'Shadows',
-          value: shadows,
-          onChanged: (value) {
-            shadows = value;
-            changed();
-          },
-        ),
+        if (hasSource)
+          Setting(
+            label: punctual ? 'Bulb radius' : 'Sun size',
+            value: sourceWidth,
+            min: 0.05,
+            max: punctual ? 2 : 8,
+            unit: punctual ? ' m' : '°',
+            onChanged: (value) {
+              sourceWidth = value;
+              changed();
+            },
+          ),
+        if (hasSource)
+          Toggle(
+            label: 'Shadows',
+            value: shadows,
+            onChanged: (value) {
+              shadows = value;
+              changed();
+            },
+          ),
         Toggle(
           label: 'Circling',
           value: orbiting,

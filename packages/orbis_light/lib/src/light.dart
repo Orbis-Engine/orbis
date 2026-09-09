@@ -130,17 +130,43 @@ class Light {
     AreaShape.ellipse => math.pi * (sizeX / 2) * (sizeY / 2),
   };
 
+  /// The rectangle the shading actually integrates.
+  ///
+  /// A square and a rectangle are themselves. A disk and an ellipse are
+  /// squared off to the same emitting area rather than to the same bounding
+  /// box, so the light they throw is right even though their outline is not:
+  /// area is what sets the brightness, and the box around a disk is over a
+  /// quarter too big.
+  double _rectangleWidth() => switch (shape) {
+    AreaShape.square => sizeX,
+    AreaShape.rectangle => sizeX,
+    AreaShape.disk => sizeX * _roundToSquare,
+    AreaShape.ellipse => sizeX * _roundToSquare,
+  };
+
+  double _rectangleHeight() => switch (shape) {
+    AreaShape.square => sizeX,
+    AreaShape.rectangle => sizeY,
+    AreaShape.disk => sizeX * _roundToSquare,
+    AreaShape.ellipse => sizeY * _roundToSquare,
+  };
+
+  /// sqrt(pi)/2: what a diameter is multiplied by to give a square of the
+  /// same area as the circle.
+  static final double _roundToSquare = math.sqrt(math.pi) / 2;
+
   /// Converts to the units and angles a renderer works in.
   RendererLight toRenderer() {
     final kind = switch (type) {
       LightType.sun => RendererLightKind.directional,
       LightType.point => RendererLightKind.point,
       LightType.spot => RendererLightKind.spot,
-      // No renderer this targets has a true area light, so it arrives as a
-      // point of the same luminous power at the shape's centre. The falloff
-      // and the total light are right; the soft shadow its size would have
-      // produced is not, and that is worth knowing rather than discovering.
-      LightType.area => RendererLightKind.point,
+      // A real rectangle now, shaded against the fitted tables rather than
+      // stood in for by a point at the centre. A round emitter still has to
+      // be squared off — the closed form is for polygons — but a rectangle of
+      // the same area is a far better stand-in than a point, and says so
+      // through `approximated`.
+      LightType.area => RendererLightKind.area,
     };
 
     final intensity = type == LightType.sun
@@ -162,7 +188,13 @@ class Light {
       sunAngularRadius: sunAngle / 2,
       sourceRadius: type == LightType.area ? _areaEquivalentRadius() : radius,
       castShadows: castShadows,
-      approximated: type == LightType.area,
+      width: type == LightType.area ? _rectangleWidth() : 0,
+      height: type == LightType.area ? _rectangleHeight() : 0,
+      // Only the round shapes lose anything now: a square and a rectangle
+      // are what the shading integrates exactly.
+      approximated:
+          type == LightType.area &&
+          (shape == AreaShape.disk || shape == AreaShape.ellipse),
     );
   }
 
@@ -191,7 +223,7 @@ class Light {
 }
 
 /// The kinds of light a renderer actually implements.
-enum RendererLightKind { directional, point, spot }
+enum RendererLightKind { directional, point, spot, area }
 
 /// A light in the units a renderer takes.
 class RendererLight {
@@ -205,6 +237,8 @@ class RendererLight {
     required this.sunAngularRadius,
     required this.sourceRadius,
     required this.castShadows,
+    this.width = 0,
+    this.height = 0,
     this.approximated = false,
   });
 
@@ -230,7 +264,16 @@ class RendererLight {
 
   final bool castShadows;
 
-  /// Whether something was lost on the way here — currently only true for area
-  /// lights, which no target renderer supports natively.
+  /// The emitting rectangle's edges in metres, for [RendererLightKind.area].
+  final double width;
+  final double height;
+
+  /// Whether something was lost on the way here.
+  ///
+  /// True for a round emitter, which arrives as a rectangle of the same area
+  /// because that is the shape the shading has a closed form for. The total
+  /// light and the softness are right to within the difference between a
+  /// disk and the square around it; the outline reflected in something
+  /// mirror-smooth is not.
   final bool approximated;
 }

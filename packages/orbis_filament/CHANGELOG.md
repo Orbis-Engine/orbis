@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.17.0
+## 0.20.0
 
 - **Reflection probes.** `OrbisProbe` is the scene photographing itself from a
   point inside, and being lit by that instead of by the environment. An
@@ -43,6 +43,160 @@
   environment is stored relative to some reference and its intensity turns it
   into lux, while a probe is the scene's own light rendered with the exposure
   held at one, so it arrives already in the units the rest of the frame is in.
+## 0.19.0
+
+- **Rectangular area lights.** `OrbisLightKind.area` is a panel that emits
+  from one face: a window, a softbox, a strip in a ceiling. It takes the
+  `width` and `height` of the rectangle and a `tangent` saying which way the
+  width runs, because a face alone leaves a panel free to spin in its own
+  plane and a strip light on its side is a different light.
+
+  Filament has no area light, so this one is shaded by the surface material
+  itself and handed back through `postLightingColor`. The maths is linearly
+  transformed cosines (Heitz, Dupuy, Hill and Neubelt, SIGGRAPH 2016): a
+  fitted matrix per roughness and viewing angle bends the clamped cosine lobe
+  into the GGX lobe, so integrating the rectangle against the *cosine* — which
+  has a closed form — answers for the rectangle against GGX, which does not.
+  One polygon integral per light, no marching and no sampling. The two fitted
+  tables are fetched by `setup.sh` in the authors' own packing, the way SMAA's
+  are; see `LICENSES/LTC.txt`.
+
+  Checked against physics rather than against a screenshot. Shrunk to four
+  centimetres a panel has to converge on a point light of the same flux, and
+  be **exactly four times** as bright — a one-sided panel puts its lumens into
+  pi steradians and a point puts them into 4pi. Measured on a common mask,
+  the ratio is **3.94**. Held at one flux and grown from 4 cm to 6 m, the
+  total light in frame stays put (93.6, 93.4, 86.6) while the lit area
+  spreads — the same light over more of the scene, which is what an area
+  light is for.
+
+  Two things worth knowing rather than discovering. It casts no shadow: it is
+  outside Filament's lighting, so nothing shadows it. And it lights the
+  standard surface only — a glTF file keeps its own materials, and those are
+  Filament's, not this one's.
+
+- Sixteen of them per view, past which the ones over the budget are reported
+  and light nothing. They are not free the way a punctual light is: a
+  rectangle is a polygon integral paid by every lit fragment, with no culling
+  in front of it.
+## 0.18.0
+
+- **`OrbisField`: light kept in the world rather than on the screen.** A
+  lattice of probes standing in the scene, each holding what light reaches it
+  from every direction, built up over many frames and read by every surface
+  near it. Where a screen-space bounce answers *how much light is here, worked
+  out now*, a field answers *how much light is at that point in the room* —
+  and still has the answer when what lit it has left the frame.
+
+  Probes are filled by marching the depth buffer outward from each probe and
+  taking what it finds, then folding that into what the probe already held.
+  The reference implementations scatter instead — they reconstruct each screen
+  texel and add it to the probes enclosing it, which needs an instanced draw
+  with one instance per texel and cage corner. Marching is the same trace the
+  bounce pass already does and needs no geometry at all.
+
+  Read in the surface shader rather than composited over the finished picture,
+  because indirect light is light: it has to be reflected by each surface's
+  own colour, and a pass over the frame does not have one. Eight probes at the
+  corners of the cell are mixed by distance, by whether the surface faces
+  them, and by whether they can see it — the last from a distance the probe
+  stores alongside its colour, which is what stops a field lighting the inside
+  of a wall with the sunshine outside it.
+
+  Measured in a room with one red wall and one blue one, across five runs: the
+  field lifts the shadowed surfaces by **+9.8 to +19.0** of 255, and the half
+  of the room by the red wall comes out **+8.6 to +17.9 warmer** than the half
+  by the blue one. The direction is the test — a field that merely brightened
+  would move both halves together. The spread is how far the accumulation has
+  got by the frame that is measured.
+
+- **`OrbisEffect.copy`**, the plainest pass there is and the one that makes the
+  others possible: a target, put on the screen. Anything that reads what the
+  scene drew needs the scene drawn into a target, and then needs something to
+  put that target on the screen; without this the only way to present one was
+  to run an effect that also changed it.
+
+### Two ways this can go wrong, both now guarded
+
+A field reads the picture the scene drew, and that picture already contains
+what the field contributed to it. The light goes round, multiplying by the
+surfaces' albedo each lap, and an infinite series of that converges only while
+the product stays below one. Undamped it does not — and it does not fail by
+getting brighter, it fails by **drifting in hue**, because the channel with the
+highest gain wins the race. This room turned green, a colour nowhere in it.
+The injection damps the sub-unit part of the light to nought point six, and
+the renderer holds the strength below where that stops being enough.
+
+Both numbers are measured rather than picked, over six hundred frames in a
+room with a red wall and a blue one. The light that arrives matches what was
+asked for to within three per cent up to a strength of **four**, is ten per
+cent over at five, and **fifty-seven** per cent over at six — where the room
+had visibly turned. The cap is at three: the last fully linear point with a
+whole step of margin under the knee. Asking for more is **reported** through
+the scene's notes rather than silently substituted, because a host that asks
+for six and quietly gets three has a scene that does not match its reference
+and no way to find out why.
+
+The damping and the cap are one constant divided by another, in one place, so
+that changing the damping moves the cap with it. They are two halves of the
+same statement and drifting apart would put the loop back over one.
+
+The atlas textures are also **cleared when they are built**. A texture Filament
+allocates holds whatever the driver last had there, and surfaces read it before
+the first pass has written it. That was the *other* source of the green, and it
+survived turning the temporal blend off — which is what told the two apart.
+
+## 0.17.0
+
+- **`OrbisEffect.bounce`: one bounce of light, taken from the picture already
+  drawn.** Direct lighting stops at the first surface it meets, so a white box
+  between a red wall and a blue one comes out white on both sides when a real
+  room would paint one side pink. This puts the second bounce back.
+
+  Each pixel fans a set of directions across its hemisphere and marches the
+  depth buffer along each, keeping a 32-bit mask of which sectors something
+  blocks. A sector that has *just* been blocked is a surface the pixel can
+  see, so its colour is credited as light arriving from that direction.
+  Counting sectors is what makes the falloff right with no distance term in
+  it: something twice as far subtends half the angle and so covers a quarter
+  of the sectors, which is the inverse square arrived at by geometry. After
+  Therrien et al., "Screen Space Indirect Lighting with Visibility Bitmasks"
+  (2023).
+
+  Measured in a corner of a red wall and a blue one: **14.7% of the frame
+  changes**, and on the pixels that change most the bounce adds **2.2 times
+  as much red as blue**, concentrated on the floor beside the red wall. That
+  ratio is the whole test — a pass that merely brightened would add the three
+  channels equally.
+
+- **Depth is now sampleable.** A target's depth texture was a depth attachment
+  and nothing else, so no pass could read the shape of the scene, only its
+  colour. That one flag is what occlusion, bounced light and contact shadows
+  all begin from.
+
+- A graph that bounces light off a target keeping no depth is now **reported**
+  rather than silently skipped. The renderer declines such a pass, and a frame
+  drawn with the effect quietly absent is indistinguishable from the effect
+  not working.
+
+- **`OrbisScene.copyWith`.** A scene is stated whole every frame, which made
+  taking one somebody else built and changing one thing about it a matter of
+  copying a dozen fields by hand and quietly dropping whichever was added
+  last.
+
+### What the bounce costs, and what it cannot do
+
+Measured at 800x600 against the same graph running a pass that only copies:
+**1.9 ms for two directions, 3.7 ms for four, 6.7 ms for eight** — near enough
+a millisecond a direction, scaling with pixel count. Four is the default.
+Running the pass into a half-size target is the obvious saving and is not
+built yet.
+
+It knows only about surfaces on screen, so turning away from a red wall takes
+its bounce with it. And it works on the finished picture rather than inside
+the shading, so it scales the light already there rather than being reflected
+by each surface's own colour: it can tint a lit surface and can never light an
+unlit one.
 
 ## 0.16.0
 

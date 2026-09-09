@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'material.dart';
 import 'environment.dart';
+import 'field.dart';
 import 'graph.dart';
 import 'pipeline.dart';
 import 'video.dart';
@@ -126,10 +127,11 @@ class OrbisObject {
 
 /// The kinds of light a renderer actually implements.
 ///
-/// Deliberately shorter than the list an artist works with. An area light is a
-/// real thing to author and not a real thing to render here, so the package
-/// that knows about watts and softboxes is the one that decides what an area
-/// light becomes; this end only takes what Filament can be told.
+/// Shorter than the list an artist works with, but no longer shorter by one:
+/// a rectangle is here because a rectangle is what most real light comes from
+/// — a window, a softbox, a strip in a ceiling — and approximating one with a
+/// point puts the highlight in the wrong shape, which is the part of the image
+/// somebody actually reads the light from.
 enum OrbisLightKind {
   /// Parallel rays from infinitely far away, in lux. Filament honours one per
   /// scene, so a second is reported back rather than quietly ignored.
@@ -140,6 +142,20 @@ enum OrbisLightKind {
 
   /// A cone, in lumens.
   spot,
+
+  /// A rectangle that emits from one face, in lumens.
+  ///
+  /// Not a Filament light: Filament has none, so this one is shaded by the
+  /// surface material itself, against a fitted table that gives the rectangle
+  /// a closed-form answer. The consequences of being outside Filament's own
+  /// lighting are worth stating plainly: an area light casts no shadow, and
+  /// it does not count against the punctual budget because it never becomes
+  /// a punctual light.
+  ///
+  /// [OrbisLight.direction] is the face it emits from, [OrbisLight.tangent]
+  /// the edge [OrbisLight.width] is measured along, and the height runs along
+  /// the two crossed together. The back face emits nothing.
+  area,
 }
 
 /// A light, in the units a renderer takes.
@@ -164,9 +180,13 @@ class OrbisLight {
     this.haloSize = 10,
     this.haloFalloff = 80,
     this.castShadows = true,
+    this.width = 1,
+    this.height = 1,
+    Vector3? tangent,
   }) : colour = colour ?? Vector3(1, 1, 1),
        position = position ?? Vector3.zero(),
-       direction = direction ?? Vector3(0, -1, 0);
+       direction = direction ?? Vector3(0, -1, 0),
+       tangent = tangent ?? Vector3(1, 0, 0);
 
   /// This light's identity, stable for as long as it exists. Keys share one
   /// space with [OrbisObject.key]: one number, one thing in the scene.
@@ -217,6 +237,25 @@ class OrbisLight {
 
   final bool castShadows;
 
+  /// The rectangle's size in metres, for [OrbisLightKind.area]. Width is
+  /// measured along [tangent] and height along the direction crossed with it.
+  ///
+  /// Size is not brightness. [intensity] is the lumens the panel emits, so
+  /// making it bigger spreads the same light over more of the scene and
+  /// softens its shadow terminator rather than making the room brighter —
+  /// which is what somebody moving a softbox expects, and the opposite of
+  /// what scaling a point light does.
+  final double width;
+  final double height;
+
+  /// The edge [width] is measured along, for [OrbisLightKind.area].
+  ///
+  /// A rectangle needs this and [direction] both: the face alone leaves the
+  /// panel free to spin in its own plane, and a strip light spun ninety
+  /// degrees is a different light. Squared up against [direction] on the way
+  /// through, so it only has to be roughly right.
+  final Vector3 tangent;
+
   /// Writes this light's floats into the scene's light block.
   ///
   /// A fixed stride rather than one array per field: the whole scene is one
@@ -240,11 +279,15 @@ class OrbisLight {
     into[at + 14] = sourceRadius;
     into[at + 15] = haloSize;
     into[at + 16] = haloFalloff;
-    into[at + 17] = 0;
+    into[at + 17] = width;
+    into[at + 18] = height;
+    into[at + 19] = tangent.x;
+    into[at + 20] = tangent.y;
+    into[at + 21] = tangent.z;
   }
 
   /// How many floats one light occupies.
-  static const int stride = 18;
+  static const int stride = 22;
 }
 
 /// Where the viewer is, and how much light reaches it.
@@ -852,8 +895,10 @@ class OrbisScene {
     OrbisRenderGraph? graph,
     OrbisEnvironment? environment,
     List<OrbisProbe>? probes,
+    OrbisField? field,
   }) : lights = lights ?? const [],
        probes = probes ?? const [],
+       field = field ?? OrbisField.none,
        environment = environment ?? OrbisEnvironment.none,
        pipeline = pipeline ?? OrbisPipeline(),
        graph = graph ?? OrbisRenderGraph.standard(),
@@ -864,6 +909,44 @@ class OrbisScene {
        sky = sky ?? OrbisSky(),
        fog = fog ?? OrbisFog.none,
        precipitation = precipitation ?? OrbisPrecipitation.none;
+
+  /// The same scene with something changed.
+  ///
+  /// A scene is stated whole every frame, which makes taking one somebody
+  /// else built and altering one thing about it awkward — an editor putting a
+  /// gizmo layer over a game's scene, a tool running somebody's scene through
+  /// an effect to see what it does to it, a test rendering the same scene
+  /// twice with one setting moved. All of those otherwise mean rebuilding a
+  /// dozen fields by hand and quietly dropping the one that was added last.
+  OrbisScene copyWith({
+    List<OrbisObject>? objects,
+    List<OrbisPopulation>? populations,
+    List<OrbisLight>? lights,
+    List<OrbisMaterial>? materials,
+    List<OrbisVideo>? videos,
+    OrbisCamera? camera,
+    OrbisSky? sky,
+    OrbisFog? fog,
+    OrbisPrecipitation? precipitation,
+    OrbisPipeline? pipeline,
+    OrbisPostProcess? post,
+    OrbisRenderGraph? graph,
+    OrbisEnvironment? environment,
+  }) => OrbisScene(
+    objects: objects ?? this.objects,
+    populations: populations ?? this.populations,
+    lights: lights ?? this.lights,
+    materials: materials ?? this.materials,
+    videos: videos ?? this.videos,
+    camera: camera ?? this.camera,
+    sky: sky ?? this.sky,
+    fog: fog ?? this.fog,
+    precipitation: precipitation ?? this.precipitation,
+    pipeline: pipeline ?? this.pipeline,
+    post: post ?? this.post,
+    graph: graph ?? this.graph,
+    environment: environment ?? this.environment,
+  );
 
   final List<OrbisObject> objects;
 
@@ -939,6 +1022,12 @@ class OrbisScene {
   /// environment as before, which is why adding probes to an existing scene
   /// changes nothing until one of them contains the camera.
   final List<OrbisProbe> probes;
+
+  /// The light kept in the world rather than on the screen.
+  ///
+  /// Off by default, and free when off: a scene that never mentions one is
+  /// lit exactly as it was.
+  final OrbisField field;
 
   /// The highest layer an object may be on.
   ///
@@ -1154,6 +1243,8 @@ class OrbisScene {
       'pipelineParams': pipeline.packed,
       'probeKeys': probeKeys,
       'probeParams': probeParams,
+      'fieldParams': field.packed,
+      'fieldFrom': field.from,
       'environmentRadiance': environment.radiance ?? '',
       'environmentSkybox': environment.skybox ?? '',
       'environmentParams': environment.packed,
