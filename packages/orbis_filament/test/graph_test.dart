@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbis_filament/orbis_filament.dart';
 
 void main() {
+  _effectTests();
   group('the default graph', () {
     test('is the frame as it was before there was a graph', () {
       final graph = OrbisRenderGraph.standard();
@@ -324,5 +325,61 @@ void main() {
         expect(capture.milliseconds, 0);
       },
     );
+  });
+}
+
+void _effectTests() {
+  group('effect passes on the wire', () {
+    test('an effect names itself; every other kind says none', () {
+      final graph = OrbisRenderGraph(
+        targets: const [OrbisTarget(name: 'frame')],
+        passes: const [
+          OrbisPass(name: 'world', into: 'frame'),
+          OrbisPass(
+            name: 'sharpen',
+            kind: OrbisPassKind.effect,
+            effect: OrbisEffect.sharpen,
+            reads: ['frame'],
+          ),
+        ],
+      );
+
+      final packed = graph.packedPasses;
+      const stride = OrbisRenderGraph.passStride;
+
+      // A scene pass has no effect, and must say so rather than leaving the
+      // slot at zero — zero is a real effect.
+      expect(packed[12], -1);
+      expect(packed[stride + 12], OrbisEffect.sharpen.index);
+      expect(packed[stride], OrbisPassKind.effect.index);
+    });
+
+    test('an effect reads the target the scene wrote', () {
+      final graph = OrbisRenderGraph(
+        targets: const [OrbisTarget(name: 'frame')],
+        passes: const [
+          OrbisPass(name: 'world', into: 'frame'),
+          OrbisPass(
+            name: 'sharpen',
+            kind: OrbisPassKind.effect,
+            effect: OrbisEffect.sharpen,
+            reads: ['frame'],
+          ),
+        ],
+      );
+      const stride = OrbisRenderGraph.passStride;
+      // First read is target 0; the rest are empty.
+      expect(graph.packedPasses[stride + 4], 0);
+      expect(graph.packedPasses[stride + 5], -1);
+    });
+
+    test('the effect survives a copyWith', () {
+      const pass = OrbisPass(
+        name: 'sharpen',
+        kind: OrbisPassKind.effect,
+        effect: OrbisEffect.sharpen,
+      );
+      expect(pass.copyWith(name: 'other').effect, OrbisEffect.sharpen);
+    });
   });
 }

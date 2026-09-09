@@ -24,6 +24,7 @@ export 'src/graph.dart'
         OrbisFrameCapture,
         OrbisGraphProblem,
         OrbisPass,
+        OrbisEffect,
         OrbisPassKind,
         OrbisPassTiming,
         OrbisRenderGraph,

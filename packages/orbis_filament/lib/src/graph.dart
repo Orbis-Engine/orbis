@@ -75,6 +75,26 @@ class OrbisTarget {
 /// that actually runs. A list of kinds longer than the list of things the
 /// renderer does is a list where declaring a pass and getting nothing is a
 /// normal outcome, and there is no way for a host to tell that from a bug.
+/// The screen-space effects the renderer knows how to run.
+///
+/// Each is a compiled shader inside the renderer, so this list is what exists
+/// rather than what a host can invent.
+enum OrbisEffect {
+  /// Puts back the edge the anti-aliasing took off.
+  ///
+  /// Temporal anti-aliasing works by spreading a pixel's history over several
+  /// frames, and the cost of that is a softer picture — the sharpest thing a
+  /// TAA image can be is slightly blurred. This is the usual answer: a small
+  /// contrast-adaptive sharpen afterwards, which lifts detail back without
+  /// ringing the way a plain unsharp mask does, because how much it applies
+  /// depends on how much local contrast is already there.
+  sharpen('Sharpen');
+
+  const OrbisEffect(this.label);
+
+  final String label;
+}
+
 enum OrbisPassKind {
   /// Everything the scene contains, lit, from the scene's own camera.
   ///
@@ -88,7 +108,15 @@ enum OrbisPassKind {
   /// The same pass from a camera mirrored about [OrbisPass.plane], with the
   /// winding turned inside out because reflecting the world reverses which
   /// side of a triangle is facing.
-  reflection('Reflection');
+  reflection('Reflection'),
+
+  /// A material run over every pixel of what another pass drew, rather than a
+  /// camera pointed at the world.
+  ///
+  /// The rails every screen-space effect runs on: it reads a target, writes a
+  /// target, and draws one triangle covering the lot. Which effect it runs is
+  /// [OrbisPass.effect].
+  effect('Effect');
 
   const OrbisPassKind(this.label);
 
@@ -113,6 +141,7 @@ class OrbisPass {
     this.enabled = true,
     this.clear = true,
     this.plane,
+    this.effect,
   });
 
   /// What this pass is called, and what a capture reports it as. Unique
@@ -149,6 +178,13 @@ class OrbisPass {
   /// The mirror, for a reflection pass: a plane as `nx, ny, nz, d`.
   final List<double>? plane;
 
+  /// Which screen-space effect this pass runs, for [OrbisPassKind.effect].
+  ///
+  /// One of a set the renderer knows rather than a material somebody wrote:
+  /// an effect needs its own compiled shader, and compiling one at runtime is
+  /// a different and much larger door than this.
+  final OrbisEffect? effect;
+
   OrbisPass copyWith({
     String? name,
     OrbisPassKind? kind,
@@ -158,6 +194,7 @@ class OrbisPass {
     bool? enabled,
     bool? clear,
     List<double>? plane,
+    OrbisEffect? effect,
   }) => OrbisPass(
     name: name ?? this.name,
     kind: kind ?? this.kind,
@@ -167,6 +204,7 @@ class OrbisPass {
     enabled: enabled ?? this.enabled,
     clear: clear ?? this.clear,
     plane: plane ?? this.plane,
+    effect: effect ?? this.effect,
   );
 
   @override
@@ -425,7 +463,7 @@ class OrbisRenderGraph {
   }
 
   /// How many floats each pass takes on the wire.
-  static const int passStride = 12;
+  static const int passStride = 13;
 
   /// How many floats each target takes.
   static const int targetStride = 6;
@@ -462,6 +500,10 @@ class OrbisRenderGraph {
       for (var p = 0; p < 4; p++) {
         out[at + 8 + p] = plane != null && p < plane.length ? plane[p] : 0;
       }
+      // Its own slot rather than sharing the plane's, which a reflection uses
+      // and an effect does not. A field that means two things by the value of
+      // another is a field somebody reads wrong once and never finds out.
+      out[at + 12] = (pass.effect?.index ?? -1).toDouble();
     }
     return out;
   }
