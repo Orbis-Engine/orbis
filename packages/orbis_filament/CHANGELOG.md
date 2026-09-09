@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.0
+
+- Geometry no object names any more is dropped, rather than kept until the app
+  closes. A mesh is read once per path and held, which is right while something
+  is drawn from it and a leak the moment nothing is.
+
+  It never showed on a scene of authored assets, where the set of paths is
+  fixed for the life of the app. It shows the first time geometry is
+  *generated*: a mesh built at runtime has to arrive under a name the renderer
+  has not seen to be read at all, so a host that rebuilds one chunk of a block
+  world every time somebody digs left every version it had ever built sitting
+  on the GPU. Measured on a world of twenty-five chunks: forty-eight assets
+  dropped over a few seconds of digging, every one of which would otherwise
+  have stayed for the session.
+
+  Swept after the objects rather than inside `recycle`, because a path leaving
+  one object and arriving at another within the same publish is a rename and
+  not a deletion.
+
 ## 0.9.0
 
 - A scene is told what is wrong with *it*, not with every scene loaded since

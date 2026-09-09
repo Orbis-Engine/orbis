@@ -46,6 +46,7 @@
 #include <unistd.h>
 
 #include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -3780,8 +3781,53 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     it = _drawn.erase(it);
   }
 
+  [self sweepUnnamedMeshes];
+
   _objectNotes = notes;
   _sceneIsOwnedByHost = true;
+}
+
+/// Drops the geometry of any file no object names any more.
+///
+/// A mesh is read once per path and kept, which is right while something is
+/// drawn from it and a leak the moment nothing is. It never showed up on a
+/// scene of authored assets, where the set of paths is fixed for the life of
+/// the app. It shows up the first time geometry is *generated*: a mesh built
+/// at runtime has to arrive under a name the renderer has not seen to be read
+/// at all, so a host that rebuilds one chunk of a block world every time
+/// somebody digs otherwise leaves every version it ever built on the GPU, and
+/// the memory climbs for as long as the game is played.
+///
+/// Swept after the objects rather than inside `recycle`, because a path
+/// leaving one object and arriving at another within the same publish is a
+/// rename and not a deletion — destroying it in between would throw away
+/// geometry that is about to be drawn again.
+- (void)sweepUnnamedMeshes {
+  if (_meshes.empty()) return;
+
+  std::set<std::string> named;
+  for (const auto &pair : _drawn) {
+    if (!pair.second.path.empty()) named.insert(pair.second.path);
+  }
+
+  for (auto it = _meshes.begin(); it != _meshes.end();) {
+    if (named.count(it->first) != 0) {
+      ++it;
+      continue;
+    }
+    // Destroying the asset takes its instances with it, the pooled spares
+    // included — which is why nothing may still be holding one, and why this
+    // runs only after the object sweep has recycled them all.
+    if (it->second.asset != nullptr) {
+      _assetLoader->destroyAsset(it->second.asset);
+    }
+    // The note about why it would not load goes with it. Keeping it would
+    // answer for a file nothing is asking about, and the next object to name
+    // this path reads the disk again and finds out for itself.
+    NSString *native = [NSString stringWithUTF8String:it->first.c_str()];
+    [_assetNotes removeObjectForKey:native];
+    it = _meshes.erase(it);
+  }
 }
 
 /// Writes one light's parameters into Filament.
