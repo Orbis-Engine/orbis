@@ -3360,6 +3360,23 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   return true;
 }
 
+/// Gives a view the display side of the scene's post-processing.
+///
+/// Only the part that turns finished linear light into a picture: the tone
+/// mapper and the grade, which live together in Filament's ColorGrading, plus
+/// the dithering that stops a smooth gradient banding once it is eight bits.
+///
+/// Deliberately not bloom, depth of field or anti-aliasing. Those read the
+/// scene's own depth and history, and this view has neither — it is one
+/// triangle holding a photograph of the scene. Running them here would be
+/// running them on the wrong image; they belong to the pass that drew the
+/// world.
+- (void)applyPostTo:(View *)view {
+  if (_colorGrading != nullptr) view->setColorGrading(_colorGrading);
+  view->setDithering(_view->getDithering());
+  view->setAntiAliasing(AntiAliasing::NONE);
+}
+
 /// Runs one effect pass: the image it reads, over the target it writes.
 - (void)runEffect:(GraphPass &)pass into:(GraphTarget *)into {
   if (![self buildEffect:pass]) return;
@@ -3389,13 +3406,23 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   if (into != nullptr) {
     view->setRenderTarget(into->target);
     view->setViewport({0, 0, into->builtWidth, into->builtHeight});
+    // Another pass will sample this, so it stays linear light. Tone-mapping
+    // it here would bake a display curve into something still being worked
+    // on, and the next effect in the chain would sharpen a picture of a
+    // picture.
+    view->setPostProcessingEnabled(false);
   } else {
-    // The frame. The last effect in a chain is the one somebody sees, so it
-    // writes the screen rather than another texture.
+    // The frame, which is the end of the chain and the only place a display
+    // curve belongs. Post is *on* here, and that is what carries tone
+    // mapping, grading and the rest across an effect chain — without it a
+    // scene that went through one came out cooler and darker than the same
+    // scene drawn straight to the screen, because the linear light was never
+    // converted for a display.
     view->setRenderTarget(nullptr);
     view->setViewport({0, 0, _width, _height});
+    view->setPostProcessingEnabled(true);
+    [self applyPostTo:view];
   }
-  view->setPostProcessingEnabled(false);
   _renderer->render(view);
 }
 

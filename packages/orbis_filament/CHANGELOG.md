@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.14.1
+
+- An effect chain no longer loses tone mapping. The pass that writes the
+  *frame* now carries the display side of the scene's post-processing — the
+  tone mapper and grade, which live together in Filament's `ColorGrading`, plus
+  dithering. A pass writing an intermediate target still stays linear, because
+  the next effect has to sharpen light rather than a picture of light.
+
+  Measured: with the effect at nought, where the shader is a pass-through, a
+  sharpened frame now matches the same scene drawn straight to the screen to
+  **0.61/255 mean absolute difference**. It used to come out visibly cooler and
+  darker, because linear light was reaching the display unconverted.
+
+  Bloom, depth of field and anti-aliasing are deliberately *not* carried over.
+  They read the scene's own depth and history, and an effect view has neither —
+  it is one triangle holding a photograph of the scene.
+
 ## 0.14.0
 
 - `OrbisPassKind.effect` runs a material over every pixel of what another pass
