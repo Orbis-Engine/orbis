@@ -1,0 +1,73 @@
+// SMAA, pass three of three: do the blending.
+//
+// The short one. Pass two worked out how much of this pixel the far side of
+// each edge covers; this reads those four weights — one per side — picks
+// whichever direction won, and mixes this pixel with its neighbour by that
+// much. A pixel with no weight on any side is left exactly as it was, which
+// is most of the picture and the reason SMAA does not soften flat regions the
+// way FXAA does.
+//
+// Adapted from the reference implementation, MIT licensed:
+//   Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia,
+//   Fernando Navarro and Diego Gutierrez. See LICENSES/SMAA.txt.
+material {
+    name : orbisSmaaBlend,
+    shadingModel : unlit,
+    vertexDomain : device,
+    requires : [ uv0 ],
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    parameters : [
+        // The picture as it was drawn.
+        { type : sampler2d, name : source, precision : high },
+        // What pass two decided.
+        { type : sampler2d, name : weights, precision : high },
+        { type : float2, name : step }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 at = getUV0();
+        vec2 px = materialParams.step;
+
+        // Four weights: left and top from this pixel, right and bottom read
+        // from the neighbours they belong to.
+        vec4 here = texture(materialParams_weights, at);
+        float right  = texture(materialParams_weights, at + vec2(px.x, 0.0)).a;
+        float bottom = texture(materialParams_weights, at + vec2(0.0, px.y)).g;
+        vec4 a = vec4(here.r, bottom, here.b, right);
+
+        if (dot(a, vec4(1.0)) < 1e-5) {
+            // Nothing to do here, and saying so matters: reading the image
+            // through a filtered fetch would soften a pixel that has no edge
+            // near it at all.
+            material.baseColor = texture(materialParams_source, at);
+            return;
+        }
+
+        // Whichever direction carries more weight wins. A pixel can sit on a
+        // horizontal and a vertical edge at once — a corner — and blending
+        // both would move it twice.
+        bool sideways = max(a.r, a.b) > max(a.g, a.a);
+
+        vec4 pick = a;
+        if (sideways) {
+            pick.g = a.r;
+            pick.a = a.b;
+        }
+        vec2 weight = pick.ga;
+        weight /= max(weight.x + weight.y, 1e-5);
+
+        vec2 towards = sideways ? vec2(px.x, 0.0) : vec2(0.0, px.y);
+        vec2 first  = at - towards * weight.x;
+        vec2 second = at + towards * weight.y;
+
+        material.baseColor =
+            weight.x * texture(materialParams_source, first) +
+            weight.y * texture(materialParams_source, second);
+    }
+}

@@ -101,7 +101,20 @@ enum OrbisEffect {
   ///
   /// Three passes, chained: this one writes a picture of the edges, which
   /// [smaaWeights] reads.
-  smaaEdges('SMAA edges');
+  smaaEdges('SMAA edges'),
+
+  /// SMAA, pass two: how much of each pixel the edge covers.
+  ///
+  /// Walks along each edge to find the shape it belongs to and looks that
+  /// shape's coverage up in a precomputed table. Reads what [smaaEdges] wrote.
+  smaaWeights('SMAA weights'),
+
+  /// SMAA, pass three: the blend itself.
+  ///
+  /// Mixes each pixel with its neighbour by the weight pass two decided.
+  /// Reads the original image *and* the weights, in that order, so a graph
+  /// lists both in [OrbisPass.reads].
+  smaaBlend('SMAA blend');
 
   const OrbisEffect(this.label);
 
