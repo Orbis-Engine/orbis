@@ -4,6 +4,66 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbis_filament/orbis_filament.dart';
 
 void main() {
+  group('the bounce pass', () {
+    OrbisRenderGraph graphWith(List<double>? dials) => OrbisRenderGraph(
+      targets: const [OrbisTarget(name: 'frame')],
+      passes: [
+        const OrbisPass(name: 'world', into: 'frame'),
+        OrbisPass(
+          name: 'bounce',
+          kind: OrbisPassKind.effect,
+          effect: OrbisEffect.bounce,
+          reads: const ['frame'],
+          plane: dials,
+        ),
+      ],
+    );
+
+    test('it reads one target and gets both the picture and the depth', () {
+      // The colour and the depth of a target are two halves of one thing, so
+      // a graph names it once. Making a host list it twice is how the two end
+      // up naming different targets.
+      final graph = graphWith(null);
+      expect(graph.problems, isEmpty);
+      final pass = graph.schedule.last;
+      expect(pass.reads, ['frame']);
+      expect(pass.effect, OrbisEffect.bounce);
+    });
+
+    test('a target it reads has to keep its depth', () {
+      // Colour alone is a target the march cannot use: without depth there is
+      // no telling what is in front of what, and the pass would gather light
+      // from surfaces on the far side of a wall.
+      final graph = OrbisRenderGraph(
+        targets: const [OrbisTarget(name: 'flat', depth: false)],
+        passes: [
+          const OrbisPass(name: 'world', into: 'flat'),
+          const OrbisPass(
+            name: 'bounce',
+            kind: OrbisPassKind.effect,
+            effect: OrbisEffect.bounce,
+            reads: ['flat'],
+          ),
+        ],
+      );
+      expect(
+        graph.problems.map((p) => p.what).join(' '),
+        contains('depth'),
+        reason: 'a bounce over a target with no depth should be reported',
+      );
+    });
+
+    test('its four dials cross in the order the renderer reads them', () {
+      final packed = graphWith([3, 6, 0.4, 8]).packedPasses;
+      final at = OrbisRenderGraph.passStride;
+      expect(packed[at + 8], 3, reason: 'reach');
+      expect(packed[at + 9], 6, reason: 'strength');
+      expect(packed[at + 10], closeTo(0.4, 1e-6), reason: 'thickness');
+      expect(packed[at + 11], 8, reason: 'directions');
+      expect(packed[at + 12], OrbisEffect.bounce.index);
+    });
+  });
+
   _effectTests();
   group('the default graph', () {
     test('is the frame as it was before there was a graph', () {

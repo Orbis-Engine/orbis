@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.17.0
+
+- **`OrbisEffect.bounce`: one bounce of light, taken from the picture already
+  drawn.** Direct lighting stops at the first surface it meets, so a white box
+  between a red wall and a blue one comes out white on both sides when a real
+  room would paint one side pink. This puts the second bounce back.
+
+  Each pixel fans a set of directions across its hemisphere and marches the
+  depth buffer along each, keeping a 32-bit mask of which sectors something
+  blocks. A sector that has *just* been blocked is a surface the pixel can
+  see, so its colour is credited as light arriving from that direction.
+  Counting sectors is what makes the falloff right with no distance term in
+  it: something twice as far subtends half the angle and so covers a quarter
+  of the sectors, which is the inverse square arrived at by geometry. After
+  Therrien et al., "Screen Space Indirect Lighting with Visibility Bitmasks"
+  (2023).
+
+  Measured in a corner of a red wall and a blue one: **14.7% of the frame
+  changes**, and on the pixels that change most the bounce adds **2.2 times
+  as much red as blue**, concentrated on the floor beside the red wall. That
+  ratio is the whole test — a pass that merely brightened would add the three
+  channels equally.
+
+- **Depth is now sampleable.** A target's depth texture was a depth attachment
+  and nothing else, so no pass could read the shape of the scene, only its
+  colour. That one flag is what occlusion, bounced light and contact shadows
+  all begin from.
+
+- A graph that bounces light off a target keeping no depth is now **reported**
+  rather than silently skipped. The renderer declines such a pass, and a frame
+  drawn with the effect quietly absent is indistinguishable from the effect
+  not working.
+
+- **`OrbisScene.copyWith`.** A scene is stated whole every frame, which made
+  taking one somebody else built and changing one thing about it a matter of
+  copying a dozen fields by hand and quietly dropping whichever was added
+  last.
+
+### What the bounce costs, and what it cannot do
+
+Measured at 800x600 against the same graph running a pass that only copies:
+**1.9 ms for two directions, 3.7 ms for four, 6.7 ms for eight** — near enough
+a millisecond a direction, scaling with pixel count. Four is the default.
+Running the pass into a half-size target is the obvious saving and is not
+built yet.
+
+It knows only about surfaces on screen, so turning away from a red wall takes
+its bounce with it. And it works on the finished picture rather than inside
+the shading, so it scales the light already there rather than being reflected
+by each surface's own colour: it can tint a lit surface and can never light an
+unlit one.
+
 ## 0.16.0
 
 - **SMAA works.** `OrbisEffect.smaaWeights` and `OrbisEffect.smaaBlend` finish

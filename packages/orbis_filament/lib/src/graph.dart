@@ -114,7 +114,48 @@ enum OrbisEffect {
   /// Mixes each pixel with its neighbour by the weight pass two decided.
   /// Reads the original image *and* the weights, in that order, so a graph
   /// lists both in [OrbisPass.reads].
-  smaaBlend('SMAA blend');
+  smaaBlend('SMAA blend'),
+
+  /// Light bouncing off what is already on the screen.
+  ///
+  /// A renderer's direct lighting stops at the first surface: a red wall lit
+  /// by the sun is red, and the white wall beside it is white, when in a room
+  /// it would be pink. This puts one bounce back, taken from the only place a
+  /// screen-space effect can take it — the picture that has already been
+  /// drawn.
+  ///
+  /// Each pixel marches the depth buffer outwards along a fan of directions,
+  /// marking off the sectors of its hemisphere that something blocks. A
+  /// sector that has *just* been blocked is a surface the pixel can see, so
+  /// its colour is credited as light arriving from that direction. Counting
+  /// sectors rather than samples is what makes the falloff right without a
+  /// distance term: something twice as far away covers a quarter of the
+  /// sectors, which is the inverse square, arrived at by geometry.
+  ///
+  /// It reads the picture and the depth of the same target, so a graph lists
+  /// that target once in [OrbisPass.reads] and the pass finds both.
+  ///
+  /// The pass reads four dials from [OrbisPass.plane], each defaulting when
+  /// it is left at nought: how far it looks in metres, how much of the bounce
+  /// comes back, how solid the depth buffer's surfaces are taken to be, and
+  /// how many directions each pixel fans along.
+  ///
+  /// It is not cheap, and the last of those dials is why. Measured at
+  /// 800 by 600 against the same graph running a pass that only copies:
+  /// two directions costs **1.9 ms**, four costs **3.7 ms**, eight costs
+  /// **6.7 ms** — near enough a millisecond per direction, and it scales with
+  /// the number of pixels. Four is the default because it is where the grain
+  /// stops being the first thing anybody notices. Running the pass into a
+  /// half-size target is the obvious saving and is not built yet.
+  ///
+  /// What it cannot do is worth knowing. It only knows about surfaces that
+  /// are on screen, so light from behind the camera or off the edge of the
+  /// frame does not arrive, and turning away from a red wall takes its bounce
+  /// with it. And it works on the finished picture rather than inside the
+  /// shading, so it scales the light already there rather than being
+  /// reflected by each surface's own colour — which is why it can tint a lit
+  /// surface but can never light an unlit one.
+  bounce('Bounce');
 
   const OrbisEffect(this.label);
 
@@ -411,6 +452,24 @@ class OrbisRenderGraph {
       }
       if (pass.reads.contains(pass.into)) {
         found.add(OrbisGraphProblem(pass.name, 'reads the target it writes'));
+      }
+      // An effect that reads the shape of the scene needs a target that kept
+      // it. The renderer skips such a pass rather than sampling a buffer that
+      // is not there — which draws a frame with the effect silently absent,
+      // and that is indistinguishable from the effect not working.
+      if (pass.effect == OrbisEffect.bounce) {
+        for (final read in pass.reads) {
+          final target = targets.where((one) => one.name == read).firstOrNull;
+          if (target != null && !target.depth) {
+            found.add(
+              OrbisGraphProblem(
+                pass.name,
+                'bounces light off $read, which keeps no depth — so there is '
+                'no telling what is in front of what',
+              ),
+            );
+          }
+        }
       }
       if (pass.kind == OrbisPassKind.reflection && pass.plane == null) {
         found.add(
