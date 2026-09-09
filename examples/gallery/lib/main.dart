@@ -17,6 +17,7 @@
 ///   ORBIS_MESH             a path to a .glb or .gltf, shown on its own
 ///   ORBIS_MORPH            comma-separated shape weights for that model
 ///   ORBIS_SHARPEN          run the sharpen effect, 0 to 1, over the frame
+///   ORBIS_EFFECT           an effect by name, shown on its own over the frame
 library;
 
 import 'dart:io';
@@ -68,21 +69,27 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     // Two passes when a sharpen is asked for, one otherwise. An effect reads
     // what another pass drew, so the world has to land in a texture before
     // anything can be done to it.
+    final named = Platform.environment['ORBIS_EFFECT'];
     final amount = _number('ORBIS_SHARPEN');
-    final graph = amount == null
+    final effect = named == null || named.isEmpty
+        ? (amount == null ? null : OrbisEffect.sharpen)
+        : OrbisEffect.values.firstWhere(
+            (one) => one.name.toLowerCase() == named.toLowerCase(),
+          );
+    final graph = effect == null
         ? null
         : OrbisRenderGraph(
             targets: const [OrbisTarget(name: 'frame')],
             passes: [
               const OrbisPass(name: 'world', into: 'frame'),
               OrbisPass(
-                name: 'sharpen',
+                name: 'effect',
                 kind: OrbisPassKind.effect,
-                effect: OrbisEffect.sharpen,
+                effect: effect,
                 reads: const ['frame'],
                 // The amount rides in the plane's first number, which a scene
                 // pass uses for its mirror and an effect has no use for.
-                plane: [amount, 0, 0, 0],
+                plane: [amount ?? 0, 0, 0, 0],
               ),
             ],
           );

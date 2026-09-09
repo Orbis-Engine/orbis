@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.15.0
+
+- `OrbisEffect.smaaEdges`, the first of SMAA's three passes: it writes a
+  picture of the image's edges, red where a pixel differs from the one on its
+  left and green from the one above.
+
+  SMAA works on the finished image like FXAA, but rather than guessing at an
+  edge and blurring along it, it works out the *shape* an edge belongs to and
+  blends by how much of the pixel that shape covers. No history, so unlike
+  temporal it cannot smear; no guess, so unlike FXAA it does not soften what it
+  should leave alone.
+
+  Includes the local contrast adaptation, which is the part that stops a plain
+  threshold marking every busy region: a pixel beside a much stronger edge
+  belongs to that edge's neighbourhood rather than being an edge itself.
+
+  **SMAA is not usable yet — this is one pass of three.** The remaining two are
+  blending-weight calculation, which needs the reference implementation's two
+  lookup textures, and neighbourhood blending. Adapted from the MIT-licensed
+  reference; see `LICENSES/SMAA.txt`.
+
+- An effect chooses its own material and parameters, rather than the renderer
+  knowing only about sharpening.
+
 ## 0.14.1
 
 - An effect chain no longer loses tone mapping. The pass that writes the

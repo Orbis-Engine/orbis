@@ -88,7 +88,20 @@ enum OrbisEffect {
   /// contrast-adaptive sharpen afterwards, which lifts detail back without
   /// ringing the way a plain unsharp mask does, because how much it applies
   /// depends on how much local contrast is already there.
-  sharpen('Sharpen');
+  sharpen('Sharpen'),
+
+  /// SMAA, pass one: where the edges are.
+  ///
+  /// Enhanced subpixel morphological anti-aliasing works on the finished
+  /// image, like FXAA, but instead of guessing at an edge and blurring along
+  /// it, it works out the *shape* the edge belongs to and blends by how much
+  /// of the pixel that shape covers. No history, so unlike temporal it cannot
+  /// smear; no guess, so unlike FXAA it does not soften what it should leave
+  /// alone.
+  ///
+  /// Three passes, chained: this one writes a picture of the edges, which
+  /// [smaaWeights] reads.
+  smaaEdges('SMAA edges');
 
   const OrbisEffect(this.label);
 
