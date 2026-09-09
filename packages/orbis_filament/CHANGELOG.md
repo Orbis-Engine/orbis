@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.1
+
+- `setup.sh` can build against a Filament we own. `ORBIS_FILAMENT_SRC` points
+  at a built checkout of `Orbis-Engine/orbis-filament` — a fork of
+  `google/filament`, Apache 2.0, kept as a fork so its origin stays visible and
+  upstream stays mergeable — and the headers, archives and `matc` come from
+  there instead of the published tarball.
+
+  Unset by default. Almost nothing wanted here needs a source build: a
+  post-process pass, a reflection probe or an area light's shading are written
+  in Orbis's own render graph against the same public API, which is how the
+  planar reflection was written. What needs the fork is a *backend* — a console
+  platform, a driver Filament does not ship — because that lives inside
+  Filament and nowhere else.
+
 ## 0.13.0
 
 - `OrbisObject.morphWeights` dials in a mesh's shapes. A morph target is a
