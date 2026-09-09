@@ -64,20 +64,45 @@ class BounceExample extends Example {
   OrbisScene scene(OrbisCamera camera, double seconds) => OrbisScene(
     objects: [
       // Pale and matt, so what lands on it is what is seen on it.
-      _slab(_floor, Vector3(0, -3, 0), Vector3(4, 0.15, 4),
-          const Color(0xFFEDEAE3)),
-      _slab(_left, Vector3(-4, 0, 0), Vector3(0.15, 3, 4),
-          const Color(0xFFC7332B)),
-      _slab(_right, Vector3(4, 0, 0), Vector3(0.15, 3, 4),
-          const Color(0xFF2F6DBF)),
-      _slab(_back, Vector3(0, 0, -4), Vector3(4, 3, 0.15),
-          const Color(0xFFEDEAE3)),
+      _slab(
+        _floor,
+        Vector3(0, -3, 0),
+        Vector3(4, 0.15, 4),
+        const Color(0xFFEDEAE3),
+      ),
+      _slab(
+        _left,
+        Vector3(-4, 0, 0),
+        Vector3(0.15, 3, 4),
+        const Color(0xFFC7332B),
+      ),
+      _slab(
+        _right,
+        Vector3(4, 0, 0),
+        Vector3(0.15, 3, 4),
+        const Color(0xFF2F6DBF),
+      ),
+      _slab(
+        _back,
+        Vector3(0, 0, -4),
+        Vector3(4, 3, 0.15),
+        const Color(0xFFEDEAE3),
+      ),
       // The witnesses. White on every face when they leave the renderer, so
       // any colour on them arrived from somewhere else.
-      _slab(_box, Vector3(-1.5, -1.85, 0.6), Vector3(1, 1, 1),
-          const Color(0xFFF4F2EE)),
-      _slab(_tall, Vector3(1.6, -1.35, -1.4), Vector3(0.9, 1.5, 0.9),
-          const Color(0xFFF4F2EE), turn: 0.4),
+      _slab(
+        _box,
+        Vector3(-1.5, -1.85, 0.6),
+        Vector3(1, 1, 1),
+        const Color(0xFFF4F2EE),
+      ),
+      _slab(
+        _tall,
+        Vector3(1.6, -1.35, -1.4),
+        Vector3(0.9, 1.5, 0.9),
+        const Color(0xFFF4F2EE),
+        turn: 0.4,
+      ),
     ],
     lights: [
       OrbisLight(
