@@ -36,10 +36,9 @@ class RunnerExample extends Example {
 
   @override
   ViewPoint get viewpoint =>
-      // Behind and a little above, looking the way the track runs. The
-      // gallery's camera sits at +z for a yaw of nought, and the track is
-      // laid out towards -z — the first version had this the other way
-      // round and looked at an empty sky with the whole world behind it.
+      // Only a starting hint for whatever is showing this: the example itself
+      // supplies the camera every frame, because a runner is followed rather
+      // than orbited. See the note in [scene].
       const ViewPoint(distance: 13, pitch: 0.24, height: 1.6, yaw: 0);
 
   /// How fast the world comes towards you, in metres a second.
@@ -76,6 +75,27 @@ class RunnerExample extends Example {
     // nothing is rebuilt because of it.
     final travelled = seconds * pace;
     final length = _pieces * _spacing;
+
+    // The camera is the example's, not the gallery's.
+    //
+    // An orbit is the right control for looking *at* something and the wrong
+    // one for being in it. This world only exists in a wedge in front of the
+    // runner — the track is laid towards -z, there is nothing behind it, and
+    // the scenery is drawn to a range measured from here — so orbiting round
+    // to the side, or under the ground plane, shows the empty half: hazards
+    // and coins hanging over a horizon with the road they belong to out of
+    // frame. That reads as blocks floating in the sky, and it is really a
+    // camera looking where there is no world.
+    //
+    // So it follows, a little behind and above, and it does not turn. The one
+    // liberty it takes is leaning with the runner, because a camera welded to
+    // the centre line makes the weaving read as the world sliding sideways
+    // rather than as the character moving across it.
+    final look = OrbisCamera(
+      position: Vector3(_runnerLane * 0.35, 3.1, 11.5),
+      target: Vector3(_runnerLane * 0.6, 1.15, -6.0),
+      fieldOfView: 55,
+    );
 
     // The runner weaves between lanes on a slow rhythm, and the number is
     // eased rather than snapped: a character that teleports between lanes
@@ -175,7 +195,7 @@ class RunnerExample extends Example {
     }
 
     return OrbisScene(
-      camera: camera,
+      camera: look,
       objects: objects,
       populations: [
         // The scenery either side. Hundreds of blocks that never change and

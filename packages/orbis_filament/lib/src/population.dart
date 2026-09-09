@@ -22,6 +22,31 @@ import 'package:vector_math/vector_math_64.dart';
 /// mesh, is culled as one box, and is drawn or not drawn together. Anything
 /// that needs to be picked, moved or lit on its own is an object, not a member
 /// of a population. Most of what makes a world large is not.
+/// How a member leaves, once it is further off than the population is drawn.
+///
+/// A member is not switched off at the edge — sixty-four going at once leaves
+/// a clump-shaped hole with a visible boundary. It goes gradually, and *how*
+/// it goes depends on how the population sits in the world. Getting this wrong
+/// does not look like a fade set to the wrong length; it looks like the world
+/// falling apart.
+enum OrbisFade {
+  /// Hold the member's bottom and draw the rest down to it, so it goes into
+  /// the ground it stands on.
+  ///
+  /// Right for anything planted: grass, rocks, buildings, a roadside. Wrong
+  /// for anything stacked, because a member's own bottom is only the ground
+  /// if that is where it was standing.
+  sink,
+
+  /// Draw the member in towards its own centre, so it goes wherever it is.
+  ///
+  /// Right for anything that is not resting on the ground — a voxel world
+  /// above all, where most members are stacked on other members. Sinking one
+  /// of those collapses a cube in mid-air into a flat plate that hangs there,
+  /// and a tree becomes a green slab floating over a trunk too thin to see.
+  shrink,
+}
+
 class OrbisPopulation {
   OrbisPopulation({
     required this.key,
@@ -31,6 +56,7 @@ class OrbisPopulation {
     required this.maximum,
     this.mesh,
     this.range = 0,
+    this.fade = OrbisFade.sink,
     this.revision = 0,
     this.castShadows = false,
     this.receiveShadows = true,
@@ -96,6 +122,10 @@ class OrbisPopulation {
   /// per frame, which is the difference between a forest and a slideshow.
   final int revision;
 
+  /// How a member goes, once it is past [range]. Ignored when range is zero,
+  /// because then nothing goes.
+  final OrbisFade fade;
+
   final bool castShadows;
   final bool receiveShadows;
 
@@ -116,5 +146,6 @@ class OrbisPopulation {
   int get flags =>
       (castShadows ? 1 : 0) |
       (receiveShadows ? 2 : 0) |
+      (fade == OrbisFade.shrink ? 4 : 0) |
       (layer.clamp(0, 6) << 8);
 }

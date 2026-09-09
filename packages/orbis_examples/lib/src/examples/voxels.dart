@@ -136,6 +136,11 @@ class VoxelExample extends Example {
           // for a camera move.
           revision: _revision,
           range: range,
+          // A block sits on other blocks, not on the ground. Sinking one to
+          // its own bottom leaves it exactly where it was — a cube twelve up
+          // becomes a flat plate twelve up — so the distance fade has to draw
+          // it in towards its middle instead.
+          fade: OrbisFade.shrink,
           castShadows: true,
         ),
       ],
@@ -409,6 +414,19 @@ for (final step in [(dx, 0.0), (0.0, dz)]) { ... }
   static const _water = 8;
   static const _log = 9;
   static const _leaves = 10;
+
+  /// How wide and how tall the world came out, for a test to walk it.
+  @visibleForTesting
+  (int, int) get extent => (_side, _tall);
+
+  /// What is at a point, for a test to walk the world. Out of bounds is air,
+  /// which is the answer the generator itself works to.
+  @visibleForTesting
+  int blockAt(int x, int y, int z) => _at(x, y, z);
+
+  /// How many cubes the last build decided were worth drawing.
+  @visibleForTesting
+  int get drawnCount => _blockCount;
 
   int _at(int x, int y, int z) {
     if (x < 0 || z < 0 || y < 0) return _air;

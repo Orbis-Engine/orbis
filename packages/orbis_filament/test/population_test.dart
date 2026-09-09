@@ -21,6 +21,7 @@ OrbisScene sceneOf(List<OrbisPopulation> populations) => OrbisScene(
 );
 
 void main() {
+  _fadeTests();
   group('populations on the wire', () {
     test('a fresh renderer is sent everything', () {
       final message = sceneOf([crowd(count: 100)]).toMessage(1);
@@ -114,6 +115,49 @@ void main() {
         ),
         throwsA(isA<AssertionError>()),
       );
+    });
+  });
+}
+
+void _fadeTests() {
+  group('how a member goes at the range', () {
+    OrbisPopulation one({OrbisFade fade = OrbisFade.sink}) => OrbisPopulation(
+      key: 1,
+      transforms: Float32List(16),
+      colours: Float32List(3),
+      minimum: Vector3.zero(),
+      maximum: Vector3.all(1),
+      range: 50,
+      fade: fade,
+    );
+
+    test('sinking is the default, and is bit two clear', () {
+      expect(one().flags & 4, 0);
+    });
+
+    test('shrinking sets bit two', () {
+      expect(one(fade: OrbisFade.shrink).flags & 4, 4);
+    });
+
+    test('it does not disturb the shadow bits or the layer', () {
+      // Bit two sits between the shadow flags and the layer, and a flag that
+      // collides with either is a population that stops casting shadows when
+      // somebody changes how it fades.
+      final planted = OrbisPopulation(
+        key: 1,
+        transforms: Float32List(16),
+        colours: Float32List(3),
+        minimum: Vector3.zero(),
+        maximum: Vector3.all(1),
+        castShadows: true,
+        receiveShadows: true,
+        layer: 3,
+        fade: OrbisFade.shrink,
+      );
+      expect(planted.flags & 1, 1, reason: 'still casts');
+      expect(planted.flags & 2, 2, reason: 'still receives');
+      expect(planted.flags & 4, 4, reason: 'still shrinks');
+      expect(planted.flags >> 8, 3, reason: 'still on its layer');
     });
   });
 }

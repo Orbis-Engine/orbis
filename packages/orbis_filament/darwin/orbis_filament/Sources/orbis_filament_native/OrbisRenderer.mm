@@ -2064,6 +2064,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     material->setParameter("base", int32_t(at));
     material->setParameter("range", grown.range);
     material->setParameter("fadeFrom", grown.range * kFadeFrom);
+    // Bit two: how a member goes at the range. Sinking suits anything planted
+    // and ruins anything stacked, so the population says which it is.
+    material->setParameter("shrink", int32_t((flags & 4) != 0 ? 1 : 0));
 
     utils::Entity entity = utils::EntityManager::get().create();
     RenderableManager::Builder(1)

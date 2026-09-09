@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.0
+
+- A population says how its members go when they pass its `range`.
+  `OrbisFade.sink` is what happened before and stays the default;
+  `OrbisFade.shrink` draws a member in towards its own centre instead.
+
+  Sinking holds a member's bottom edge and draws the rest down to it, which
+  puts anything *planted* into the ground it stands on — grass, rocks, a
+  roadside. It is wrong for anything *stacked*, because a member's own bottom
+  is only the ground if that is where it was standing. A voxel world sank its
+  distant cubes to their own bottoms and left them exactly where they were:
+  each one a flat plate hanging in mid-air, and every tree a green slab over a
+  trunk collapsed too thin to see. That is the "random blocks in the sky" a
+  block world showed as soon as the camera moved far enough for the fade to
+  reach anything.
+
+  Carried in a spare bit of the population flags, so nothing on the wire
+  changed size.
+
 ## 0.10.0
 
 - Geometry no object names any more is dropped, rather than kept until the app

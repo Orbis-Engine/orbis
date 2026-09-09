@@ -17,6 +17,11 @@ PACKAGES=(
   packages/orbis_examples
   packages/orbis_filament
   packages/orbis_ui
+  # An app rather than a package, and here for the one test it carries: that
+  # every worked example can be built and asked for a scene. The gallery opens
+  # straight into one of them, so an example that throws on construction takes
+  # the window with it.
+  examples/gallery
 )
 
 failures=0

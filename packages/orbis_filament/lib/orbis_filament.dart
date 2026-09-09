@@ -36,7 +36,7 @@ export 'src/pipeline.dart'
         OrbisResolution,
         OrbisShadowKind,
         OrbisShadows;
-export 'src/population.dart' show OrbisPopulation;
+export 'src/population.dart' show OrbisFade, OrbisPopulation;
 export 'src/video.dart' show OrbisVideo;
 export 'src/post.dart'
     show
