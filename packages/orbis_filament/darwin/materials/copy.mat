@@ -1,0 +1,26 @@
+// A target, put on the screen.
+//
+// The plainest pass there is, and the one that makes every other temporal
+// technique possible. Anything that reads what the scene drew — bounced light,
+// an irradiance field, anti-aliasing with a history — needs the scene drawn
+// into a target rather than onto the screen, and then needs something to put
+// that target *on* the screen. Without this the only way to present a target
+// is to run an effect that also changes it.
+material {
+    name : orbisCopy,
+    shadingModel : unlit,
+    vertexDomain : device,
+    depthWrite : false,
+    depthCulling : false,
+    requires : [ uv0 ],
+    parameters : [
+        { type : sampler2d, name : source }
+    ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = textureLod(materialParams_source, getUV0(), 0.0);
+    }
+}

@@ -288,6 +288,11 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       if (far != null) example.range = far;
       if (Platform.environment['ORBIS_TREES'] == '0') example.trees = false;
     }
+    if (example is FieldExample) {
+      example.intensity = _number('ORBIS_FIELD') ?? example.intensity;
+      example.retention = _number('ORBIS_RETENTION') ?? example.retention;
+      if (Platform.environment['ORBIS_FIELD_OFF'] == '1') example.on = false;
+    }
     if (example is BounceExample) {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;
       example.reach = _number('ORBIS_BOUNCE_RADIUS') ?? example.reach;

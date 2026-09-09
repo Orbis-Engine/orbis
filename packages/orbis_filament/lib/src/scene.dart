@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'material.dart';
 import 'environment.dart';
+import 'field.dart';
 import 'graph.dart';
 import 'pipeline.dart';
 import 'video.dart';
@@ -851,7 +852,9 @@ class OrbisScene {
     OrbisPipeline? pipeline,
     OrbisRenderGraph? graph,
     OrbisEnvironment? environment,
+    OrbisField? field,
   }) : lights = lights ?? const [],
+       field = field ?? OrbisField.none,
        environment = environment ?? OrbisEnvironment.none,
        pipeline = pipeline ?? OrbisPipeline(),
        graph = graph ?? OrbisRenderGraph.standard(),
@@ -967,6 +970,12 @@ class OrbisScene {
   /// twice, and the wash is the half that flattens it. The sky's own colour
   /// and its body go on meaning what they meant.
   final OrbisEnvironment environment;
+
+  /// The light kept in the world rather than on the screen.
+  ///
+  /// Off by default, and free when off: a scene that never mentions one is
+  /// lit exactly as it was.
+  final OrbisField field;
 
   /// The highest layer an object may be on.
   ///
@@ -1170,6 +1179,8 @@ class OrbisScene {
       'skyEnabled': sky.drawn,
       'postParams': post.packed,
       'pipelineParams': pipeline.packed,
+      'fieldParams': field.packed,
+      'fieldFrom': field.from,
       'environmentRadiance': environment.radiance ?? '',
       'environmentSkybox': environment.skybox ?? '',
       'environmentParams': environment.packed,

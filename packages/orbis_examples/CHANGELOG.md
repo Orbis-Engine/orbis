@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.0
+
+- **A new example, Irradiance field.** The same room as the bounced-light one
+  on purpose. What is worth watching is not that the walls tint the boxes —
+  the bounce does that too — but that the tint is right for where a surface
+  *is* rather than for what happens to be in shot.
+
 ## 0.17.0
 
 - **A new example, Bounced light.** Two coloured walls facing each other across
