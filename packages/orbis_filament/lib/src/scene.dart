@@ -863,6 +863,44 @@ class OrbisScene {
        fog = fog ?? OrbisFog.none,
        precipitation = precipitation ?? OrbisPrecipitation.none;
 
+  /// The same scene with something changed.
+  ///
+  /// A scene is stated whole every frame, which makes taking one somebody
+  /// else built and altering one thing about it awkward — an editor putting a
+  /// gizmo layer over a game's scene, a tool running somebody's scene through
+  /// an effect to see what it does to it, a test rendering the same scene
+  /// twice with one setting moved. All of those otherwise mean rebuilding a
+  /// dozen fields by hand and quietly dropping the one that was added last.
+  OrbisScene copyWith({
+    List<OrbisObject>? objects,
+    List<OrbisPopulation>? populations,
+    List<OrbisLight>? lights,
+    List<OrbisMaterial>? materials,
+    List<OrbisVideo>? videos,
+    OrbisCamera? camera,
+    OrbisSky? sky,
+    OrbisFog? fog,
+    OrbisPrecipitation? precipitation,
+    OrbisPipeline? pipeline,
+    OrbisPostProcess? post,
+    OrbisRenderGraph? graph,
+    OrbisEnvironment? environment,
+  }) => OrbisScene(
+    objects: objects ?? this.objects,
+    populations: populations ?? this.populations,
+    lights: lights ?? this.lights,
+    materials: materials ?? this.materials,
+    videos: videos ?? this.videos,
+    camera: camera ?? this.camera,
+    sky: sky ?? this.sky,
+    fog: fog ?? this.fog,
+    precipitation: precipitation ?? this.precipitation,
+    pipeline: pipeline ?? this.pipeline,
+    post: post ?? this.post,
+    graph: graph ?? this.graph,
+    environment: environment ?? this.environment,
+  );
+
   final List<OrbisObject> objects;
 
   /// The parts of the scene that are many copies of one thing.

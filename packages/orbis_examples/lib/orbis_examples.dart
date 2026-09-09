@@ -29,6 +29,7 @@ export 'src/example.dart'
         ViewPoint;
 export 'src/examples/benchmark.dart' show BenchmarkExample;
 export 'src/examples/blend.dart' show BlendExample;
+export 'src/examples/bounce.dart' show BounceExample;
 export 'src/examples/bistro.dart'
     show BistroExteriorExample, BistroFixture, BistroInteriorExample;
 export 'src/examples/cameras.dart' show CamerasExample;
@@ -49,6 +50,7 @@ export 'src/examples/surface.dart' show SurfaceExample, linearOf;
 import 'src/example.dart';
 import 'src/examples/benchmark.dart';
 import 'src/examples/blend.dart';
+import 'src/examples/bounce.dart';
 import 'src/examples/bistro.dart';
 import 'src/examples/cameras.dart';
 import 'src/examples/crowd.dart';
@@ -77,6 +79,7 @@ import 'src/examples/weather.dart';
 List<Example> engineExamples() => [
   SurfaceExample(),
   LightsExample(),
+  BounceExample(),
   DayAndNightExample(),
   WeatherExample(),
   ManyExample(),

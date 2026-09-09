@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.0
+
+- **A new example, Bounced light.** Two coloured walls facing each other across
+  a pale floor, with white boxes between them — the arrangement every renderer
+  has been photographed in since Cornell in 1984, because it is the one that
+  shows bounced light plainly. The sky's ambient is turned right down on
+  purpose: ambient fills shadows evenly and for free, and a room where it does
+  that is a room where a second bounce has nothing left to add.
+
 ## 0.16.0
 
 - Blocks stops taking itself apart at the draw distance. It fades nothing —

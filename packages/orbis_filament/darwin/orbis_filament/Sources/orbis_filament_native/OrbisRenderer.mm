@@ -62,6 +62,7 @@
 #include "generated/smaa_edges_material.h"
 #include "generated/smaa_weights_material.h"
 #include "generated/smaa_blend_material.h"
+#include "generated/bounce_material.h"
 // SMAA's precomputed tables, fetched by setup.sh from the reference
 // implementation. MIT, Jorge Jimenez et al. — see LICENSES/SMAA.txt.
 #include "generated/AreaTex.h"
@@ -511,6 +512,7 @@ constexpr int kEffectSharpen = 0;
 constexpr int kEffectSmaaEdges = 1;
 constexpr int kEffectSmaaWeights = 2;
 constexpr int kEffectSmaaBlend = 3;
+constexpr int kEffectBounce = 4;
 
 /// Where a material's texture says it comes from a pass rather than a file.
 static const char *const kTargetScheme = "orbis:target/";
@@ -3255,11 +3257,17 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       builder.texture(RenderTarget::AttachmentPoint::COLOR, target.colour);
     }
     if (target.keepsDepth) {
+      // Sampleable as well as attachable, so a later pass can read the
+      // shape of the scene rather than only its colour. That is the whole
+      // difference between an effect that can tint a picture and one that
+      // knows what is in front of what — occlusion, bounced light, contact
+      // shadows all begin here. It costs nothing when nothing samples it.
       target.depth = Texture::Builder()
                          .width(wide)
                          .height(tall)
                          .levels(1)
-                         .usage(Texture::Usage::DEPTH_ATTACHMENT)
+                         .usage(Texture::Usage::DEPTH_ATTACHMENT |
+                                Texture::Usage::SAMPLEABLE)
                          .format(Texture::InternalFormat::DEPTH32F)
                          .build(*_engine);
       builder.texture(RenderTarget::AttachmentPoint::DEPTH, target.depth);
@@ -3363,6 +3371,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     case kEffectSmaaWeights:
       package = ksmaa_weightsMaterial;
       length = ksmaa_weightsMaterial_len;
+      break;
+    case kEffectBounce:
+      package = kbounceMaterial;
+      length = kbounceMaterial_len;
       break;
     case kEffectSmaaBlend:
       package = ksmaa_blendMaterial;
@@ -3532,6 +3544,50 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       pass.effectMaterial->setParameter("weights", weights->colour, smooth);
       pass.effectMaterial->setParameter(
           "step", filament::math::float2{1.0f / wide, 1.0f / tall});
+      break;
+    }
+    case kEffectBounce: {
+      // Depth as well as colour, from the same target. A graph names that
+      // target once and gets both, because asking a host to list the depth
+      // of a thing it has already listed is a way of getting the two out of
+      // step.
+      if (from->depth == nullptr) return;
+      // Nearest, and it matters: a linear tap between two depths is a
+      // distance at which nothing stands, and the march would find a surface
+      // in mid-air at every silhouette.
+      const TextureSampler exact(TextureSampler::MinFilter::NEAREST,
+                                 TextureSampler::MagFilter::NEAREST,
+                                 TextureSampler::WrapMode::CLAMP_TO_EDGE);
+      pass.effectMaterial->setParameter("depth", from->depth, exact);
+      pass.effectMaterial->setParameter(
+          "step", filament::math::float2{1.0f / wide, 1.0f / tall});
+
+      // The scene's camera, not this pass's. An effect draws through a camera
+      // of its own — that is what puts a triangle over the whole screen — so
+      // the projection that made the depth has to be handed over rather than
+      // read from the frame.
+      const Camera &scene = _view->getCamera();
+      const filament::math::mat4 clipFromView = scene.getProjectionMatrix();
+      pass.effectMaterial->setParameter("near", float(scene.getNear()));
+      // The half field of view as tangents, which turn a place on the screen
+      // and a distance into a position. Read off the projection so an
+      // orthographic or an off-centre camera cannot disagree with it.
+      pass.effectMaterial->setParameter(
+          "tangents",
+          filament::math::float2{float(1.0 / clipFromView[0][0]),
+                                 float(1.0 / clipFromView[1][1])});
+
+      pass.effectMaterial->setParameter("radius", dial > 0.0f ? dial : 1.5f);
+      pass.effectMaterial->setParameter("intensity", pass.plane[1] > 0.0f
+                                                         ? pass.plane[1]
+                                                         : 1.0f);
+      pass.effectMaterial->setParameter(
+          "thickness", pass.plane[2] > 0.0f ? pass.plane[2] : 0.35f);
+      // Four slices of eight steps is the shape that holds up while staying
+      // affordable; the shader's loops are bounded at eight and sixteen.
+      const int slices = pass.plane[3] > 0.0f ? int(pass.plane[3]) : 4;
+      pass.effectMaterial->setParameter("slices", int32_t(std::clamp(slices, 1, 8)));
+      pass.effectMaterial->setParameter("steps", int32_t(8));
       break;
     }
     default:
