@@ -20,11 +20,15 @@ import 'surface.dart' show linearOf;
 /// again, and the renderer decides what is near enough to be worth drawing.
 ///
 /// What makes it a world rather than a heap is the same thing that makes any
-/// of them one: the height at a point is a function of the point, so it is
-/// continuous, and it is the same every time from the same seed. The blocks
-/// underneath a surface block are not built, because nothing can see them —
-/// which is the first optimisation anybody makes here and the reason a
-/// landscape this size fits in a buffer at all.
+/// of them one: everything about a point is a function of that point, so it is
+/// continuous, and it is the same every time from the same seed.
+///
+/// The generator's shape — climate fields rather than a height field, splines
+/// from continentalness, surface rules by biome, features planted afterwards —
+/// is the approach Pebble takes (github.com/thebriangao/pebble, MIT), read as
+/// a reference and written again here. None of its code is in this file: it is
+/// forty-five thousand lines of Swift against a different renderer, and what
+/// was worth having from it was the shape rather than the source.
 class VoxelExample extends Example {
   VoxelExample() {
     _build();
@@ -39,7 +43,7 @@ class VoxelExample extends Example {
 
   @override
   ViewPoint get viewpoint =>
-      const ViewPoint(distance: 88, pitch: 0.62, height: 5, yaw: 0.7);
+      const ViewPoint(distance: 96, pitch: 0.6, height: 8, yaw: 0.7);
 
   /// How far the world reaches, in blocks from the middle.
   double reach = 56;
@@ -53,6 +57,9 @@ class VoxelExample extends Example {
 
   /// Whether the water is there.
   bool sea = true;
+
+  /// Whether anything grows.
+  bool trees = true;
 
   /// Whether you are in the world or looking at it.
   bool walking = true;
@@ -234,6 +241,16 @@ class VoxelExample extends Example {
           },
         ),
         Toggle(
+          label: 'Trees',
+          value: trees,
+          note: 'Where it is warm enough and damp enough for them',
+          onChanged: (value) {
+            trees = value;
+            _build();
+            changed();
+          },
+        ),
+        Toggle(
           label: 'Sea',
           value: sea,
           note: 'Everything below $_seaLevel is under it',
@@ -383,11 +400,15 @@ for (final step in [(dx, 0.0), (0.0, dz)]) { ... }
 
   static const _air = 0;
   static const _grass = 1;
-  static const _stone = 2;
-  static const _snow = 3;
-  static const _sand = 4;
-  static const _rock = 5;
-  static const _water = 6;
+  static const _dirt = 2;
+  static const _stone = 3;
+  static const _deepslate = 4;
+  static const _sand = 5;
+  static const _sandstone = 6;
+  static const _snow = 7;
+  static const _water = 8;
+  static const _log = 9;
+  static const _leaves = 10;
 
   int _at(int x, int y, int z) {
     if (x < 0 || z < 0 || y < 0) return _air;
@@ -415,66 +436,198 @@ for (final step in [(dx, 0.0), (0.0, dz)]) { ... }
   }
 
   /// Generates the world.
+  ///
+  /// The shape of this is borrowed from how the genre does it, which is worth
+  /// saying plainly: a height that comes from one noise field gives rolling
+  /// dunes and nothing else, and the thing that makes a block world read as a
+  /// *place* is that different parts of it are different — a beach, a desert,
+  /// a snow line, trees where trees grow.
+  ///
+  /// So there are four fields rather than one, and none of them is height:
+  ///
+  ///   * **continentalness** decides how far above the sea a region sits, and
+  ///     is the one that makes coasts;
+  ///   * **erosion** decides how much the land is allowed to vary there, which
+  ///     is what separates a plain from a mountain range rather than making
+  ///     the mountains taller;
+  ///   * **temperature** and **humidity** decide what grows, not what shape it
+  ///     is.
+  ///
+  /// Height is then continentalness put through a curve and scaled by erosion.
+  /// The curve matters: a straight line gives a world with as much land at
+  /// every altitude, and a real one has a lot of coast, a lot of gentle
+  /// ground, and a little that is high.
   void _build() {
-    final noise = FractalNoise(
-      GradientNoise(seed: _seed),
-      octaves: 2,
-      gain: 0.45,
-    );
+    // Different offsets rather than different seeds, so one number still
+    // decides the whole world and the fields stay independent of each other.
+    final land = FractalNoise(GradientNoise(seed: _seed), octaves: 3);
+    final erosion = FractalNoise(GradientNoise(seed: _seed + 101), octaves: 2);
+    final warmth = FractalNoise(GradientNoise(seed: _seed + 202), octaves: 2);
+    final damp = FractalNoise(GradientNoise(seed: _seed + 303), octaves: 2);
+    final rough = FractalNoise(GradientNoise(seed: _seed + 404), octaves: 3);
 
     _side = reach.round() * 2 + 1;
-    _tall = relief.round() + 6;
+    _tall = relief.round() + 8;
     _blocks = Uint8List(_side * _side * _tall);
 
+    final half = _side ~/ 2;
+    final sea = _seaLevel;
+
+    // Every field runs to about half either side of zero rather than to one,
+    // measured rather than assumed — so each is opened out before it is used.
+    double field(Noise n, int x, int z, double scale) =>
+        (n.at(x * scale, z * scale) * 1.9).clamp(-1.0, 1.0);
+
     int heightAt(int x, int z) {
-      // The gain of 0.86: this field runs to about six tenths either side of
-      // zero, not to one, so the obvious mapping of half-plus-a-half uses
-      // barely half the height available and everything lands in the middle.
-      // Measured rather than assumed — the first version was a plateau.
-      final shaped = (noise.at(x * 0.06, z * 0.06) * 0.86 + 0.5).clamp(
-        0.0,
-        1.0,
-      );
-      return (shaped * relief).round();
+      final c = field(land, x, z, 0.021);
+      final e = field(erosion, x, z, 0.045);
+
+      // The curve. Flat around the coast so beaches are wide, steepening
+      // through the middle so there is somewhere to walk up, and easing off
+      // at the top so peaks are rare rather than a plateau.
+      final shaped = c < -0.3
+          ? (c + 1) / 0.7 * 0.28
+          : c < 0.35
+          ? 0.28 + (c + 0.3) / 0.65 * 0.42
+          : 0.70 + (c - 0.35) / 0.65 * 0.30;
+
+      // Erosion scales how far from the sea the land is allowed to get, which
+      // is what makes a range of hills rather than a taller everything.
+      final vary = 0.35 + (1 - (e + 1) / 2) * 0.65;
+      final above = (shaped - 0.30) * relief * 1.5 * vary;
+
+      // And a little roughness on top, so a hillside is not a smooth ramp.
+      final bumps = field(rough, x, z, 0.14) * 1.6;
+      return (sea + above + bumps).round().clamp(1, _tall - 3);
     }
 
-    final half = _side ~/ 2;
     for (var x = 0; x < _side; x++) {
       for (var z = 0; z < _side; z++) {
-        final top = heightAt(x - half, z - half);
+        final wx = x - half;
+        final wz = z - half;
+        final top = heightAt(wx, wz);
+
+        final t = field(warmth, wx, wz, 0.017);
+        final h = field(damp, wx, wz, 0.019);
 
         // Down to the lowest neighbour rather than only the surface, so a
-        // cliff is a wall instead of a row of floating tops — and so that
-        // digging into one finds rock rather than the sky.
+        // cliff is a wall instead of a row of floating tops — and so digging
+        // into one finds rock rather than the sky.
         var lowest = top;
         for (final (dx, dz) in const [(1, 0), (-1, 0), (0, 1), (0, -1)]) {
-          final beside = heightAt(x - half + dx, z - half + dz);
+          final beside = heightAt(wx + dx, wz + dz);
           if (beside < lowest) lowest = beside;
         }
-        final from = math.max(math.min(lowest, _seaLevel - 1), 0);
+        final from = math.max(math.min(lowest, sea - 1), 0);
 
         for (var y = from; y <= top; y++) {
-          _put(x, y, z, _kindOf(y, top));
+          _put(x, y, z, _surfaceAt(y, top, t, h));
         }
-        if (sea) {
-          for (var y = top + 1; y <= _seaLevel; y++) {
+        if (this.sea) {
+          for (var y = top + 1; y <= sea; y++) {
             _put(x, y, z, _water);
           }
         }
       }
     }
 
+    if (trees) _plant(warmth, damp);
     _standOnGround();
     _pack();
   }
 
-  /// What a block at this height, in a column of this height, is made of.
-  int _kindOf(int y, int top) {
-    if (y < top) return _rock;
-    if (top <= _seaLevel + 1) return _sand;
-    if (top > relief * 0.82) return _snow;
-    if (top > relief * 0.58) return _stone;
-    return _grass;
+  /// What a block is, from where it sits and what the weather is there.
+  ///
+  /// Surface rules, in the sense the genre means: the top of a column and the
+  /// two or three under it are decided by climate, and everything below that
+  /// is stone regardless. It is a small rule that does most of the work of
+  /// making a world look like somewhere.
+  int _surfaceAt(int y, int top, double t, double h) {
+    final depth = top - y;
+
+    // Deep down, a darker stone. Nothing here needs it to be a different
+    // material — it needs the bottom of a hole to look like the bottom of a
+    // hole rather than more of the same.
+    if (depth > 4) return y < _tall * 0.28 ? _deepslate : _stone;
+
+    // Beaches: anything at the water's edge is sand, whatever the climate,
+    // because that is what the shore of a lake looks like.
+    final shore = top <= _seaLevel + 1;
+    if (shore) return depth == 0 || depth == 1 ? _sand : _sandstone;
+
+    // Desert: hot and dry, and sand all the way down to sandstone.
+    if (t > 0.35 && h < -0.1) {
+      return depth <= 2 ? _sand : _sandstone;
+    }
+
+    // Snow, by height first and cold second — a peak is white because it is
+    // high, and a cold region is white at a lower line than a warm one.
+    final snowLine = _tall * (0.62 - t * 0.18);
+    if (top > snowLine) return depth == 0 ? _snow : _stone;
+
+    // Bare rock just under the snow, so a mountain has a stony shoulder
+    // rather than grass running to the summit.
+    if (top > snowLine - 3) return _stone;
+
+    return depth == 0 ? _grass : _dirt;
+  }
+
+  /// Puts trees where trees grow.
+  ///
+  /// A feature pass, after the ground: they need to know where the surface
+  /// ended up, and they are placed on a grid with an offset rather than at
+  /// random, so a forest is spread out instead of clumping into thickets and
+  /// bare patches.
+  void _plant(Noise warmth, Noise damp) {
+    final chance = math.Random(_seed * 7717);
+    final half = _side ~/ 2;
+
+    for (var gx = 2; gx < _side - 2; gx += 4) {
+      for (var gz = 2; gz < _side - 2; gz += 4) {
+        final x = gx + chance.nextInt(3) - 1;
+        final z = gz + chance.nextInt(3) - 1;
+        final wx = x - half;
+        final wz = z - half;
+
+        final t = (warmth.at(wx * 0.017, wz * 0.017) * 1.9).clamp(-1.0, 1.0);
+        final h = (damp.at(wx * 0.019, wz * 0.019) * 1.9).clamp(-1.0, 1.0);
+        // Where it is warm enough and damp enough. Deserts and peaks get none,
+        // which is most of what makes them read as deserts and peaks.
+        if (h < 0.05 || t < -0.35) continue;
+        if (chance.nextDouble() > 0.55 + h * 0.35) continue;
+
+        // On grass only — not on sand, not on stone, not in a lake.
+        var ground = -1;
+        for (var y = _tall - 1; y > 0; y--) {
+          if (_at(x, y, z) != _air) {
+            ground = y;
+            break;
+          }
+        }
+        if (ground < 0 || _at(x, ground, z) != _grass) continue;
+
+        final tall = 4 + chance.nextInt(3);
+        if (ground + tall + 2 >= _tall) continue;
+
+        for (var i = 1; i <= tall; i++) {
+          _put(x, ground + i, z, _log);
+        }
+        // A blob of leaves rather than a shape: two layers wide around the
+        // top of the trunk, narrowing to a cap.
+        for (var dy = -1; dy <= 1; dy++) {
+          final spread = dy == 1 ? 1 : 2;
+          for (var dx = -spread; dx <= spread; dx++) {
+            for (var dz = -spread; dz <= spread; dz++) {
+              if (dx == 0 && dz == 0 && dy < 1) continue;
+              // Corners off, so it is round rather than a cube.
+              if (dx.abs() == spread && dz.abs() == spread) continue;
+              _put(x + dx, ground + tall + dy, z + dz, _leaves);
+            }
+          }
+        }
+        _put(x, ground + tall + 2, z, _leaves);
+      }
+    }
   }
 
   /// Turns the grid into the buffers the renderer draws.
@@ -532,16 +685,24 @@ for (final step in [(dx, 0.0), (0.0, dz)]) { ... }
   /// What a kind of block looks like, with a little variation by where it is.
   ///
   /// The variation matters more than the colours do: without it a hillside is
-  /// one flat green, and a world of identical cubes reads as a spreadsheet.
+  /// one flat green, and a field of identical cubes reads as a spreadsheet.
+  /// Hashed from the position rather than random, so a block is the same
+  /// shade every time the world is built and digging one out does not
+  /// re-shuffle its neighbours.
   List<double> _colourOf(int kind, int x, int z) {
     final shade =
         0.88 + (((x * 73856093) ^ (z * 19349663)) & 0xFF) / 0xFF * 0.2;
     return switch (kind) {
-      _grass => [0.24 * shade, 0.47 * shade, 0.19 * shade],
-      _stone => [0.44 * shade, 0.43 * shade, 0.41 * shade],
-      _snow => [0.92 * shade, 0.94 * shade, 0.97 * shade],
-      _sand => [0.76 * shade, 0.69 * shade, 0.48 * shade],
-      _water => [0.10, 0.30, 0.44],
+      _grass => [0.26 * shade, 0.52 * shade, 0.20 * shade],
+      _dirt => [0.36 * shade, 0.26 * shade, 0.17 * shade],
+      _stone => [0.44 * shade, 0.44 * shade, 0.45 * shade],
+      _deepslate => [0.20 * shade, 0.20 * shade, 0.22 * shade],
+      _sand => [0.80 * shade, 0.73 * shade, 0.50 * shade],
+      _sandstone => [0.70 * shade, 0.62 * shade, 0.42 * shade],
+      _snow => [0.93 * shade, 0.95 * shade, 0.98 * shade],
+      _log => [0.30 * shade, 0.21 * shade, 0.12 * shade],
+      _leaves => [0.14 * shade, 0.38 * shade, 0.13 * shade],
+      _water => [0.10, 0.30, 0.46],
       _ => [0.31 * shade, 0.29 * shade, 0.27 * shade],
     };
   }

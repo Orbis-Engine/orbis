@@ -2,6 +2,18 @@
 
 ## 0.13.0
 
+- Blocks generates a world rather than a heightfield. Four climate fields
+  instead of one height: continentalness decides how far above the sea a
+  region sits and is what makes coasts, erosion decides how much the land is
+  allowed to vary there, and temperature and humidity decide what grows.
+  Height is continentalness through a curve, scaled by erosion — the curve
+  matters, because a straight line gives as much land at every altitude and a
+  real world has a lot of coast, a lot of gentle ground and a little that is
+  high. Surface rules by biome give beaches, deserts, a snow line that moves
+  with temperature, and trees where it is warm and damp enough. The shape of
+  that is Pebble's approach read as a reference and written again; none of its
+  code is here.
+
 - The runner's buildings stood in the road. The track is 4.6 either side of
   the middle and the scenery started at 4.2, so a tower could be in the third
   lane — which is what "it keeps generating really long objects" was: a
