@@ -40,11 +40,24 @@ enum OrbisFade {
 
   /// Draw the member in towards its own centre, so it goes wherever it is.
   ///
-  /// Right for anything that is not resting on the ground — a voxel world
-  /// above all, where most members are stacked on other members. Sinking one
-  /// of those collapses a cube in mid-air into a flat plate that hangs there,
-  /// and a tree becomes a green slab floating over a trunk too thin to see.
+  /// Right for anything scattered that is not resting on the ground. Wrong for
+  /// anything that forms a continuous surface: shrinking each member of a
+  /// solid world separately opens gaps between them and turns the surface into
+  /// a cloud of small cubes hanging in the air.
   shrink,
+
+  /// The member does not change at all. [OrbisPopulation.range] still stops
+  /// whole draws being submitted past it, so the saving is still there — what
+  /// goes is the gradual part.
+  ///
+  /// Right for anything that makes a **continuous surface**, a voxel world
+  /// above all. There is no shape a single member can take on its way out that
+  /// does not tear a solid world: sinking leaves plates in the air, shrinking
+  /// leaves gaps. So nothing is faded, the draws are culled in spatial clumps,
+  /// and the boundary is hidden the way a block game has always hidden it —
+  /// with fog reaching full opacity by the range. Without that fog this is the
+  /// one mode with a visible pop, and it is a hard one.
+  none,
 }
 
 class OrbisPopulation {
@@ -146,6 +159,8 @@ class OrbisPopulation {
   int get flags =>
       (castShadows ? 1 : 0) |
       (receiveShadows ? 2 : 0) |
-      (fade == OrbisFade.shrink ? 4 : 0) |
+      // Two bits, at 2 and 3, in the order the shader switches on. Below the
+      // layer, which starts at 8.
+      (fade.index << 2) |
       (layer.clamp(0, 6) << 8);
 }

@@ -31,20 +31,41 @@ material {
         { type : float, name : range },
         { type : float, name : fadeFrom },
 
-        // How a member goes when it passes the range. Nought holds its bottom
-        // and draws the rest down to it, which puts anything planted into the
-        // ground it stands on. One draws it in towards its own centre, which
-        // is the only right answer for anything stacked: a member's own bottom
-        // is the ground only if that is where it was standing, and sinking a
-        // cube that sits on another cube collapses it into a plate hanging in
-        // mid-air.
-        { type : int, name : shrink }
+        // How a member goes when it passes the range, matching OrbisFade.
+        //
+        //   0 sink   hold the bottom, draw the rest down to it. For anything
+        //            planted, whose bottom is the ground it stands on.
+        //   1 shrink draw it in towards its own centre. For scattered things
+        //            that are not resting on anything.
+        //   2 none   leave it alone and let the draw be culled at the range.
+        //            For a continuous surface: there is no shape one member
+        //            can take on its way out that does not tear a solid
+        //            world, so it is fog that hides the boundary instead.
+        { type : int, name : fadeMode },
+
+        // Where the camera is, in world coordinates, handed in rather than
+        // worked out. Filament renders camera-relative and the obvious way to
+        // recover the origin is to subtract the incoming vertex from the
+        // incoming world position — but the world position a copy is handed
+        // is built from a block of per-copy uniforms indexed by
+        // `instance_index`, and a copy whose slot in that block was never
+        // written reads whatever the last renderable left there. Which put
+        // cubes in the sky, and moved them when the camera turned, because
+        // the order draws are submitted in is what decided the leftovers.
+        // Taking the number directly is not a workaround; it is the only
+        // input here that does not depend on state this material does not
+        // own.
+        { type : float3, name : cameraAt }
     ],
     variables : [ tint ],
     culling : back
 }
 
 vertex {
+    // How wide a cell is, in world units. Sixteen, as in every block game
+    // that has ever had a draw distance.
+    #define kCellSide 16.0
+
     // The book is two thousand wide and as tall as it needs to be, so any
     // number of instances fits inside what a texture is allowed to be.
     vec4 page(int index) {
@@ -76,15 +97,31 @@ vertex {
         // whichever origin it is measured from.
         vec3 local = getPosition().xyz;
 
-        // Where the world's origin is, measured from the camera. Filament
-        // renders camera-relative, so this is what everything else here is
-        // measured against.
-        vec3 origin = material.worldPosition.xyz - local;
-        float away = length(origin + offset);
+        // Measured flat, ignoring height, and that is the whole trick.
+        //
+        // A straight distance makes a member's fate depend on how high it
+        // stands: a canopy fifteen blocks up is further from the camera than
+        // the ground under it, so it crosses the range first and the tree
+        // goes while the hill stays — or the reverse, and a lid of leaves
+        // hangs over nothing. Measured flat, a whole column shares one
+        // answer, so a world can only ever lose complete columns from its
+        // edge. It is what a block game has always done.
+        // Measured from the *cell* a member stands in, not from the member.
+        //
+        // Sixteen blocks square, flat, which is the grain a block game has
+        // always culled at. Per member the boundary cuts through whatever
+        // straddles it: a canopy reaches two blocks past its trunk, so the
+        // trunk falls outside the range while a leaf falls inside, and what
+        // is left is a lid of leaves hanging over nothing. Judged by cell,
+        // every block standing in the same square shares one verdict, so the
+        // world can only lose whole sections and a tree always leaves with
+        // the ground it grew on.
+        vec2 cell = (floor(offset.xz / kCellSide) + 0.5) * kCellSide;
+        float away = length(cell - materialParams.cameraAt.xz);
 
         // How much of this member is left at that distance.
         float standing = 1.0;
-        if (materialParams.range > 0.0) {
+        if (materialParams.range > 0.0 && materialParams.fadeMode != 2) {
             standing = 1.0 - smoothstep(materialParams.fadeFrom,
                                         materialParams.range, away);
         }
@@ -94,11 +131,14 @@ vertex {
         // That is only true of a member that was standing on the ground —
         // stacked members go in towards their own centre instead, or a cube
         // resting on another cube flattens into a plate and stays in the air.
+        // With standing at one, sunk is local, so `none` needs no case here.
         vec3 sunk = vec3(local.x, -1.0 + (local.y + 1.0) * standing, local.z);
         vec3 standingLocal =
-            materialParams.shrink != 0 ? local * standing : sunk;
+            materialParams.fadeMode == 1 ? local * standing : sunk;
 
-        material.worldPosition.xyz = origin + basis * standingLocal + offset;
+        // Camera-relative, because that is the space Filament works in.
+        material.worldPosition.xyz =
+            basis * standingLocal + offset - materialParams.cameraAt;
 
         // The normal has to be turned with it, or every instance is lit as
         // though it were facing the way the mesh was modelled. Right for a

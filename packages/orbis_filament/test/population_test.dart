@@ -135,8 +135,17 @@ void _fadeTests() {
       expect(one().flags & 4, 0);
     });
 
-    test('shrinking sets bit two', () {
-      expect(one(fade: OrbisFade.shrink).flags & 4, 4);
+    test('each mode is its own value in bits two and three', () {
+      expect((one(fade: OrbisFade.sink).flags >> 2) & 3, 0);
+      expect((one(fade: OrbisFade.shrink).flags >> 2) & 3, 1);
+      expect((one(fade: OrbisFade.none).flags >> 2) & 3, 2);
+    });
+
+    test('every mode fits in the two bits it is given', () {
+      // The layer starts at bit eight and the shadows are below; a fourth
+      // mode would silently run into neither, so this is the guard for
+      // adding one.
+      expect(OrbisFade.values.length, lessThanOrEqualTo(4));
     });
 
     test('it does not disturb the shadow bits or the layer', () {
@@ -156,7 +165,7 @@ void _fadeTests() {
       );
       expect(planted.flags & 1, 1, reason: 'still casts');
       expect(planted.flags & 2, 2, reason: 'still receives');
-      expect(planted.flags & 4, 4, reason: 'still shrinks');
+      expect((planted.flags >> 2) & 3, 1, reason: 'still shrinks');
       expect(planted.flags >> 8, 3, reason: 'still on its layer');
     });
   });

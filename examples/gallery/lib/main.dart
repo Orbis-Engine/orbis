@@ -13,6 +13,7 @@
 ///   ORBIS_SECONDS          hold the clock still, for a scene that animates
 ///   ORBIS_WALK=0           give the camera back, for an example that drives it
 ///   ORBIS_RANGE            how far a population is drawn from; 0 draws it all
+///   ORBIS_TREES=0          leave the trees out
 library;
 
 import 'dart:io';
@@ -81,6 +82,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       if (Platform.environment['ORBIS_WALK'] == '0') example.walking = false;
       final far = _number('ORBIS_RANGE');
       if (far != null) example.range = far;
+      if (Platform.environment['ORBIS_TREES'] == '0') example.trees = false;
     }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;

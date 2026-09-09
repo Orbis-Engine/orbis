@@ -9,6 +9,7 @@
 #include <filament/Camera.h>
 #include <filament/Engine.h>
 #include <filament/IndexBuffer.h>
+#include <filament/InstanceBuffer.h>
 #include <filament/IndirectLight.h>
 #include <filament/LightManager.h>
 #include <filament/Material.h>
@@ -107,6 +108,11 @@ struct Mesh {
 /// sixteen hundred is culled as one — which for a large world is worth having
 /// on its own.
 constexpr uint32_t kInstancesPerDraw = 64;
+
+/// How wide the cell is that a member's distance is measured from, matching
+/// kCellSide in instanced.mat. Whole cells leave together, so nothing that
+/// straddles the boundary is cut in half.
+constexpr float kCellSide = 16.0f;
 
 /// How wide the book of transforms is.
 ///
@@ -859,6 +865,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// Loaded glTF files, by path. Kept for the life of the renderer: a scene
   /// arrives on every drag, and the parse is the expensive part.
   std::map<std::string, Mesh> _meshes;
+
+  /// Sixty-four identity transforms, lent to every population draw. Built
+  /// once, because every draw wants the same nothing.
+  filament::InstanceBuffer *_identityInstances;
 
   /// Assets that could not be loaded. Sticky, because a file is read once and
   /// a failure that reported itself only on the frame of the attempt would
@@ -2022,6 +2032,20 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   grown.revision = INT32_MIN;
 }
 
+/// The instance buffer every population draw is given.
+///
+/// It holds identities and is never written to again. See the note where it
+/// is bound for why a buffer that carries nothing is not optional.
+- (filament::InstanceBuffer *)identityInstances {
+  if (_identityInstances == nullptr) {
+    filament::math::mat4f nothing[kInstancesPerDraw];
+    _identityInstances = filament::InstanceBuffer::Builder(kInstancesPerDraw)
+                             .localTransforms(nothing)
+                             .build(*_engine);
+  }
+  return _identityInstances;
+}
+
 /// Builds the renderables one population needs, in chunks of what Filament
 /// will draw at once.
 - (void)growPopulation:(Grown &)grown
@@ -2064,9 +2088,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     material->setParameter("base", int32_t(at));
     material->setParameter("range", grown.range);
     material->setParameter("fadeFrom", grown.range * kFadeFrom);
-    // Bit two: how a member goes at the range. Sinking suits anything planted
-    // and ruins anything stacked, so the population says which it is.
-    material->setParameter("shrink", int32_t((flags & 4) != 0 ? 1 : 0));
+    // Bits two and three: how a member goes at the range. Sinking suits
+    // anything planted, shrinking anything scattered, and neither suits a
+    // continuous surface — so the population says which it is.
+    material->setParameter("fadeMode", int32_t((flags >> 2) & 3));
 
     utils::Entity entity = utils::EntityManager::get().create();
     RenderableManager::Builder(1)
@@ -2077,9 +2102,20 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
         .material(0, material)
         .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
                   _indexBuffer, 0, 36)
-        // No instance buffer: each copy is handed nothing but its own number,
-        // and reads its transform out of the book with it.
-        .instances(chunk)
+        // Sixty-four identities, shared by every draw in every population.
+        //
+        // A member's real transform comes out of the book, so this buffer
+        // carries nothing — and it still has to be here. Filament indexes a
+        // block of per-renderable uniforms by `instance_index` to build the
+        // world position the vertex shader is handed, and asking for copies
+        // *without* an instance buffer leaves every slot but the first
+        // undefined: they hold whatever the renderable drawn before them left
+        // there. The shader reads that position back to recover where the
+        // camera is, so a stale slot puts its cube somewhere else entirely —
+        // and since what was drawn before depends on the order draws are
+        // submitted in, the cube moves when the camera turns. Which is what
+        // "blocks floating in random places when rotating" was.
+        .instances(chunk, [self identityInstances])
         .receiveShadows((flags & 2) != 0)
         .castShadows((flags & 1) != 0)
         .build(*_engine, entity);
@@ -2236,6 +2272,15 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 
   for (auto &entry : _populations) {
     Grown &grown = entry.second;
+
+    // Where the camera is, told to the material rather than left for it to
+    // work out. It has to reach every population, ranged or not, because it
+    // is what every member's position is now measured from — see the note on
+    // `cameraAt` in instanced.mat.
+    for (auto *material : grown.materials) {
+      material->setParameter("cameraAt", filament::math::float3{eye});
+    }
+
     if (grown.range <= 0 || grown.middles.size() != grown.entities.size()) {
       continue;
     }
@@ -2247,9 +2292,17 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       // large group does not vanish while part of it is still close — and
       // only once every member in it has finished sinking, or taking it out
       // is the pop the sinking exists to avoid.
-      const float away =
-          std::max(length(grown.middles[draw] - eye) - grown.radii[draw], 0.0f);
-      const bool wanted = away <= grown.range;
+      // Flat, like the shader's own test, and for the same reason: a draw
+      // judged on height leaves while the ground it stands on stays.
+      const float3 apart = grown.middles[draw] - eye;
+      const float across = std::sqrt(apart.x * apart.x + apart.z * apart.z);
+      const float away = std::max(across - grown.radii[draw], 0.0f);
+
+      // A cell of slack, because the shader measures to the middle of a
+      // sixteen-block cell and a member can stand eleven from it. Dropping a
+      // draw the shader would still have drawn from is the one mistake this
+      // cannot make: it is a hole, and the holes are what this was.
+      const bool wanted = away <= grown.range + kCellSide;
 
       if (draw >= grown.shown.size()) grown.shown.resize(draw + 1, true);
       if (wanted == grown.shown[draw]) continue;
@@ -4832,6 +4885,11 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     if (pair.second.asset) _assetLoader->destroyAsset(pair.second.asset);
   }
   _meshes.clear();
+
+  if (_identityInstances != nullptr) {
+    _engine->destroy(_identityInstances);
+    _identityInstances = nullptr;
+  }
 
   delete _resourceLoader;
   _resourceLoader = nullptr;
