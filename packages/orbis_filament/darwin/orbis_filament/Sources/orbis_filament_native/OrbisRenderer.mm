@@ -1245,8 +1245,25 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   _aimLock = [[NSLock alloc] init];
   _pacing = getenv("ORBIS_PACE") != nullptr;
 
-  _engine = Engine::create(Engine::Backend::METAL);
+  // Asked for at the highest the device will give, because the standard
+  // surface needs a tenth sampler and Filament rations them by feature level:
+  // a material may have nine below the third, whatever the hardware could
+  // manage. Metal on anything Orbis runs on reports the third — but it is
+  // asked for rather than assumed, because an engine built above what the
+  // device supports fails to build at all rather than falling back.
+  Engine::Builder builder;
+  builder.backend(Engine::Backend::METAL);
+  _engine = builder.build();
   ASSERT_PRECONDITION(_engine != nullptr, "Metal is unavailable.");
+
+  // Raised after the fact rather than in the builder for the same reason:
+  // this one clamps to what is supported instead of refusing, so a device
+  // that cannot manage it keeps the surfaces it can compile rather than
+  // getting a renderer that will not start.
+  const Engine::FeatureLevel supported = _engine->getSupportedFeatureLevel();
+  if (supported > Engine::FeatureLevel::FEATURE_LEVEL_1) {
+    _engine->setActiveFeatureLevel(supported);
+  }
 
   _renderer = _engine->createRenderer();
   _scene = _engine->createScene();

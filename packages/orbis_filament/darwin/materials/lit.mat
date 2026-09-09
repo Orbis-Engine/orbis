@@ -18,6 +18,12 @@
 material {
     name : orbisLit,
     shadingModel : lit,
+    // The third, for one reason: a material may have nine samplers below it
+    // however capable the hardware is, and the standard surface needs ten.
+    // The engine asks for the highest the device supports and clamps, so a
+    // device that cannot manage this compiles the other surfaces and leaves
+    // this one out rather than failing to start.
+    featureLevel : 3,
     blending : opaque,
     // Both the area lights and the irradiance field are handed back this
     // way, and added rather than mixed: what they carry arrives alongside
