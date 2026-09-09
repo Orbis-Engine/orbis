@@ -266,6 +266,9 @@ private final class Viewport {
     let meshes = scene.count == 0 ? [Int32(-1)] : scene.meshes
     let flags = scene.count == 0 ? [Int32(0)] : scene.flags
     let objectMaterials = scene.count == 0 ? [Int32(-1)] : scene.objectMaterials
+    let morphCounts = scene.count == 0 ? [Int32(0)] : scene.objectMorphCounts
+    let morphWeights =
+      scene.objectMorphWeights.isEmpty ? [Float(0)] : scene.objectMorphWeights
 
     // The place before anything in it, so that the first frame drawn with a
     // new environment is lit by it rather than by the one before.
@@ -343,14 +346,20 @@ private final class Viewport {
           meshes.withUnsafeBufferPointer { meshPointer in
             flags.withUnsafeBufferPointer { flagPointer in
               objectMaterials.withUnsafeBufferPointer { materialPointer in
-                renderer.applyObjects(keyPointer.baseAddress!,
-                                      transforms: transformPointer.baseAddress!,
-                                      colours: colourPointer.baseAddress!,
-                                      meshes: meshPointer.baseAddress!,
-                                      flags: flagPointer.baseAddress!,
-                                      materials: materialPointer.baseAddress!,
-                                      paths: scene.paths,
-                                      count: UInt32(scene.count))
+                morphCounts.withUnsafeBufferPointer { morphCountPointer in
+                  morphWeights.withUnsafeBufferPointer { morphWeightPointer in
+                    renderer.applyObjects(keyPointer.baseAddress!,
+                                          transforms: transformPointer.baseAddress!,
+                                          colours: colourPointer.baseAddress!,
+                                          meshes: meshPointer.baseAddress!,
+                                          flags: flagPointer.baseAddress!,
+                                          materials: materialPointer.baseAddress!,
+                                          morphCounts: morphCountPointer.baseAddress!,
+                                          morphWeights: morphWeightPointer.baseAddress!,
+                                          paths: scene.paths,
+                                          count: UInt32(scene.count))
+                  }
+                }
               }
             }
           }
@@ -485,6 +494,8 @@ private struct Scene {
   let flags: [Int32]
   let paths: [String]
   let objectMaterials: [Int32]
+  let objectMorphCounts: [Int32]
+  let objectMorphWeights: [Float]
   let materialKeys: [Int64]
   let materialFlags: [Int32]
   let materialParams: [Float]
@@ -690,6 +701,22 @@ private struct Scene {
     let texturePaths = arguments["texturePaths"] as? [String] ?? []
     let textureSrgb =
       (arguments["textureSrgb"] as? FlutterStandardTypedData)?.int32s ?? []
+    // Shapes per object, and every shape's weight end to end behind it. The
+    // two have to agree or the renderer walks off the end of the weights, so
+    // the sum is checked here rather than trusted there.
+    let objectMorphCounts =
+      (arguments["objectMorphCounts"] as? FlutterStandardTypedData)?.int32s
+      ?? [Int32](repeating: 0, count: count)
+    let objectMorphWeights =
+      (arguments["objectMorphWeights"] as? FlutterStandardTypedData)?.floats
+      ?? [Float(0)]
+    guard objectMorphCounts.count == count,
+          objectMorphCounts.allSatisfy({ $0 >= 0 }),
+          objectMorphCounts.reduce(0, { $0 + Int($1) }) <= objectMorphWeights.count
+    else {
+      return nil
+    }
+
     let objectMaterials =
       (arguments["objectMaterials"] as? FlutterStandardTypedData)?.int32s
         ?? [Int32](repeating: -1, count: count)
@@ -729,6 +756,8 @@ private struct Scene {
     self.videoPaths = videoPaths
 
     self.objectMaterials = objectMaterials
+    self.objectMorphCounts = objectMorphCounts
+    self.objectMorphWeights = objectMorphWeights
     self.materialKeys = materialKeys
     self.materialFlags = materialFlags
     self.materialParams = materialParams
