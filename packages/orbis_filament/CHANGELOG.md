@@ -45,8 +45,22 @@ surfaces' albedo each lap, and an infinite series of that converges only while
 the product stays below one. Undamped it does not — and it does not fail by
 getting brighter, it fails by **drifting in hue**, because the channel with the
 highest gain wins the race. This room turned green, a colour nowhere in it.
-The injection now damps the sub-unit part of the light to nought point six,
-which leaves headroom for a white wall's albedo.
+The injection damps the sub-unit part of the light to nought point six, and
+the renderer holds the strength below where that stops being enough.
+
+Both numbers are measured rather than picked, over six hundred frames in a
+room with a red wall and a blue one. The light that arrives matches what was
+asked for to within three per cent up to a strength of **four**, is ten per
+cent over at five, and **fifty-seven** per cent over at six — where the room
+had visibly turned. The cap is at three: the last fully linear point with a
+whole step of margin under the knee. Asking for more is **reported** through
+the scene's notes rather than silently substituted, because a host that asks
+for six and quietly gets three has a scene that does not match its reference
+and no way to find out why.
+
+The damping and the cap are one constant divided by another, in one place, so
+that changing the damping moves the cap with it. They are two halves of the
+same statement and drifting apart would put the loop back over one.
 
 The atlas textures are also **cleared when they are built**. A texture Filament
 allocates holds whatever the driver last had there, and surfaces read it before

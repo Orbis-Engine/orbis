@@ -438,6 +438,26 @@ constexpr uint32_t kFieldStride = 14;
 constexpr uint32_t kFieldTile = 8;
 constexpr uint32_t kFieldTilesPerRow = 16;
 
+/// How much of the light going round the feedback loop is passed on.
+///
+/// A field reads the picture the scene drew, and that picture already holds
+/// what the field put into it, so the light goes round: field lights room,
+/// room is photographed, photograph lights field. Each lap multiplies by the
+/// surfaces' albedo and by the strength the host asked for, and an infinite
+/// series of that converges only while the product stays below one.
+constexpr float kFieldDamping = 0.6f;
+
+/// The largest product of damping and strength that stays convergent.
+///
+/// Measured in a room with a red wall and a blue one, over six hundred
+/// frames: the light that arrives matches what was asked for to within three
+/// per cent up to a strength of four, is ten per cent over at five, and
+/// **fifty-seven** per cent over at six — and it does not fail by getting
+/// brighter, it fails by drifting in hue, because the channel with the
+/// highest gain wins the race. One point eight is the last fully linear
+/// point with a whole step of margin under the knee.
+constexpr float kFieldSafeGain = 1.8f;
+
 /// The most probes a field may hold. A thousand is a large room at two-metre
 /// spacing, and the atlas for it is 128 by 512.
 constexpr uint32_t kFieldMaxProbes = 1024;
@@ -2617,6 +2637,27 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   [self bindFieldTo:instance];
 }
 
+/// How much of the field reaches surfaces, held below where it feeds itself.
+///
+/// Reported rather than silently substituted: a host that asks for six and
+/// quietly gets three has a scene that does not match its reference and no
+/// way to find out why.
+- (float)fieldStrength {
+  const float asked = _fieldParams[10];
+  const float most = kFieldSafeGain / kFieldDamping;
+  if (asked <= most) {
+    [_assetNotes removeObjectForKey:@"fieldStrength"];
+    return asked;
+  }
+  _assetNotes[@"fieldStrength"] = [NSString
+      stringWithFormat:@"An irradiance field at a strength of %.1f feeds "
+                       @"itself: it reads the picture it brightened, so the "
+                       @"light goes round and drifts in hue rather than "
+                       @"settling. Held at %.1f.",
+                       asked, most];
+  return most;
+}
+
 /// Points every lit surface at the atlas holding this frame's answer.
 ///
 /// Every frame, and it has to be: the two atlases are written in turn, so
@@ -2659,7 +2700,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
                             on ? 1.0f : 0.0f});
   instance->setParameter("fieldSpacing",
                          float4{_fieldParams[4], _fieldParams[5],
-                                _fieldParams[6], _fieldParams[10]});
+                                _fieldParams[6], [self fieldStrength]});
   instance->setParameter("fieldCounts",
                          float4{_fieldParams[7], _fieldParams[8],
                                 _fieldParams[9], float(kFieldTilesPerRow)});
@@ -4724,6 +4765,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
                                       float(1.0 / projection[1][1])});
   _fieldInstance->setParameter("eye", float3(scene.getPosition()));
   _fieldInstance->setParameter("retention", _fieldParams[11]);
+  _fieldInstance->setParameter("damping", kFieldDamping);
   _fieldInstance->setParameter("hasHistory", _fieldHasHistory ? 1.0f : 0.0f);
 
   _fieldCamera->setExposure(1.0f);

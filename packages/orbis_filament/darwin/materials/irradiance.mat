@@ -58,6 +58,11 @@ material {
 
         // How much of what a probe held survives this frame.
         { type : float,  name : retention },
+        // How much of the light going round the loop is passed on. Set by the
+        // renderer rather than fixed here, so that the strength it is safe to
+        // ask for and the damping that makes it safe are one number in one
+        // place and cannot drift apart.
+        { type : float,  name : damping },
         // Whether there is any history at all yet.
         { type : float,  name : hasHistory }
     ],
@@ -204,9 +209,12 @@ fragment {
         // the highest gain wins the race. This room turned green, a colour
         // nowhere in it, which is what sent me looking.
         //
-        // Nought point six leaves headroom for the albedo of a white wall
-        // and still passes most of the light along.
-        arriving = min(arriving, vec3(1.0)) * 0.6
+        // Measured rather than picked: at nought point six the room stays
+        // linear up to a strength of four — the light that arrives is what
+        // was asked for, to within three per cent — starts running at five,
+        // and is half again too bright at six. The renderer holds the
+        // strength below that, which is the other half of this.
+        arriving = min(arriving, vec3(1.0)) * materialParams.damping
                  + max(arriving - vec3(1.0), vec3(0.0));
 
         // One very bright pixel should not be able to burn a probe, so the

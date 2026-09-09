@@ -33,7 +33,7 @@ class FieldExample extends Example {
       const ViewPoint(yaw: 0, pitch: 0.16, distance: 13, height: -0.6);
 
   bool on = true;
-  double intensity = 1.6;
+  double intensity = 1.0;
   double retention = 0.94;
 
   OrbisObject _slab(int key, Vector3 at, Vector3 size, Color colour) =>
@@ -141,7 +141,10 @@ class FieldExample extends Example {
         label: 'Strength',
         value: intensity,
         min: 0,
-        max: 6,
+        // Three, because past about four a field starts feeding itself: it
+        // reads the picture it brightened. The renderer holds it there and
+        // says so; this stops before it has to.
+        max: 3,
         onChanged: (value) {
           intensity = value;
           changed();
