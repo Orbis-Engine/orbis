@@ -29,7 +29,16 @@ material {
         // is a line anybody can see. Shrinking each one on its own has no line
         // in it at all.
         { type : float, name : range },
-        { type : float, name : fadeFrom }
+        { type : float, name : fadeFrom },
+
+        // How a member goes when it passes the range. Nought holds its bottom
+        // and draws the rest down to it, which puts anything planted into the
+        // ground it stands on. One draws it in towards its own centre, which
+        // is the only right answer for anything stacked: a member's own bottom
+        // is the ground only if that is where it was standing, and sinking a
+        // cube that sits on another cube collapses it into a plate hanging in
+        // mid-air.
+        { type : int, name : shrink }
     ],
     variables : [ tint ],
     culling : back
@@ -80,11 +89,14 @@ vertex {
                                         materialParams.range, away);
         }
 
-        // Sunk rather than shrunk in place: the mesh runs from minus one to
-        // one, so holding its bottom edge and drawing the rest down to it
-        // takes a member into the ground instead of leaving it hovering.
+        // The mesh runs from minus one to one, so holding the bottom edge and
+        // drawing the rest down to it takes a planted member into the ground.
+        // That is only true of a member that was standing on the ground —
+        // stacked members go in towards their own centre instead, or a cube
+        // resting on another cube flattens into a plate and stays in the air.
+        vec3 sunk = vec3(local.x, -1.0 + (local.y + 1.0) * standing, local.z);
         vec3 standingLocal =
-            vec3(local.x, -1.0 + (local.y + 1.0) * standing, local.z);
+            materialParams.shrink != 0 ? local * standing : sunk;
 
         material.worldPosition.xyz = origin + basis * standingLocal + offset;
 

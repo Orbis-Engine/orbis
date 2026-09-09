@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.15.0
+
+- Blocks fades its distance by shrinking rather than sinking, which is what
+  stops the far side of the world turning into coloured plates hanging in the
+  sky. A block sits on other blocks, not on the ground, so sinking one to its
+  own bottom left it exactly where it was.
+
+- The Runner supplies its own camera and cannot be orbited. A runner is
+  followed, not looked at: its world only exists in a wedge in front of the
+  character — the track is laid one way, there is nothing behind it, and the
+  scenery is drawn to a range measured from the camera — so orbiting round to
+  the side, or under the ground plane, showed the empty half, with hazards and
+  coins over a horizon and the road they belong to out of frame. It leans with
+  the runner as it weaves, because a camera welded to the centre line makes
+  that read as the world sliding sideways rather than the character moving.
+
 ## 0.14.0
 
 - An example can say what it needs that the repository does not carry, and
