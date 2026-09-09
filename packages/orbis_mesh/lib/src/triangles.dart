@@ -31,7 +31,20 @@ class Triangles {
   /// Two floats a vertex.
   final Float32List uvs;
 
-  final Uint16List indices;
+  /// Thirty-two bits each, because sixteen is not enough.
+  ///
+  /// Sixteen-bit indices are half the size and every mesh anybody draws by
+  /// hand fits in them — and then somebody generates one. A block world's
+  /// surface is a few hundred thousand vertices, and at sixty-five thousand
+  /// and thirty-six an unsigned short wraps: the file writes, the loader
+  /// reads it without complaint, and the mesh draws nothing, because every
+  /// triangle past that point points at the wrong corners. Two hours of a
+  /// perfectly valid eleven-megabyte file rendering an empty sky.
+  ///
+  /// Always thirty-two, rather than narrowing when a mesh happens to fit.
+  /// Two bytes an index is worth less than a second code path that is only
+  /// exercised by small meshes and therefore only ever right for those.
+  final Uint32List indices;
 
   /// Which stretch of [indices] wears which material.
   ///
@@ -120,7 +133,7 @@ extension MeshTriangles on Mesh {
       positions: Float32List.fromList(positionsOut),
       normals: Float32List.fromList(normalsOut),
       uvs: Float32List.fromList(uvsOut),
-      indices: Uint16List.fromList(indicesOut),
+      indices: Uint32List.fromList(indicesOut),
       groups: groups,
     );
   }
@@ -350,7 +363,10 @@ extension MeshGlb on Mesh {
 
     // glTF wants the buffer's parts aligned to four bytes, and the index
     // buffer's own component size. Laid out indices first so the alignment
-    // works out without padding between the float arrays.
+    // works out without padding between the float arrays — and with
+    // four-byte indices the padding below is always nothing, which is left
+    // in rather than removed because it is the alignment rule that is load
+    // bearing, not the fact that this particular buffer satisfies it.
     final indexBytes = tris.indices.buffer.asUint8List(
       tris.indices.offsetInBytes,
       tris.indices.lengthInBytes,
@@ -427,8 +443,8 @@ extension MeshGlb on Mesh {
         for (final group in used)
           {
             'bufferView': 0,
-            'byteOffset': group.start * 2,
-            'componentType': 5123, // unsigned short
+            'byteOffset': group.start * 4,
+            'componentType': 5125, // unsigned int
             'count': group.count,
             'type': 'SCALAR',
           },
