@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.14.0
+
+- `OrbisPassKind.effect` runs a material over every pixel of what another pass
+  drew, rather than a camera over the world. It reads a target, writes a target
+  or the frame, and draws one oversized triangle covering the lot — a triangle
+  rather than two, because two meeting across the middle make the hardware
+  shade that seam twice.
+
+  This is the rails every screen-space effect runs on. SMAA is three of these
+  passes and two lookup textures; screen-space GI is more of the same. Which
+  effect a pass runs is `OrbisPass.effect`, one of a set the renderer knows,
+  because an effect needs a compiled shader and compiling one at runtime is a
+  much larger door than this.
+
+- `OrbisEffect.sharpen`, the first of them: a contrast-adaptive sharpen that
+  puts back the edge temporal anti-aliasing takes off. Adaptive matters — a
+  plain unsharp mask rings every high-contrast edge, so a bright sky against a
+  dark roof grows a halo. Weighting by how much room a pixel has between its
+  neighbours' darkest and brightest gives flat regions almost nothing.
+
+  **Known limitation:** an effect chain skips tone mapping. The scene pass
+  writes linear light into a texture and the effect writes that to the screen
+  with post-processing off, so a sharpened frame is cooler and darker than a
+  direct one. Opt-in, so nothing regresses — but it wants solving before an
+  effect chain becomes the ordinary path.
+
 ## 0.13.1
 
 - `setup.sh` can build against a Filament we own. `ORBIS_FILAMENT_SRC` points

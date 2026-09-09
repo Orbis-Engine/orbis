@@ -16,6 +16,7 @@
 ///   ORBIS_TREES=0          leave the trees out
 ///   ORBIS_MESH             a path to a .glb or .gltf, shown on its own
 ///   ORBIS_MORPH            comma-separated shape weights for that model
+///   ORBIS_SHARPEN          run the sharpen effect, 0 to 1, over the frame
 library;
 
 import 'dart:io';
@@ -63,37 +64,62 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
   /// Not an example — a way to point the renderer at a file and see what it
   /// makes of it, which is how a question like "does this decode" gets an
   /// answer rather than an opinion.
-  OrbisScene _justTheMesh(String path) => OrbisScene(
-    camera: _look.toRenderCamera(),
-    objects: [
-      OrbisObject(
-        key: 1,
-        mesh: path,
-        transform: Matrix4.identity(),
-        colour: Vector3(1, 1, 1),
-        morphWeights: switch (Platform.environment['ORBIS_MORPH']) {
-          final set? when set.isNotEmpty =>
-            set.split(',').map((one) => double.parse(one.trim())).toList(),
-          _ => null,
-        },
+  OrbisScene _justTheMesh(String path) {
+    // Two passes when a sharpen is asked for, one otherwise. An effect reads
+    // what another pass drew, so the world has to land in a texture before
+    // anything can be done to it.
+    final amount = _number('ORBIS_SHARPEN');
+    final graph = amount == null
+        ? null
+        : OrbisRenderGraph(
+            targets: const [OrbisTarget(name: 'frame')],
+            passes: [
+              const OrbisPass(name: 'world', into: 'frame'),
+              OrbisPass(
+                name: 'sharpen',
+                kind: OrbisPassKind.effect,
+                effect: OrbisEffect.sharpen,
+                reads: const ['frame'],
+                // The amount rides in the plane's first number, which a scene
+                // pass uses for its mirror and an effect has no use for.
+                plane: [amount, 0, 0, 0],
+              ),
+            ],
+          );
+
+    return OrbisScene(
+      graph: graph,
+      camera: _look.toRenderCamera(),
+      objects: [
+        OrbisObject(
+          key: 1,
+          mesh: path,
+          transform: Matrix4.identity(),
+          colour: Vector3(1, 1, 1),
+          morphWeights: switch (Platform.environment['ORBIS_MORPH']) {
+            final set? when set.isNotEmpty =>
+              set.split(',').map((one) => double.parse(one.trim())).toList(),
+            _ => null,
+          },
+        ),
+      ],
+      lights: [
+        OrbisLight(
+          key: 1,
+          kind: OrbisLightKind.directional,
+          direction: Vector3(-0.5, -0.7, -0.4)..normalize(),
+          colour: Vector3(1, 0.97, 0.92),
+          intensity: 90000,
+          castShadows: true,
+        ),
+      ],
+      sky: OrbisSky(
+        zenith: Vector3(0.30, 0.50, 0.78),
+        horizon: Vector3(0.72, 0.84, 0.94),
+        ambient: 24000,
       ),
-    ],
-    lights: [
-      OrbisLight(
-        key: 1,
-        kind: OrbisLightKind.directional,
-        direction: Vector3(-0.5, -0.7, -0.4)..normalize(),
-        colour: Vector3(1, 0.97, 0.92),
-        intensity: 90000,
-        castShadows: true,
-      ),
-    ],
-    sky: OrbisSky(
-      zenith: Vector3(0.30, 0.50, 0.78),
-      horizon: Vector3(0.72, 0.84, 0.94),
-      ambient: 24000,
-    ),
-  );
+    );
+  }
 
   Example _chosen() {
     final wanted = Platform.environment['ORBIS_EXAMPLE'];

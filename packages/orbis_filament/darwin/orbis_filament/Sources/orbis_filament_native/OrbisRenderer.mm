@@ -58,6 +58,7 @@
 #include <exception>
 
 #include "generated/lit_opaque_material.h"
+#include "generated/sharpen_material.h"
 #include "generated/lit_transparent_material.h"
 #include "generated/lit_fade_material.h"
 #include "generated/lit_masked_material.h"
@@ -483,7 +484,7 @@ inline uint8_t layerBitOf(int32_t flags) {
 
 /// How many floats a pass and a target take on the wire. Must match
 /// OrbisRenderGraph on the Dart side.
-constexpr uint32_t kPassStride = 12;
+constexpr uint32_t kPassStride = 13;
 constexpr uint32_t kTargetStride = 6;
 
 /// How many passes a frame may have. Matches OrbisRenderGraph.maxPasses; a
@@ -493,6 +494,13 @@ constexpr uint32_t kMaxPasses = 32;
 /// What a pass is for. Matches OrbisPassKind.
 constexpr int kPassScene = 0;
 constexpr int kPassReflection = 1;
+/// A material run over every pixel of what another pass drew. The rails every
+/// screen-space effect rides on: read a target, write a target, draw one
+/// triangle over the lot.
+constexpr int kPassEffect = 2;
+
+/// Which effect, matching OrbisEffect. Minus one is none.
+constexpr int kEffectSharpen = 0;
 
 /// Where a material's texture says it comes from a pass rather than a file.
 static const char *const kTargetScheme = "orbis:target/";
@@ -636,6 +644,19 @@ struct GraphPass {
   uint8_t layers = kAllLayers;
   bool clears = true;
   float plane[4] = {0.0f, 1.0f, 0.0f, 0.0f};
+
+  /// Which screen-space effect, for an effect pass. -1 for every other kind.
+  int effect = -1;
+
+  /// The targets this pass samples, as indices, or -1. An effect reads the
+  /// first of them that was actually built.
+  int reads[4] = {-1, -1, -1, -1};
+
+  /// The one triangle an effect pass draws, and what it is dressed in. Built
+  /// on first use and kept, because a pass runs every frame.
+  filament::Scene *effectScene = nullptr;
+  utils::Entity effectEntity;
+  filament::MaterialInstance *effectMaterial = nullptr;
 
   /// The view this pass renders through, for a pass that draws into a target.
   /// The frame pass uses the renderer's own view.
@@ -869,6 +890,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// Sixty-four identity transforms, lent to every population draw. Built
   /// once, because every draw wants the same nothing.
   filament::InstanceBuffer *_identityInstances;
+
+  /// The sharpen effect's material, built on first use and shared by every
+  /// pass that runs it.
+  filament::Material *_sharpenMaterial;
 
   /// Assets that could not be loaded. Sticky, because a file is read once and
   /// a failure that reported itself only on the frame of the attempt would
@@ -3160,6 +3185,8 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     pass.layers = static_cast<uint8_t>(static_cast<int>(row[2])) & kAllLayers;
     pass.clears = row[3] != 0.0f;
     for (int p = 0; p < 4; p++) pass.plane[p] = row[8 + p];
+    for (int r = 0; r < 4; r++) pass.reads[r] = static_cast<int>(row[4 + r]);
+    pass.effect = static_cast<int>(row[12]);
   }
 
   // Built here rather than only at the top of the frame, because materials
@@ -3262,6 +3289,116 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 }
 
 /// The view a pass draws through, made on first use and kept.
+/// Builds the one triangle an effect pass draws, and dresses it.
+///
+/// A triangle rather than a quad, and bigger than the screen rather than
+/// exactly it: two triangles meeting across the middle of the frame make the
+/// hardware shade the pixels along that seam twice, and one oversized triangle
+/// covers everything with no seam to pay for.
+///
+/// Positions are already in clip space — the material is `vertexDomain :
+/// device`, so nothing transforms them — and the UVs are what the fragment
+/// reads the source image by.
+- (bool)buildEffect:(GraphPass &)pass {
+  if (pass.effectScene != nullptr) return true;
+  if (pass.effect != kEffectSharpen) return false;
+
+  if (_sharpenMaterial == nullptr) {
+    _sharpenMaterial = Material::Builder()
+                           .package(ksharpenMaterial, ksharpenMaterial_len)
+                           .build(*_engine);
+  }
+
+  static const float kCorners[] = {
+      -1.0f, -1.0f, 0.0f, 0.0f,  //
+       3.0f, -1.0f, 2.0f, 0.0f,  //
+      -1.0f,  3.0f, 0.0f, 2.0f,  //
+  };
+  static const uint16_t kOrder[] = {0, 1, 2};
+
+  auto *vertices = VertexBuffer::Builder()
+                       .vertexCount(3)
+                       .bufferCount(1)
+                       .attribute(VertexAttribute::POSITION, 0,
+                                  VertexBuffer::AttributeType::FLOAT2, 0,
+                                  sizeof(float) * 4)
+                       .attribute(VertexAttribute::UV0, 0,
+                                  VertexBuffer::AttributeType::FLOAT2,
+                                  sizeof(float) * 2, sizeof(float) * 4)
+                       .build(*_engine);
+  // Namespace-scope constants outlive the upload, so no callback is needed —
+  // a stack array here would be freed before the driver read it.
+  vertices->setBufferAt(*_engine, 0,
+                        VertexBuffer::BufferDescriptor(
+                            kCorners, sizeof(kCorners), nullptr));
+
+  auto *indices = IndexBuffer::Builder()
+                      .indexCount(3)
+                      .bufferType(IndexBuffer::IndexType::USHORT)
+                      .build(*_engine);
+  indices->setBuffer(*_engine, IndexBuffer::BufferDescriptor(
+                                   kOrder, sizeof(kOrder), nullptr));
+
+  pass.effectMaterial = _sharpenMaterial->createInstance();
+  pass.effectEntity = utils::EntityManager::get().create();
+  RenderableManager::Builder(1)
+      // Never culled: it is the screen, so a box that decides otherwise is a
+      // box that is wrong.
+      .boundingBox({{-1, -1, -1}, {1, 1, 1}})
+      .culling(false)
+      .material(0, pass.effectMaterial)
+      .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, vertices,
+                indices, 0, 3)
+      .castShadows(false)
+      .receiveShadows(false)
+      .build(*_engine, pass.effectEntity);
+
+  // Its own scene, holding nothing else. The world's scene would put the
+  // whole landscape behind a triangle covering the screen.
+  pass.effectScene = _engine->createScene();
+  pass.effectScene->addEntity(pass.effectEntity);
+  return true;
+}
+
+/// Runs one effect pass: the image it reads, over the target it writes.
+- (void)runEffect:(GraphPass &)pass into:(GraphTarget *)into {
+  if (![self buildEffect:pass]) return;
+
+  // What it sharpens. A pass that names no readable source has nothing to do,
+  // and doing it anyway would sample whatever was in the sampler last.
+  GraphTarget *from = nullptr;
+  for (int r = 0; r < 4; r++) {
+    if (pass.reads[r] < 0) continue;
+    GraphTarget &candidate = _targets[pass.reads[r]];
+    if (candidate.colour != nullptr) {
+      from = &candidate;
+      break;
+    }
+  }
+  if (from == nullptr) return;
+
+  const TextureSampler smooth(TextureSampler::MinFilter::LINEAR,
+                              TextureSampler::MagFilter::LINEAR);
+  pass.effectMaterial->setParameter("source", from->colour, smooth);
+  pass.effectMaterial->setParameter("amount", pass.plane[0] > 0.0f
+                                                  ? pass.plane[0]
+                                                  : 0.6f);
+
+  View *view = [self viewForPass:pass];
+  view->setScene(pass.effectScene);
+  if (into != nullptr) {
+    view->setRenderTarget(into->target);
+    view->setViewport({0, 0, into->builtWidth, into->builtHeight});
+  } else {
+    // The frame. The last effect in a chain is the one somebody sees, so it
+    // writes the screen rather than another texture.
+    view->setRenderTarget(nullptr);
+    view->setViewport({0, 0, _width, _height});
+  }
+  view->setPostProcessingEnabled(false);
+  _renderer->render(view);
+}
+
 - (View *)viewForPass:(GraphPass &)pass {
   if (pass.view != nullptr) return pass.view;
 
@@ -4663,7 +4800,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   for (GraphPass &pass : _passes) {
     const CFAbsoluteTime began = CFAbsoluteTimeGetCurrent();
 
-    if (pass.into < 0) {
+    if (pass.kind == kPassEffect) {
+      [self runEffect:pass
+                 into:pass.into < 0 ? nullptr : &_targets[pass.into]];
+    } else if (pass.into < 0) {
       _view->setVisibleLayers(0xFF, pass.layers);
       _renderer->render(_view);
     } else {
@@ -4673,6 +4813,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       // reflection and a black window.
       if (into.target != nullptr) {
         View *view = [self viewForPass:pass];
+        view->setScene(_scene);
         view->setRenderTarget(into.target);
         view->setViewport({0, 0, into.builtWidth, into.builtHeight});
         view->setVisibleLayers(0xFF, pass.layers);
@@ -4937,6 +5078,11 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   if (_identityInstances != nullptr) {
     _engine->destroy(_identityInstances);
     _identityInstances = nullptr;
+  }
+
+  if (_sharpenMaterial != nullptr) {
+    _engine->destroy(_sharpenMaterial);
+    _sharpenMaterial = nullptr;
   }
 
   delete _resourceLoader;

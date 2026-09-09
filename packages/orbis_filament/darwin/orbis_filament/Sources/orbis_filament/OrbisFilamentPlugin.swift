@@ -575,7 +575,7 @@ private struct Scene {
   /// How many floats a graph pass and a graph target take. Must match
   /// OrbisRenderGraph on the Dart side and the constants in the renderer.
   fileprivate static let environmentStride = 4
-  fileprivate static let passStride = 12
+  fileprivate static let passStride = 13
   fileprivate static let targetStride = 6
   private static let materialStride = 26
   private static let materialMaps = 7
