@@ -2,19 +2,6 @@
 
 ## 0.13.0
 
-- An example can say what it needs and cannot find. `Example.needs` carries a
-  `Downloadable`: what is fetched, how big it is, where it comes from, whose
-  terms it is under, and the command that fetches it.
-
-  Only the declaration lives here. What to do with it is the viewer's call —
-  the editor turns it into a button, with all four of those facts above it,
-  because a download button that says none of them is one nobody should press.
-
-- `Toggle` takes a `note` and an `enabled`, so a control can be shown greyed
-  with the reason beside it rather than silently doing nothing.
-
-## 0.14.0
-
 - An example can say what it needs that the repository does not carry, and
   under what terms. The Bistro scenes are somebody else's art and hundreds of
   megabytes of it, so they are fetched rather than committed — and until they
