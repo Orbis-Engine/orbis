@@ -135,6 +135,22 @@ NS_ASSUME_NONNULL_BEGIN
 /// rebuilds to say nothing happened.
 - (void)setPostProcess:(const float *)params count:(NSUInteger)count;
 
+/// The reflections the scene takes of itself.
+///
+/// `params` is seven floats a probe: where it is captured from, how far its
+/// influence reaches in metres, the size of one face of the cube, a version,
+/// and which layers the capture draws.
+///
+/// A capture is six renders of the whole scene and a filter over the result,
+/// so it happens when a probe is first seen and then only when its version
+/// changes. Nothing else can decide that: the renderer cannot tell that the
+/// thing which moved was the thing that mattered.
+///
+/// Whichever probe contains the camera lights the scene, in place of the
+/// environment. None containing it leaves the environment as it was.
+- (void)applyProbes:(const int64_t *)keys
+             params:(const float *)params
+              count:(uint32_t)count;
 /// The light the scene keeps in the world rather than on the screen.
 ///
 /// `params` is fourteen floats: whether it is on, where the corner probe

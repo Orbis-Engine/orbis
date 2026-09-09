@@ -894,8 +894,10 @@ class OrbisScene {
     OrbisPipeline? pipeline,
     OrbisRenderGraph? graph,
     OrbisEnvironment? environment,
+    List<OrbisProbe>? probes,
     OrbisField? field,
   }) : lights = lights ?? const [],
+       probes = probes ?? const [],
        field = field ?? OrbisField.none,
        environment = environment ?? OrbisEnvironment.none,
        pipeline = pipeline ?? OrbisPipeline(),
@@ -1013,6 +1015,14 @@ class OrbisScene {
   /// and its body go on meaning what they meant.
   final OrbisEnvironment environment;
 
+  /// The reflections captured from points inside the scene.
+  ///
+  /// The camera is inside one of these at a time, and that one lights the
+  /// scene in place of [environment]. A scene with none is lit by its
+  /// environment as before, which is why adding probes to an existing scene
+  /// changes nothing until one of them contains the camera.
+  final List<OrbisProbe> probes;
+
   /// The light kept in the world rather than on the screen.
   ///
   /// Off by default, and free when off: a scene that never mentions one is
@@ -1104,6 +1114,16 @@ class OrbisScene {
     final morphWeights = Float32List.fromList(
       allWeights.isEmpty ? const [0.0] : allWeights,
     );
+
+    // The probes, packed the same way as everything else: keys in one array
+    // and a fixed stride of floats in another, so the renderer walks them
+    // without matching a single string.
+    final probeKeys = Int64List(probes.length);
+    final probeParams = Float32List(probes.length * OrbisProbe.stride);
+    for (var i = 0; i < probes.length; i++) {
+      probeKeys[i] = probes[i].key;
+      probes[i].pack(probeParams, i * OrbisProbe.stride);
+    }
 
     final materialCount = materials.length;
     final materialKeys = Int64List(materialCount);
@@ -1221,6 +1241,8 @@ class OrbisScene {
       'skyEnabled': sky.drawn,
       'postParams': post.packed,
       'pipelineParams': pipeline.packed,
+      'probeKeys': probeKeys,
+      'probeParams': probeParams,
       'fieldParams': field.packed,
       'fieldFrom': field.from,
       'environmentRadiance': environment.radiance ?? '',

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.0
+
+- **A new example, Reflection probes.** A chrome box turned a half-right angle
+  in a room with one red wall and one blue one, so that two of its faces are
+  visible at once with a different wall in each. A box square to the camera
+  shows only the face reflecting what is behind the camera, which is the one
+  face that says nothing about the room it is in.
 ## 0.19.0
 
 - The Lights example has a fourth kind, **Panel**, with its two edges as

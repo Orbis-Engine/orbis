@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.20.0
+
+- **Reflection probes.** `OrbisProbe` is the scene photographing itself from a
+  point inside, and being lit by that instead of by the environment. An
+  environment is a photograph of somewhere else, and indoors that is the wrong
+  photograph: a chrome box in a red and blue room reflected the sky, because
+  the sky was the only environment the scene had.
+
+  Six renders of the scene through a ninety-degree camera into the faces of a
+  cubemap, then Filament's own GPU prefilter to convolve the sharp capture
+  into the blurred chain a rough surface samples. Filament works the diffuse
+  out of the roughest level of that chain, so a captured probe lights matte
+  surfaces too without anybody baking spherical harmonics for it — which is
+  the difference between a probe a scene can take of itself while it runs and
+  one a tool has to prepare beforehand.
+
+  Measured on a chrome box turned a half-right angle between a red wall and a
+  blue one: with a probe its left face is **7.0x as red as it is blue** and its
+  right face **42.6x as blue as it is red**. Without one, both faces are
+  black — a metal has no diffuse, so a metal with no environment reflects
+  nothing at all. The reflected directions were checked against the mirror
+  equation rather than by eye.
+
+- Captured when a probe is first seen and then only when its `version`
+  changes. Six renders of the whole scene is not a per-frame cost, and nothing
+  but the host can know that the room has changed.
+
+- `layers` on a probe, and it is the setting most worth using: a probe
+  captured from inside a mirror photographs the mirror, and the mirror then
+  reflects a smaller copy of itself. Putting the reflective things on their
+  own layer and leaving it out of the capture is the whole of the fix.
+
+- Whichever probe contains the camera lights the scene, nearest middle winning
+  where two overlap, so a doorway joins wherever their centres say. None
+  containing it leaves the environment exactly as it was, which is why adding
+  probes to an existing scene changes nothing until one of them reaches the
+  camera.
+
+- `intensity` on a probe is **one**, not the thirty thousand lux an
+  environment states. The two are not the same kind of number: a baked
+  environment is stored relative to some reference and its intensity turns it
+  into lux, while a probe is the scene's own light rendered with the exposure
+  held at one, so it arrives already in the units the rest of the frame is in.
 ## 0.19.0
 
 - **Rectangular area lights.** `OrbisLightKind.area` is a panel that emits

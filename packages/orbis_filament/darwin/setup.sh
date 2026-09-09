@@ -216,7 +216,31 @@ echo "$MATC_WANT" > "$MATC_STAMP"
 # signing identity, so it is what makes an iOS change checkable at all.
 XCFRAMEWORK="orbis_filament/third_party/Filament.xcframework"
 STAMP="orbis_filament/third_party/.filament-version"
-WANT="$FILAMENT_VERSION macos+ios+simulator"
+
+LIBS=(
+    filament backend filabridge filaflat
+    utils geometry smol-v ibl image abseil zstd
+    # Prefilters a captured cubemap into the mip chain a reflection samples.
+    # On the GPU and in-engine, which is what makes a probe something a scene
+    # can capture while it runs rather than something baked by a tool.
+    filament-iblprefilter
+    gltfio_core uberarchive uberzlib dracodec meshoptimizer ktxreader
+    stb basis_transcoder mikktspace
+)
+
+# Only macOS has these, and only macOS needs them: they are the runtime
+# loaders for OpenGL and Vulkan, and iOS is Metal or nothing.
+DESKTOP_ONLY=(bluegl bluevk)
+
+# What the framework was last packaged from — the version *and the list*.
+#
+# The list is in here for the same reason the material stamp carries its
+# compiler flags: a framework is otherwise considered current because it
+# exists, which holds right up until the thing that changed was which
+# libraries went into it. Then the package is silently the old one and the
+# failure arrives as a linker error naming a symbol that is present in the
+# SDK and absent from the framework.
+WANT="$FILAMENT_VERSION macos+ios+simulator ${LIBS[*]} ${DESKTOP_ONLY[*]}"
 
 if [ "$(cat "$STAMP" 2>/dev/null || true)" != "$WANT" ]; then
   echo "orbis_filament: packaging Filament as a framework"
@@ -227,15 +251,8 @@ if [ "$(cat "$STAMP" 2>/dev/null || true)" != "$WANT" ]; then
   # until something reads a KTX, and then it is not a compile error but a
   # link error naming a symbol nobody wrote — image::Ktx1Bundle, referenced by
   # ktxreader, which is in the list and useless without it.
-  LIBS=(
-    filament backend filabridge filaflat
-    utils geometry smol-v ibl image abseil zstd
-    gltfio_core uberarchive uberzlib dracodec meshoptimizer ktxreader
-    stb basis_transcoder mikktspace
-  )
   # Only macOS has these, and only macOS needs them: they are the runtime
   # loaders for OpenGL and Vulkan, and iOS is Metal or nothing.
-  DESKTOP_ONLY=(bluegl bluevk)
 
   work="$(mktemp -d)"
 

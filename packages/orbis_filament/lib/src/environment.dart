@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:vector_math/vector_math_64.dart';
+
 /// The light a place brings with it, and the backdrop it is seen against.
 ///
 /// A photograph of somewhere real, turned into light. Everything in the scene
@@ -103,4 +105,93 @@ class OrbisEnvironment {
 
   Float32List get packed =>
       Float32List.fromList([intensity, rotation, showSkybox ? 1 : 0, 0]);
+}
+
+/// A reflection captured from a point in the world.
+///
+/// An environment is a photograph of somewhere else. Indoors that is the wrong
+/// picture: a chrome kettle in a red kitchen reflects the sky, because the sky
+/// is the only environment the scene has. A probe is the scene taking its own
+/// photograph, from a point inside itself, and lighting from that instead.
+///
+/// Captured rather than baked, but not captured often. Six renders of the
+/// whole scene and a filter over the result is not a per-frame cost, so a
+/// probe is taken once and kept until [version] changes. That makes when it
+/// happens the host's decision, which is the only place the decision can
+/// live: nothing else knows whether the room has been repainted.
+/// {@category Lighting and environment}
+class OrbisProbe {
+  const OrbisProbe({
+    required this.key,
+    required this.position,
+    this.radius = 12,
+    this.resolution = 256,
+    this.version = 0,
+    this.layers = 0xFF,
+    this.intensity = 1,
+  });
+
+  /// This probe's identity, stable for as long as it exists. Shares the one
+  /// key space with objects and lights.
+  final int key;
+
+  /// Where the photograph is taken from. The middle of the room, usually, and
+  /// at head height rather than on the floor — a probe on the floor sees a
+  /// great deal of floor.
+  final Vector3 position;
+
+  /// How far its influence reaches, in metres.
+  ///
+  /// The camera is inside exactly one probe at a time, and that is the probe
+  /// the scene is lit by. Where two overlap the nearer middle wins, so a
+  /// doorway is two probes with the join wherever their centres say.
+  final double radius;
+
+  /// The size of one face of the captured cube.
+  ///
+  /// Small is not much of a compromise here: what a reflection samples is the
+  /// blurred mip chain, and only a mirror reads the sharpest level. Two
+  /// hundred and fifty-six is generous for a room.
+  final int resolution;
+
+  /// Bump this to take the photograph again.
+  ///
+  /// A probe is not re-captured because something moved — the renderer has no
+  /// way to know that the thing which moved mattered, and re-capturing every
+  /// frame would cost six frames a frame. Changing this number is how a host
+  /// says the room is different now.
+  final int version;
+
+  /// Which layers the capture draws.
+  ///
+  /// Worth setting, and the reason is not obvious: a probe captured from
+  /// inside a shiny object photographs that object, and the object then
+  /// reflects a picture of itself. Putting the reflective things on their own
+  /// layer and leaving it out here is how a reflection ends up showing the
+  /// room rather than a smaller copy of the thing doing the reflecting.
+  final int layers;
+
+  /// How much of the captured light counts, as a multiplier.
+  ///
+  /// One, and not the thirty thousand lux an environment states, because the
+  /// two are not the same kind of number. A baked environment is stored
+  /// relative to some reference and its intensity is what turns it into lux; a
+  /// probe is the scene's own light, rendered with the exposure held at one,
+  /// so it arrives already in the units the rest of the frame is in.
+  final double intensity;
+
+  /// How many floats one probe occupies.
+  static const int stride = 8;
+
+  /// Writes this probe's floats into the scene's probe block.
+  void pack(Float32List into, int at) {
+    into[at] = position.x;
+    into[at + 1] = position.y;
+    into[at + 2] = position.z;
+    into[at + 3] = radius;
+    into[at + 4] = resolution.toDouble();
+    into[at + 5] = version.toDouble();
+    into[at + 6] = layers.toDouble();
+    into[at + 7] = intensity;
+  }
 }

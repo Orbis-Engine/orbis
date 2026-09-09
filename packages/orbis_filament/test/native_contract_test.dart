@@ -33,6 +33,7 @@ void main() {
     // null where that side has no say in it.
     const contract = <String, (int, String, String?)>{
       'a light': (OrbisLight.stride, 'lightStride', null),
+      'a probe': (OrbisProbe.stride, 'probeStride', null),
       'a field': (OrbisField.stride, 'fieldStride', null),
       'an environment': (OrbisEnvironment.stride, 'environmentStride', null),
       'a graph pass': (OrbisRenderGraph.passStride, 'passStride', null),

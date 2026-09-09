@@ -440,6 +440,17 @@ private final class Viewport {
       }
     }
 
+    let probeCount = scene.probeKeys.count
+    let probeKeys = probeCount == 0 ? [Int64(0)] : scene.probeKeys
+    let probeParams = probeCount == 0 ? [Float(0)] : scene.probeParams
+    probeKeys.withUnsafeBufferPointer { keyPointer in
+      probeParams.withUnsafeBufferPointer { paramPointer in
+        renderer.applyProbes(keyPointer.baseAddress!,
+                             params: paramPointer.baseAddress!,
+                             count: UInt32(probeCount))
+      }
+    }
+
     if !scene.fieldParams.isEmpty {
       renderer.applyField(scene.fieldParams, from: scene.fieldFrom)
     }
@@ -516,6 +527,8 @@ private struct Scene {
   let lightKinds: [Int32]
   let lightFlags: [Int32]
   let lightParams: [Float]
+  let probeKeys: [Int64]
+  let probeParams: [Float]
   let fieldParams: [Float]
   let fieldFrom: String
   let cameraPosition: [Float]
@@ -576,6 +589,7 @@ private struct Scene {
   /// How many floats one light occupies, and how many the fog does. Both
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
+  private static let probeStride = 8
   private static let lightStride = 22
   private static let fieldStride = 14
 
@@ -646,6 +660,20 @@ private struct Scene {
           skyColour.count == 3,
           cameraPosition.count == 3, cameraTarget.count == 3 else { return nil }
 
+    // Probes are optional in the same way the environment is: a scene with
+    // none is a scene lit as it was, not a scene that fails to arrive. The
+    // lengths still have to agree, because both are pointers C++ walks.
+    let probeKeys =
+      (arguments["probeKeys"] as? FlutterStandardTypedData)?.int64s ?? []
+    let probeParams =
+      (arguments["probeParams"] as? FlutterStandardTypedData)?.floats ?? []
+    if probeParams.count == probeKeys.count * Scene.probeStride {
+      self.probeKeys = probeKeys
+      self.probeParams = probeParams
+    } else {
+      self.probeKeys = []
+      self.probeParams = []
+    }
     // A field is optional in the same way the environment is.
     let fieldParams =
       (arguments["fieldParams"] as? FlutterStandardTypedData)?.floats ?? []
