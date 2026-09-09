@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'material.dart';
 import 'environment.dart';
+import 'field.dart';
 import 'graph.dart';
 import 'pipeline.dart';
 import 'video.dart';
@@ -893,7 +894,9 @@ class OrbisScene {
     OrbisPipeline? pipeline,
     OrbisRenderGraph? graph,
     OrbisEnvironment? environment,
+    OrbisField? field,
   }) : lights = lights ?? const [],
+       field = field ?? OrbisField.none,
        environment = environment ?? OrbisEnvironment.none,
        pipeline = pipeline ?? OrbisPipeline(),
        graph = graph ?? OrbisRenderGraph.standard(),
@@ -904,6 +907,44 @@ class OrbisScene {
        sky = sky ?? OrbisSky(),
        fog = fog ?? OrbisFog.none,
        precipitation = precipitation ?? OrbisPrecipitation.none;
+
+  /// The same scene with something changed.
+  ///
+  /// A scene is stated whole every frame, which makes taking one somebody
+  /// else built and altering one thing about it awkward — an editor putting a
+  /// gizmo layer over a game's scene, a tool running somebody's scene through
+  /// an effect to see what it does to it, a test rendering the same scene
+  /// twice with one setting moved. All of those otherwise mean rebuilding a
+  /// dozen fields by hand and quietly dropping the one that was added last.
+  OrbisScene copyWith({
+    List<OrbisObject>? objects,
+    List<OrbisPopulation>? populations,
+    List<OrbisLight>? lights,
+    List<OrbisMaterial>? materials,
+    List<OrbisVideo>? videos,
+    OrbisCamera? camera,
+    OrbisSky? sky,
+    OrbisFog? fog,
+    OrbisPrecipitation? precipitation,
+    OrbisPipeline? pipeline,
+    OrbisPostProcess? post,
+    OrbisRenderGraph? graph,
+    OrbisEnvironment? environment,
+  }) => OrbisScene(
+    objects: objects ?? this.objects,
+    populations: populations ?? this.populations,
+    lights: lights ?? this.lights,
+    materials: materials ?? this.materials,
+    videos: videos ?? this.videos,
+    camera: camera ?? this.camera,
+    sky: sky ?? this.sky,
+    fog: fog ?? this.fog,
+    precipitation: precipitation ?? this.precipitation,
+    pipeline: pipeline ?? this.pipeline,
+    post: post ?? this.post,
+    graph: graph ?? this.graph,
+    environment: environment ?? this.environment,
+  );
 
   final List<OrbisObject> objects;
 
@@ -971,6 +1012,12 @@ class OrbisScene {
   /// twice, and the wash is the half that flattens it. The sky's own colour
   /// and its body go on meaning what they meant.
   final OrbisEnvironment environment;
+
+  /// The light kept in the world rather than on the screen.
+  ///
+  /// Off by default, and free when off: a scene that never mentions one is
+  /// lit exactly as it was.
+  final OrbisField field;
 
   /// The highest layer an object may be on.
   ///
@@ -1174,6 +1221,8 @@ class OrbisScene {
       'skyEnabled': sky.drawn,
       'postParams': post.packed,
       'pipelineParams': pipeline.packed,
+      'fieldParams': field.packed,
+      'fieldFrom': field.from,
       'environmentRadiance': environment.radiance ?? '',
       'environmentSkybox': environment.skybox ?? '',
       'environmentParams': environment.packed,

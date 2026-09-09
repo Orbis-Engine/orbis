@@ -23,6 +23,11 @@
 ///   ORBIS_LUMENS           how bright it is
 ///   ORBIS_PANEL_W / _H     the panel's size in metres
 ///   ORBIS_CIRCLING=0       stop it going round, so two renders compare
+///   ORBIS_BOUNCE_OFF=1     turn the Bounced light example's effect off
+///   ORBIS_BOUNCE           with ORBIS_EFFECT=bounce, how much light bounces
+///   ORBIS_BOUNCE_RADIUS    how far it looks, in metres
+///   ORBIS_BOUNCE_THICKNESS how solid the depth buffer's surfaces are
+///   ORBIS_BOUNCE_SLICES    how many directions each pixel fans along
 library;
 
 import 'dart:io';
@@ -177,6 +182,11 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       );
     }
 
+    return _sceneWith(path, _effectGraph());
+  }
+
+  /// The one-effect graph the environment asks for, or null for none.
+  OrbisRenderGraph? _effectGraph() {
     final named = Platform.environment['ORBIS_EFFECT'];
     final amount = _number('ORBIS_SHARPEN');
     final effect = named == null || named.isEmpty
@@ -184,7 +194,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
         : OrbisEffect.values.firstWhere(
             (one) => one.name.toLowerCase() == named.toLowerCase(),
           );
-    final graph = effect == null
+    return effect == null
         ? null
         : OrbisRenderGraph(
             targets: const [OrbisTarget(name: 'frame')],
@@ -195,14 +205,26 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
                 kind: OrbisPassKind.effect,
                 effect: effect,
                 reads: const ['frame'],
-                // The amount rides in the plane's first number, which a scene
+                // The dials ride in the plane's four numbers, which a scene
                 // pass uses for its mirror and an effect has no use for.
-                plane: [amount ?? 0, 0, 0, 0],
+                // Sharpen reads the first; the bounce reads all four as
+                // radius, strength, thickness and how many directions.
+                plane: [
+                  _number('ORBIS_BOUNCE_RADIUS') ?? amount ?? 0,
+                  _number('ORBIS_BOUNCE') ?? 0,
+                  _number('ORBIS_BOUNCE_THICKNESS') ?? 0,
+                  _number('ORBIS_BOUNCE_SLICES') ?? 0,
+                ],
               ),
             ],
           );
+  }
 
-    return _sceneWith(path, graph);
+  /// The scene as the example built it, put through whatever effect the
+  /// environment asked for.
+  OrbisScene _underEffect(OrbisScene scene) {
+    final graph = _effectGraph();
+    return graph == null ? scene : scene.copyWith(graph: graph);
   }
 
   /// One model, one light, and whatever graph was asked for.
@@ -282,6 +304,16 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
         example.orbiting = false;
       }
     }
+    if (example is FieldExample) {
+      example.intensity = _number('ORBIS_FIELD') ?? example.intensity;
+      example.retention = _number('ORBIS_RETENTION') ?? example.retention;
+      if (Platform.environment['ORBIS_FIELD_OFF'] == '1') example.on = false;
+    }
+    if (example is BounceExample) {
+      example.strength = _number('ORBIS_BOUNCE') ?? example.strength;
+      example.reach = _number('ORBIS_BOUNCE_RADIUS') ?? example.reach;
+      if (Platform.environment['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
+    }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;
     _look.pitch = _number('ORBIS_PITCH') ?? _look.pitch;
@@ -313,7 +345,10 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       child: OrbisView(
         scene: switch (Platform.environment['ORBIS_MESH']) {
           final path? when path.isNotEmpty => _justTheMesh(path),
-          _ => _example.scene(_look.toRenderCamera(), _seconds),
+          // An effect over a real scene rather than only over a lone model.
+          // An effect that has only ever been seen against one mesh on a
+          // plain background is an effect nobody has actually looked at.
+          _ => _underEffect(_example.scene(_look.toRenderCamera(), _seconds)),
         },
       ),
     ),

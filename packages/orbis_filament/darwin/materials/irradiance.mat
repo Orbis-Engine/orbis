@@ -1,0 +1,239 @@
+// Fills one frame's worth of a world-space irradiance field.
+//
+// One fragment per atlas texel. A texel belongs to one probe and one
+// direction, and its job is to answer "how much light arrives at that probe
+// from that direction" — then to fold that answer into what the probe already
+// held, so the field is built up over many frames rather than guessed at in
+// one.
+//
+// Where the answer comes from is the one place this departs from the usual
+// arrangement. The reference implementations scatter: they take the depth
+// prepass, reconstruct each screen texel's world position, and add it to
+// whichever probes enclose it, which needs an instanced draw with one instance
+// per texel and cage corner. This marches instead — it projects the probe onto
+// the screen and walks the depth buffer along the direction it is asking
+// about, which is the same trace the bounce pass already does and needs no
+// geometry at all. Same light, and it rides on rails that exist.
+//
+// The consequence is the same either way and worth stating: the light in a
+// field still had to be on screen at some point. What a field adds over a
+// screen-space bounce is not reach but *memory* — a probe keeps what it
+// learned when the camera looked elsewhere.
+//
+// The atlas layout follows the octahedral tile arrangement common to probe
+// systems: one tile per probe, laid out in rows, each tile a square of
+// directions with a one-texel gutter around it so that a bilinear read across
+// the seam of the octahedron lands on the matching direction rather than on
+// the neighbour's.
+material {
+    name : orbisIrradiance,
+    shadingModel : unlit,
+    vertexDomain : device,
+    depthWrite : false,
+    depthCulling : false,
+    requires : [ uv0 ],
+    parameters : [
+        // The picture the scene has already drawn, and its depth.
+        { type : sampler2d, name : source },
+        { type : sampler2d, name : depth, precision : high },
+        // What the field held before this frame.
+        { type : sampler2d, name : history, precision : high },
+
+        // Where the lattice stands, how far apart it is, and how many.
+        { type : float3, name : origin },
+        { type : float3, name : spacing },
+        { type : float3, name : counts },
+
+        // The atlas: how many tiles fit across it, and one texel of it.
+        { type : float,  name : tilesPerRow },
+        { type : float2, name : atlasSize },
+
+        // The camera the picture was drawn through: world to clip for
+        // projecting a probe onto the screen, and the two numbers that turn a
+        // depth-buffer value back into a distance.
+        { type : mat4,   name : clipFromWorld, precision : high },
+        { type : float,  name : near, precision : high },
+        { type : float2, name : tangents },
+        { type : float3, name : eye },
+
+        // How much of what a probe held survives this frame.
+        { type : float,  name : retention },
+        // How much of the light going round the loop is passed on. Set by the
+        // renderer rather than fixed here, so that the strength it is safe to
+        // ask for and the damping that makes it safe are one number in one
+        // place and cannot drift apart.
+        { type : float,  name : damping },
+        // Whether there is any history at all yet.
+        { type : float,  name : hasHistory }
+    ],
+}
+
+fragment {
+    // The tile is eight texels: six of directions with a gutter each side.
+    // Fixed rather than a parameter, because the receiver's addressing has to
+    // fold to constants and because every probe system that has shipped
+    // settled on about this.
+    #define kTile 8.0
+    #define kInterior 6.0
+
+    #define kSteps 24
+    #define kTiny 1e-6
+
+    vec2 octSign(vec2 v) {
+        return vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+    }
+
+    // A tile's square of texels back to a direction on the sphere. The
+    // octahedron is what lets a whole sphere of directions live in a square
+    // with no pole and no seam worse than an edge.
+    vec3 octDecode(vec2 uv) {
+        vec2 e = uv * 2.0 - 1.0;
+        vec3 n = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+        if (n.z < 0.0) {
+            n.xy = (1.0 - abs(n.yx)) * octSign(n.xy);
+        }
+        return normalize(n);
+    }
+
+    // A gutter texel maps to the interior texel it mirrors, so a read that
+    // strays over the edge finds the direction that is actually next to it on
+    // the sphere. An interior texel maps to itself.
+    vec2 gutterSource(vec2 local) {
+        float last = kInterior + 1.0;
+        bool left = local.x < 0.5;
+        bool right = local.x > last - 0.5;
+        bool top = local.y < 0.5;
+        bool bottom = local.y > last - 0.5;
+        if ((left || right) && (top || bottom)) {
+            // A corner mirrors through the middle of the tile, to the
+            // direction antipodal to it.
+            return vec2(left ? kInterior : 1.0, top ? kInterior : 1.0);
+        }
+        if (top) return vec2(kInterior + 1.0 - local.x, 1.0);
+        if (bottom) return vec2(kInterior + 1.0 - local.x, kInterior);
+        if (left) return vec2(1.0, kInterior + 1.0 - local.y);
+        if (right) return vec2(kInterior, kInterior + 1.0 - local.y);
+        return local;
+    }
+
+    float viewDepthAt(vec2 uv) {
+        float d = textureLod(materialParams_depth, uv, 0.0).r;
+        return d > 0.0 ? materialParams.near / d : 0.0;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 atlas = getUV0() * materialParams.atlasSize;
+        vec2 tileIndex = floor(atlas / kTile);
+        vec2 tileOrigin = tileIndex * kTile;
+        float probeIndex = tileIndex.y * materialParams.tilesPerRow
+                         + tileIndex.x;
+
+        vec3 counts = materialParams.counts;
+        float probes = counts.x * counts.y * counts.z;
+        vec4 stored = textureLod(materialParams_history, getUV0(), 0.0);
+        if (probeIndex >= probes) {
+            // Past the end of the lattice: atlas that belongs to no probe.
+            material.baseColor = vec4(0.0);
+            return;
+        }
+
+        // The gutter carries a copy of the interior texel it mirrors, so the
+        // direction is taken from there rather than from this texel's own
+        // place in the tile.
+        vec2 local = gutterSource(atlas - tileOrigin);
+        vec3 direction = octDecode(clamp((local - 1.0) / kInterior, 0.0, 1.0));
+
+        // Where this probe stands.
+        vec3 slot = vec3(mod(probeIndex, counts.x),
+                         mod(floor(probeIndex / counts.x), counts.y),
+                         floor(probeIndex / (counts.x * counts.y)));
+        vec3 probe = materialParams.origin + slot * materialParams.spacing;
+
+        // March the depth buffer outward from the probe along this direction,
+        // in world space, projecting each step onto the screen. The first
+        // step that lands behind a surface is what the probe can see that way.
+        //
+        // How far to walk: a probe only needs to see as far as the next probe
+        // for the field to be continuous, and beyond a few cells the answer
+        // belongs to a probe over there rather than to this one.
+        float reach = 4.0 * max(materialParams.spacing.x,
+                                max(materialParams.spacing.y,
+                                    materialParams.spacing.z));
+        vec3 found = vec3(0.0);
+        float hitAt = reach;
+        bool hit = false;
+
+        for (int i = 1; i <= kSteps; i++) {
+            float t = reach * float(i) / float(kSteps);
+            vec3 at = probe + direction * t;
+            vec4 clip = materialParams.clipFromWorld * vec4(at, 1.0);
+            if (clip.w <= 0.0) break;
+            vec3 ndc = clip.xyz / clip.w;
+            if (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0) break;
+            vec2 uv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+
+            float surface = viewDepthAt(uv);
+            if (surface <= 0.0) continue;
+            // How far along the view ray this step is, which is what the
+            // depth buffer is measured in.
+            float here = length(at - materialParams.eye);
+            // Behind the surface by more than a step: the march has gone
+            // through something. Thicker than a step and it walks through
+            // thin geometry; thinner and it catches on its own silhouette.
+            float thickness = reach / float(kSteps) * 2.0;
+            if (here > surface + kTiny && here < surface + thickness) {
+                found = textureLod(materialParams_source, uv, 0.0).rgb;
+                hitAt = t;
+                hit = true;
+                break;
+            }
+        }
+
+        // Nothing found is not nothing learned: it means this direction is
+        // open as far as the probe looks, and open directions have to be
+        // recorded as dark or a probe never gets darker once it has been lit.
+        vec3 arriving = hit ? found : vec3(0.0);
+
+        // Damped, and this is the one line that decides whether a field is a
+        // renderer feature or a bug.
+        //
+        // What a probe reads is the picture the scene drew, and that picture
+        // already contains what the field contributed to it. So the light
+        // goes round: field lights room, room is photographed, photograph
+        // lights field. Each lap multiplies by the surfaces' albedo, and an
+        // infinite series of that converges only while the product stays
+        // below one. Undamped it does not, and it does not fail by getting
+        // brighter — it fails by *drifting in hue*, because the channel with
+        // the highest gain wins the race. This room turned green, a colour
+        // nowhere in it, which is what sent me looking.
+        //
+        // Measured rather than picked: at nought point six the room stays
+        // linear up to a strength of four — the light that arrives is what
+        // was asked for, to within three per cent — starts running at five,
+        // and is half again too bright at six. The renderer holds the
+        // strength below that, which is the other half of this.
+        arriving = min(arriving, vec3(1.0)) * materialParams.damping
+                 + max(arriving - vec3(1.0), vec3(0.0));
+
+        // One very bright pixel should not be able to burn a probe, so the
+        // luminance is capped without moving the hue — capping the channels
+        // separately turns a bright warm light grey.
+        float luma = dot(arriving, vec3(0.2126, 0.7152, 0.0722));
+        float limit = 8.0;
+        if (luma > limit) arriving *= limit / max(luma, kTiny);
+
+        float keep = materialParams.hasHistory > 0.5
+            ? clamp(materialParams.retention, 0.0, 0.995)
+            : 0.0;
+        vec3 blended = mix(arriving, stored.rgb, keep);
+        float distance = mix(hitAt, stored.a > 0.0 ? stored.a : hitAt, keep);
+
+        // Distance rides in the free channel. It is what lets the receiver
+        // tell a probe that can see a point from one that is on the far side
+        // of a wall from it, which is the whole difference between a field
+        // that lights a room and one that leaks into it.
+        material.baseColor = vec4(blended, distance);
+    }
+}

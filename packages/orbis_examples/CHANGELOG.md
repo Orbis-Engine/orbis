@@ -1,11 +1,26 @@
 # Changelog
 
-## 0.17.0
+## 0.19.0
 
 - The Lights example has a fourth kind, **Panel**, with its two edges as
   settings — so the thing area lights are for is visible by dragging: the
   same lumens spread wider and softer as the panel grows, rather than getting
   brighter.
+## 0.18.0
+
+- **A new example, Irradiance field.** The same room as the bounced-light one
+  on purpose. What is worth watching is not that the walls tint the boxes —
+  the bounce does that too — but that the tint is right for where a surface
+  *is* rather than for what happens to be in shot.
+
+## 0.17.0
+
+- **A new example, Bounced light.** Two coloured walls facing each other across
+  a pale floor, with white boxes between them — the arrangement every renderer
+  has been photographed in since Cornell in 1984, because it is the one that
+  shows bounced light plainly. The sky's ambient is turned right down on
+  purpose: ambient fills shadows evenly and for free, and a room where it does
+  that is a room where a second bounce has nothing left to add.
 
 ## 0.16.0
 

@@ -19,6 +19,9 @@ material {
     name : orbisLit,
     shadingModel : lit,
     blending : opaque,
+    // Both the area lights and the irradiance field are handed back this
+    // way, and added rather than mixed: what they carry arrives alongside
+    // Filament's own lighting, not instead of it.
     postLightingBlending : add,
     doubleSided : true,
     requires : [ uv0 ],
@@ -90,13 +93,36 @@ material {
         // light is switched on, and a surface that missed the push would be
         // lit by a stale count. This cannot go out of step with the data
         // because it *is* the data.
-        { type : sampler2d, name : areaLights, precision : high },
+        // One texture for both, and not for tidiness: a material at
+        // Filament's first feature level may have nine samplers, and the
+        // area lights, the fitted tables and the irradiance field together
+        // are the tenth. These two share because they can — the tables are
+        // read with filtering and the lights with texelFetch, which ignores
+        // filtering entirely, so one sampler serves both without either
+        // getting the other's.
 
         // The fitted tables. Two 64x64 tiles side by side in one texture:
         // the inverse transform at u in [0, 0.5), the shadowing and Fresnel
         // pair at u in [0.5, 1). One sampler rather than two, because
         // samplers are the scarce thing in a material and tiles are free.
-        { type : sampler2d, name : ltcTables, precision : high }
+        { type : sampler2d, name : lightData, precision : high },
+
+        // The world-space irradiance field, if the scene has one.
+        //
+        // Read here rather than composited over the finished picture, because
+        // indirect light is light: it has to be reflected by this surface's
+        // own colour and roughness like any other, and a pass over the frame
+        // has neither.
+        { type : sampler2d, name : fieldAtlas, precision : high },
+        // xyz the corner probe's position, w whether the field is on.
+        { type : float4,    name : fieldOrigin },
+        // xyz metres between probes, w how much of it reaches surfaces.
+        { type : float4,    name : fieldSpacing },
+        // xyz how many probes, w how many tiles fit across the atlas.
+        { type : float4,    name : fieldCounts },
+        // xy one texel of the atlas, z the normal bias as a fraction of a
+        // cell, w spare.
+        { type : float4,    name : fieldAtlasStep }
     ],
 }
 
@@ -120,10 +146,16 @@ fragment {
     // bilinear footprint at the right-hand edge of the first tile reaches
     // into the second, and a roughness of one would read the Fresnel table
     // as if it were a matrix.
+    // The two fitted tiles occupy the first 64 rows; the rectangles' own
+    // numbers sit in the rows below them.
+    #define kLtcRows 64.0
+    #define kDataRows 80.0
+
     vec4 ltcTable(vec2 uv, float tile) {
         vec2 t = uv * (63.0 / 64.0) + 0.5 / 64.0;
-        return textureLod(materialParams_ltcTables,
-                          vec2((t.x + tile) * 0.5, t.y), 0.0);
+        return textureLod(materialParams_lightData,
+                          vec2((t.x + tile) * 0.5,
+                               t.y * (kLtcRows / kDataRows)), 0.0);
     }
 
     // The integral along one edge of the polygon, as a vector so the four
@@ -183,7 +215,7 @@ fragment {
                       float metallic, float roughness) {
         // One fetch to find out there is nothing to do, which is the usual
         // answer and the one that has to be cheap.
-        int count = int(texelFetch(materialParams_areaLights, ivec2(0, 0), 0).w);
+        int count = int(texelFetch(materialParams_lightData, ivec2(0, int(kLtcRows)), 0).w);
         if (count <= 0) return vec3(0.0);
 
         // Filament shifts the world origin to the camera for precision, so a
@@ -216,10 +248,10 @@ fragment {
 
         vec3 total = vec3(0.0);
         for (int i = 0; i < count; i++) {
-            vec4 a0 = texelFetch(materialParams_areaLights, ivec2(0, i), 0);
-            vec4 a1 = texelFetch(materialParams_areaLights, ivec2(1, i), 0);
-            vec4 a2 = texelFetch(materialParams_areaLights, ivec2(2, i), 0);
-            vec4 a3 = texelFetch(materialParams_areaLights, ivec2(3, i), 0);
+            vec4 a0 = texelFetch(materialParams_lightData, ivec2(0, int(kLtcRows) + i), 0);
+            vec4 a1 = texelFetch(materialParams_lightData, ivec2(1, int(kLtcRows) + i), 0);
+            vec4 a2 = texelFetch(materialParams_lightData, ivec2(2, int(kLtcRows) + i), 0);
+            vec4 a3 = texelFetch(materialParams_lightData, ivec2(3, int(kLtcRows) + i), 0);
 
             vec3 centre = a0.xyz;
             vec3 radiance = a1.rgb;
@@ -252,6 +284,134 @@ fragment {
         // apply the exposure itself. Without it a panel is correct at EV 0
         // and blows out the moment the camera is stopped down.
         return total * getExposure();
+    }
+
+    // ---- The world-space irradiance field ----
+    //
+    // Eight probes stand at the corners of the cell containing this point.
+    // Each is asked what light it has stored in the direction this surface
+    // faces, and the answers are mixed by how close each probe is, by whether
+    // the surface faces it at all, and by whether it can see this point.
+    //
+    // The taps are written out rather than looped. It costs nothing and it
+    // keeps the shader free of a dynamic loop over texture reads, which is
+    // the shape that translates worst.
+
+    #define kFieldTile 8.0
+    #define kFieldInterior 6.0
+
+    vec2 fieldOctSign(vec2 v) {
+        return vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+    }
+
+    vec2 fieldOctEncode(vec3 dir) {
+        vec3 n = dir / (abs(dir.x) + abs(dir.y) + abs(dir.z));
+        vec2 e = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * fieldOctSign(n.xy);
+        return e * 0.5 + 0.5;
+    }
+
+    // Where in the atlas a probe keeps the light it has from one direction.
+    vec2 fieldAtlasUv(float index, vec3 direction) {
+        float perRow = materialParams.fieldCounts.w;
+        float row = floor(index / perRow);
+        vec2 tileOrigin = vec2((index - row * perRow) * kFieldTile,
+                               row * kFieldTile);
+        vec2 oct = clamp(fieldOctEncode(direction), 0.0, 1.0);
+        vec2 texel = tileOrigin + vec2(1.0) + oct * kFieldInterior;
+        // Half a texel inside the interior, so the bilinear footprint reaches
+        // the gutter — which mirrors this tile — rather than the next probe's
+        // tile, which is a different place in the room.
+        texel = clamp(texel, tileOrigin + vec2(0.5),
+                      tileOrigin + vec2(kFieldInterior + 1.5));
+        return texel * materialParams.fieldAtlasStep.xy;
+    }
+
+    // One corner of the cage, premultiplied by its weight, with the weight in
+    // alpha. A probe outside the lattice falls out as a zero rather than as a
+    // branch.
+    vec4 fieldTap(vec3 corner, vec3 base, vec3 alpha, vec3 at, vec3 normal) {
+        vec3 counts = materialParams.fieldCounts.xyz;
+        vec3 slot = base + corner;
+        float inside = (any(lessThan(slot, vec3(0.0))) ||
+                        any(greaterThan(slot, counts - vec3(1.0))))
+            ? 0.0 : 1.0;
+
+        // How much of this cell this corner owns, floored so that a point
+        // whose whole cage sits to one side still has something to divide by.
+        vec3 trilinear = max(mix(vec3(1.0) - alpha, alpha, corner), vec3(0.001));
+        float weight = trilinear.x * trilinear.y * trilinear.z;
+
+        vec3 probe = materialParams.fieldOrigin.xyz
+                   + slot * materialParams.fieldSpacing.xyz;
+        vec3 toProbe = probe - at;
+        float away = length(toProbe);
+        vec3 towards = away > 1e-5 ? toProbe / away : normal;
+
+        // A probe behind the surface sees a different room, so it fades out
+        // rather than being cut off. The floor is load-bearing: without it a
+        // surface whose whole cage is behind it has nothing left and goes
+        // black.
+        weight *= pow(max(dot(towards, normal), 0.0) * 0.5 + 0.5, 2.0) + 0.2;
+
+        float index = slot.x + counts.x * (slot.y + counts.y * slot.z);
+        vec4 held = textureLod(materialParams_fieldAtlas,
+                               fieldAtlasUv(index, normal), 0.0);
+
+        // What the probe stored as the distance to the nearest thing in this
+        // direction. Further away than that and the probe is on the other
+        // side of something from this point, so what it holds is a different
+        // room's light. This is what stops a field lighting the inside of a
+        // wall with the sunshine outside it.
+        float reach = held.a;
+        if (reach > 0.0 && away > reach + length(materialParams.fieldSpacing.xyz) * 0.5) {
+            weight *= 0.05;
+        }
+
+        weight = max(weight, 1e-6) * inside;
+        return vec4(max(held.rgb, vec3(0.0)) * weight, weight);
+    }
+
+    // The light the field holds where this surface is, facing the way it
+    // faces. Nought when there is no field.
+    vec3 fieldLight(vec3 albedo) {
+        if (materialParams.fieldOrigin.w <= 0.0) return vec3(0.0);
+
+        vec3 normal = getWorldNormalVector();
+        vec3 spacing = materialParams.fieldSpacing.xyz;
+        // Pushed off the surface along its own normal, or a surface finds
+        // itself in the probes around it and lights itself — which reads as a
+        // glow along every wall.
+        vec3 at = getUserWorldPosition()
+                + normal * (materialParams.fieldAtlasStep.z
+                            * min(spacing.x, min(spacing.y, spacing.z)));
+
+        vec3 lattice = (at - materialParams.fieldOrigin.xyz) / spacing;
+        vec3 base = floor(lattice);
+        vec3 alpha = clamp(lattice - base, 0.0, 1.0);
+
+        vec4 total =
+            fieldTap(vec3(0.0, 0.0, 0.0), base, alpha, at, normal) +
+            fieldTap(vec3(1.0, 0.0, 0.0), base, alpha, at, normal) +
+            fieldTap(vec3(0.0, 1.0, 0.0), base, alpha, at, normal) +
+            fieldTap(vec3(1.0, 1.0, 0.0), base, alpha, at, normal) +
+            fieldTap(vec3(0.0, 0.0, 1.0), base, alpha, at, normal) +
+            fieldTap(vec3(1.0, 0.0, 1.0), base, alpha, at, normal) +
+            fieldTap(vec3(0.0, 1.0, 1.0), base, alpha, at, normal) +
+            fieldTap(vec3(1.0, 1.0, 1.0), base, alpha, at, normal);
+        if (total.a <= 1e-6) return vec3(0.0);
+
+        // Reflected by this surface, which is the reason this is worth doing
+        // in the material rather than over the finished picture: indirect
+        // light is light, and a red wall reflects it red.
+        vec3 arriving = total.rgb / total.a * materialParams.fieldSpacing.w;
+        // No exposure here, and that is the opposite of what an analytic
+        // light needs. A light states its brightness in the world's units and
+        // has to be exposed like anything photographed. A probe holds what
+        // was *already photographed* — it was filled from the picture the
+        // scene drew, which Filament had already pre-exposed. Exposing it
+        // again applies the camera twice, which at a daylight exposure is a
+        // factor of about four hundred and reads as the field doing nothing.
+        return arriving * albedo;
     }
 
     void material(inout MaterialInputs material) {
@@ -356,11 +516,17 @@ fragment {
         material.emissive = vec4(emissive, 1.0);
 
         // Last, because it reads the finished surface: the base colour after
-        // both maps and the second layer, and the roughness after its map.
-        // Added rather than mixed — `postLightingBlending : add` — so a
-        // rectangle lights a surface alongside Filament's own lights instead
-        // of replacing what they did.
-        material.postLightingColor =
-            vec4(areaLighting(material, metallic, roughness), 0.0);
+        // both maps and the second layer, the roughness after its map and
+        // the normal after its. Added rather than mixed — see
+        // `postLightingBlending` above — so both light a surface alongside
+        // Filament's own lights instead of replacing what they did.
+        //
+        // Both, summed. Taking one of these is the resolution that would
+        // have compiled, run, drawn a complete frame and quietly lost a
+        // whole feature.
+        material.postLightingColor = vec4(
+            areaLighting(material, metallic, roughness)
+                + fieldLight(base.rgb * (1.0 - metallic)),
+            0.0);
     }
 }
