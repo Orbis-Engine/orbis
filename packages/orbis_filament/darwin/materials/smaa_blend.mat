@@ -34,40 +34,42 @@ fragment {
         vec2 at = getUV0();
         vec2 px = materialParams.step;
 
-        // Four weights: left and top from this pixel, right and bottom read
-        // from the neighbours they belong to.
-        vec4 here = texture(materialParams_weights, at);
-        float right  = texture(materialParams_weights, at + vec2(px.x, 0.0)).a;
-        float bottom = texture(materialParams_weights, at + vec2(0.0, px.y)).g;
-        vec4 a = vec4(here.r, bottom, here.b, right);
+        // Four weights around this pixel, and *which* four is the whole of
+        // it. Two are read from the neighbours they belong to and two from
+        // here; getting the order wrong still touches the right pixels and
+        // still changes them, so it looks like it works and does not.
+        vec4 a;
+        a.x = textureLod(materialParams_weights, at + vec2(px.x, 0.0), 0.0).a;
+        a.y = textureLod(materialParams_weights, at + vec2(0.0, px.y), 0.0).g;
+        vec4 mine = textureLod(materialParams_weights, at, 0.0);
+        a.z = mine.b;
+        a.w = mine.r;
 
         if (dot(a, vec4(1.0)) < 1e-5) {
-            // Nothing to do here, and saying so matters: reading the image
-            // through a filtered fetch would soften a pixel that has no edge
-            // near it at all.
-            material.baseColor = texture(materialParams_source, at);
-            return;
+            // No edge near this pixel. Reading the image through a filtered
+            // fetch anyway would soften it for nothing, and most of a picture
+            // is this case.
+            material.baseColor = textureLod(materialParams_source, at, 0.0);
+        } else {
+            // A pixel can sit on a horizontal and a vertical edge at once —
+            // a corner — and blending both would move it twice. Whichever
+            // carries more weight wins outright.
+            bool sideways = max(a.x, a.z) > max(a.y, a.w);
+
+            vec4 offset = sideways ? vec4(a.x, 0.0, a.z, 0.0)
+                                   : vec4(0.0, a.y, 0.0, a.w);
+            vec2 weight = sideways ? a.xz : a.yw;
+            weight /= dot(weight, vec2(1.0));
+
+            // One step each way, opposite signs, so the two fetches land on
+            // either side. Bilinear filtering does the mixing between the
+            // pixel and its neighbour; the weight only says how far to lean.
+            vec4 metrics = vec4(px.x, px.y, -px.x, -px.y);
+            vec4 coord = offset * metrics + vec4(at, at);
+
+            vec4 colour = weight.x * textureLod(materialParams_source, coord.xy, 0.0);
+            colour += weight.y * textureLod(materialParams_source, coord.zw, 0.0);
+            material.baseColor = colour;
         }
-
-        // Whichever direction carries more weight wins. A pixel can sit on a
-        // horizontal and a vertical edge at once — a corner — and blending
-        // both would move it twice.
-        bool sideways = max(a.r, a.b) > max(a.g, a.a);
-
-        vec4 pick = a;
-        if (sideways) {
-            pick.g = a.r;
-            pick.a = a.b;
-        }
-        vec2 weight = pick.ga;
-        weight /= max(weight.x + weight.y, 1e-5);
-
-        vec2 towards = sideways ? vec2(px.x, 0.0) : vec2(0.0, px.y);
-        vec2 first  = at - towards * weight.x;
-        vec2 second = at + towards * weight.y;
-
-        material.baseColor =
-            weight.x * texture(materialParams_source, first) +
-            weight.y * texture(materialParams_source, second);
     }
 }

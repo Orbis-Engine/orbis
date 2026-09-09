@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.16.0
+
+- **SMAA works.** `OrbisEffect.smaaWeights` and `OrbisEffect.smaaBlend` finish
+  the chain `smaaEdges` began: edges into a target, coverage weights into
+  another, and a blend that reads the picture and the weights and writes the
+  screen.
+
+  Measured like for like — the same chain with anti-aliasing off, against the
+  same chain with SMAA — hard stairsteps fall by **67%** (564 to 186) while
+  only **5.8%** of pixels are touched at all. That is the signature worth
+  checking for: it changes edges and leaves everything else exactly as it was.
+
+  `setup.sh` fetches SMAA's two lookup tables rather than committing a
+  megabyte of hex. MIT, Jorge Jimenez et al.; notice at `LICENSES/SMAA.txt`.
+
 ## 0.15.0
 
 - `OrbisEffect.smaaEdges`, the first of SMAA's three passes: it writes a
