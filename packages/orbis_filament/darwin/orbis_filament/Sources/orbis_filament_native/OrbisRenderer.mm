@@ -66,6 +66,7 @@
 // implementation. MIT, Jorge Jimenez et al. — see LICENSES/SMAA.txt.
 #include "generated/AreaTex.h"
 #include "generated/SearchTex.h"
+#include "generated/LtcTables.h"
 #include "generated/lit_transparent_material.h"
 #include "generated/lit_fade_material.h"
 #include "generated/lit_masked_material.h"
@@ -430,7 +431,19 @@ struct Movie {
 /// once: the halo fields took a light from sixteen floats to eighteen, the
 /// kept copy followed and the offset did not, and every light after the first
 /// read a mixture of the one before it and itself.
-constexpr uint32_t kLightStride = 18;
+constexpr uint32_t kLightStride = 22;
+
+/// How many rectangular area lights one view shades.
+///
+/// They cost differently from Filament's own lights: a rectangle is a polygon
+/// integral inside the surface shader, paid by every lit fragment, and there
+/// is no culling in front of it. Sixteen is a room with a wall of windows,
+/// and the number at which the loop is still cheaper than the alternative.
+constexpr uint32_t kAreaLightBudget = 16;
+
+/// How many texels one rectangle occupies: centre, radiance, and the two
+/// edges with their lengths.
+constexpr uint32_t kAreaLightTexels = 4;
 
 /// How many compiled surfaces there are: three shading models in five blend
 /// modes, and the shadow catcher on the end.
@@ -908,6 +921,21 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// SMAA's two precomputed tables, uploaded once.
   filament::Texture *_smaaArea;
   filament::Texture *_smaaSearch;
+
+  /// The fitted tables every rectangular area light is shaded against, and
+  /// this frame's rectangles. Both are built once and live as long as the
+  /// renderer: the tables never change, and the lights are rewritten in
+  /// place so that a material instance can bind the texture once and not
+  /// care that its contents moved.
+  filament::Texture *_ltcTables;
+  filament::Texture *_areaLights;
+
+  /// The rectangles as the GPU currently holds them, so a frame that changed
+  /// none of them uploads nothing. Almost every scene has no area lights at
+  /// all, and that scene should not pay a texture upload a frame to keep
+  /// saying so.
+  std::vector<float> _areaLightsOnGpu;
+
 
   /// Assets that could not be loaded. Sticky, because a file is read once and
   /// a failure that reported itself only on the frame of the attempt would
@@ -2570,6 +2598,23 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     instance->setParameter(kMapNames[i], blank, sampler);
     instance->setParameter(kMapFlags[i], false);
   }
+
+  // The rectangular area lights, which only the lit surface shades — and this
+  // runs for exactly the lit surfaces, the plain-coloured ones included. Bound
+  // once and never again: both textures outlive every surface that reads them,
+  // because the tables never change and the lights are rewritten in place.
+  [self buildLtcTables];
+  const TextureSampler tables(TextureSampler::MinFilter::LINEAR,
+                              TextureSampler::MagFilter::LINEAR,
+                              TextureSampler::WrapMode::CLAMP_TO_EDGE);
+  // Nearest, and deliberately: a texel is one light's worth of numbers, so
+  // anything that interpolates between two of them invents a light halfway
+  // between two real ones.
+  const TextureSampler exact(TextureSampler::MinFilter::NEAREST,
+                             TextureSampler::MagFilter::NEAREST,
+                             TextureSampler::WrapMode::CLAMP_TO_EDGE);
+  instance->setParameter("ltcTables", _ltcTables, tables);
+  instance->setParameter("areaLights", _areaLights, exact);
 }
 
 /// Loads an image, or hands back the one already loaded for that path.
@@ -3340,6 +3385,172 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
           searchTexBytes, SEARCHTEX_SIZE,
           Texture::PixelBufferDescriptor::PixelDataFormat::R,
           Texture::PixelBufferDescriptor::PixelDataType::UBYTE));
+}
+
+/// One rectangle's four texels, in the coordinates the surface shader reads.
+///
+/// The conversion from what an artist states to what the integral wants
+/// happens here rather than in the shader, because it is the same answer for
+/// every fragment the light touches.
+- (void)packRectangle:(const float *)p into:(float *)out {
+  const float3 colour = {p[0], p[1], p[2]};
+  const float lumens = p[3];
+  const float3 centre = {p[4], p[5], p[6]};
+  float3 normal = {p[7], p[8], p[9]};
+  const float falloff = p[10];
+  const float width = std::max(p[17], 1e-4f);
+  const float height = std::max(p[18], 1e-4f);
+  float3 tangent = {p[19], p[20], p[21]};
+
+  // A direction that is not a direction is the commonest thing to be handed,
+  // and normalising nothing gives NaN, which spreads to every pixel the light
+  // reaches rather than to none of them.
+  if (length(normal) < 1e-6f) normal = {0.0f, -1.0f, 0.0f};
+  normal = normalize(normal);
+
+  // The tangent only has to be roughly right: it is squared up against the
+  // face here. If it was given parallel to the face's normal there is no
+  // rectangle to describe, so any perpendicular will do.
+  tangent = tangent - normal * dot(tangent, normal);
+  if (length(tangent) < 1e-6f) {
+    const float3 other =
+        std::abs(normal.x) < 0.9f ? float3{1, 0, 0} : float3{0, 1, 0};
+    tangent = other - normal * dot(other, normal);
+  }
+  tangent = normalize(tangent);
+
+  // Crossed this way round so that the polygon's own normal — which the
+  // integral takes as cross(right, up) — comes out facing the surfaces the
+  // light travels towards, and the back of the panel stays dark.
+  const float3 up = cross(tangent, normal);
+
+  // Lumens to luminance. A one-sided Lambertian panel of area A emitting a
+  // luminous flux F has a luminance of F / (pi * A), and that is the unit
+  // Filament's own lights arrive in, so a rectangle and a bulb of the same
+  // stated brightness agree. It is also why making a panel larger does not
+  // make a room brighter: the same flux is spread over more surface, which is
+  // what softens the shadow rather than lifting the exposure.
+  const float radiance =
+      lumens / (float(M_PI) * std::max(width * height, 1e-6f));
+
+  out[0] = centre.x;
+  out[1] = centre.y;
+  out[2] = centre.z;
+  out[3] = 0.0f;
+  out[4] = colour.x * radiance;
+  out[5] = colour.y * radiance;
+  out[6] = colour.z * radiance;
+  // The inverse radius, so the shader multiplies rather than divides. Zero
+  // means no window at all, which is a light that reaches as far as it is
+  // bright enough to.
+  out[7] = falloff > 1e-4f ? 1.0f / falloff : 0.0f;
+  out[8] = tangent.x;
+  out[9] = tangent.y;
+  out[10] = tangent.z;
+  out[11] = width;
+  out[12] = up.x;
+  out[13] = up.y;
+  out[14] = up.z;
+  out[15] = height;
+}
+
+/// Puts this frame's rectangles on the GPU, and tells the surfaces if how
+/// many there are has changed.
+- (void)uploadRectangles:(const float *)rectangles count:(uint32_t)count {
+  if (_areaLights == nullptr) return;
+
+  const size_t floats = size_t(kAreaLightTexels) * kAreaLightBudget * 4;
+
+  std::vector<float> wanted(floats, 0.0f);
+  memcpy(wanted.data(), rectangles,
+         size_t(count) * kAreaLightTexels * 4 * sizeof(float));
+  // How many, in the first light's spare channel. With no lights the whole
+  // texture is zeros, which reads as a count of nought without needing a
+  // special case for it.
+  wanted[3] = float(count);
+
+  if (wanted == _areaLightsOnGpu) return;
+  _areaLightsOnGpu = wanted;
+
+  // Its own copy rather than the vector's storage: the descriptor keeps the
+  // pointer until the driver thread performs the upload, and the vector is
+  // free to be reassigned before then.
+  float *copy = static_cast<float *>(malloc(floats * sizeof(float)));
+  memcpy(copy, wanted.data(), floats * sizeof(float));
+  _areaLights->setImage(
+      *_engine, 0,
+      Texture::PixelBufferDescriptor(
+          copy, floats * sizeof(float),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+          Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+          [](void *buffer, size_t, void *) { free(buffer); }));
+}
+
+/// The two fitted tables, side by side in one texture.
+///
+/// One texture rather than two because a material's sampler slots are the
+/// scarce thing and a tile is free. Thirty-two bit float rather than half:
+/// the matrix entries reach into the tens of thousands at the smooth end of
+/// the table, which is past what a half can hold, and a table that silently
+/// saturates gives a mirror-smooth surface no highlight at all.
+- (void)buildLtcTables {
+  if (_ltcTables != nullptr) return;
+
+  constexpr uint32_t kSide = 64;
+  constexpr size_t kTexels = size_t(kSide) * kSide;
+  static_assert(sizeof(kLtcMatrix) / sizeof(float) == kTexels * 4,
+                "the LTC matrix table is not 64x64 RGBA");
+  static_assert(sizeof(kLtcFresnel) / sizeof(float) == kTexels * 4,
+                "the LTC Fresnel table is not 64x64 RGBA");
+
+  // Interleaved row by row, because the two tiles share rows in the texture
+  // and are contiguous only in the source arrays.
+  const size_t floats = kTexels * 4 * 2;
+  float *packed = static_cast<float *>(malloc(floats * sizeof(float)));
+  for (uint32_t y = 0; y < kSide; y++) {
+    const size_t row = size_t(y) * kSide * 4;
+    memcpy(packed + y * kSide * 2 * 4, kLtcMatrix + row, kSide * 4 * sizeof(float));
+    memcpy(packed + y * kSide * 2 * 4 + kSide * 4, kLtcFresnel + row,
+           kSide * 4 * sizeof(float));
+  }
+
+  _ltcTables = Texture::Builder()
+                   .width(kSide * 2)
+                   .height(kSide)
+                   .levels(1)
+                   .format(Texture::InternalFormat::RGBA32F)
+                   .sampler(Texture::Sampler::SAMPLER_2D)
+                   .build(*_engine);
+  // Freed by the callback rather than after this returns: the descriptor
+  // keeps the pointer until the driver thread performs the upload, which is
+  // later than here.
+  _ltcTables->setImage(
+      *_engine, 0,
+      Texture::PixelBufferDescriptor(
+          packed, floats * sizeof(float),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+          Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+          [](void *buffer, size_t, void *) { free(buffer); }));
+
+  // Built empty so that a material instance always has something to bind,
+  // whether or not the scene has any rectangles in it. A sampler left unbound
+  // is not ignored by Filament, it is a failure to draw.
+  _areaLights = Texture::Builder()
+                    .width(kAreaLightTexels)
+                    .height(kAreaLightBudget)
+                    .levels(1)
+                    .format(Texture::InternalFormat::RGBA32F)
+                    .sampler(Texture::Sampler::SAMPLER_2D)
+                    .build(*_engine);
+  const size_t blankFloats = size_t(kAreaLightTexels) * kAreaLightBudget * 4;
+  float *blank = static_cast<float *>(calloc(blankFloats, sizeof(float)));
+  _areaLights->setImage(
+      *_engine, 0,
+      Texture::PixelBufferDescriptor(
+          blank, blankFloats * sizeof(float),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+          Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+          [](void *buffer, size_t, void *) { free(buffer); }));
 }
 
 /// The compiled material one effect runs, built the first time it is asked
@@ -4307,9 +4518,26 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   uint32_t directional = 0;
   uint32_t punctual = 0;
 
+  // This frame's rectangles, gathered as they are met and uploaded once at
+  // the end. They never become Filament lights, so they take no entity, cast
+  // no shadow, and do not count against the punctual budget below.
+  [self buildLtcTables];
+  float rectangles[kAreaLightBudget * kAreaLightTexels * 4] = {};
+  uint32_t rectangleCount = 0;
+  uint32_t rectanglesAsked = 0;
+
   for (uint32_t i = 0; i < count; i++) {
     const int32_t kind = kinds[i];
     const float *p = params + i * kLightStride;
+
+    if (kind == 3) {
+      rectanglesAsked++;
+      if (rectangleCount < kAreaLightBudget) {
+        [self packRectangle:p into:rectangles + rectangleCount * kAreaLightTexels * 4];
+        rectangleCount++;
+      }
+      continue;
+    }
 
     // Filament shades one directional light per view. A second is dropped
     // rather than blended, and being told is the difference between a scene
@@ -4356,6 +4584,14 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       if (instance) lights.setShadowCaster(instance, (flags[i] & 1) != 0);
     }
   }
+
+  if (rectanglesAsked > kAreaLightBudget) {
+    notes[@"area"] = [NSString
+        stringWithFormat:@"%u rectangular lights is past the %u this view "
+                         @"shades. The ones past it light nothing.",
+                         rectanglesAsked, kAreaLightBudget];
+  }
+  [self uploadRectangles:rectangles count:rectangleCount];
 
   if (punctual > kPunctualLightBudget) {
     notes[@"punctual"] = [NSString
@@ -5265,6 +5501,14 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   if (_smaaSearch != nullptr) {
     _engine->destroy(_smaaSearch);
     _smaaSearch = nullptr;
+  }
+  if (_ltcTables != nullptr) {
+    _engine->destroy(_ltcTables);
+    _ltcTables = nullptr;
+  }
+  if (_areaLights != nullptr) {
+    _engine->destroy(_areaLights);
+    _areaLights = nullptr;
   }
 
   delete _resourceLoader;

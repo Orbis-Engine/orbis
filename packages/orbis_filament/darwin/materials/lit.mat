@@ -19,6 +19,7 @@ material {
     name : orbisLit,
     shadingModel : lit,
     blending : opaque,
+    postLightingBlending : add,
     doubleSided : true,
     requires : [ uv0 ],
     parameters : [
@@ -68,11 +69,191 @@ material {
         { type : float,     name : blendSharpness },
         // The second layer tiles on its own: rock at one scale under grass
         // at another is most of what stops tiling from reading as tiling.
-        { type : float4,    name : blendUvTransform }
+        { type : float4,    name : blendUvTransform },
+
+        // Rectangular area lights, which Filament does not have.
+        //
+        // Filament shades points and cones. A rectangle is neither, so it is
+        // shaded here instead and added to what Filament worked out, through
+        // postLightingColor. That is the whole reason this lives in a
+        // material rather than in the engine — and why it needs no fork.
+        //
+        // The lights arrive as a texture rather than as a uniform array
+        // because the count changes per frame and a uniform array does not:
+        // an array sized for the worst case is paid for on every draw that
+        // has no area light at all, and a texture is paid for by the lights
+        // that exist. Four texels each: position and count, colour, the
+        // width edge, the height edge.
+        // How many there are rides in the texture too — the first light's
+        // spare channel — rather than in a uniform beside it. A uniform would
+        // have to be pushed to every surface in the scene on the frame a
+        // light is switched on, and a surface that missed the push would be
+        // lit by a stale count. This cannot go out of step with the data
+        // because it *is* the data.
+        { type : sampler2d, name : areaLights, precision : high },
+
+        // The fitted tables. Two 64x64 tiles side by side in one texture:
+        // the inverse transform at u in [0, 0.5), the shadowing and Fresnel
+        // pair at u in [0.5, 1). One sampler rather than two, because
+        // samplers are the scarce thing in a material and tiles are free.
+        { type : sampler2d, name : ltcTables, precision : high }
     ],
 }
 
 fragment {
+    // ---- Rectangular area lights ----
+    //
+    // Filament shades points and cones, so a rectangle is shaded here and
+    // handed back through postLightingColor. The maths is linearly
+    // transformed cosines: for each roughness and viewing angle a fitted
+    // matrix turns the clamped cosine lobe into the GGX lobe, so integrating
+    // the rectangle against the *cosine* — which has a closed form — answers
+    // for the rectangle against GGX, which does not. One polygon integral
+    // per light, no marching, no sampling.
+    //
+    // Heitz, Dupuy, Hill and Neubelt, "Real-Time Polygonal-Light Shading with
+    // Linearly Transformed Cosines", ACM TOG (Proc. SIGGRAPH 2016) 35(4).
+    // See LICENSES/LTC.txt. Tables fetched by setup.sh.
+
+    // Each fitted table is 64 square, and the two sit side by side in one
+    // texture. The half-texel inset is not decoration: without it the
+    // bilinear footprint at the right-hand edge of the first tile reaches
+    // into the second, and a roughness of one would read the Fresnel table
+    // as if it were a matrix.
+    vec4 ltcTable(vec2 uv, float tile) {
+        vec2 t = uv * (63.0 / 64.0) + 0.5 / 64.0;
+        return textureLod(materialParams_ltcTables,
+                          vec2((t.x + tile) * 0.5, t.y), 0.0);
+    }
+
+    // The integral along one edge of the polygon, as a vector so the four
+    // edges can be summed before the form factor is taken. The rational
+    // fit stands in for acos(x)/sqrt(1-x*x), which is the expensive part.
+    vec3 ltcEdge(vec3 a, vec3 b) {
+        float x = dot(a, b);
+        float y = abs(x);
+        float p = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
+        float q = 3.4175940 + (4.1616724 + y) * y;
+        float v = p / q;
+        float thetaSinTheta = x > 0.0
+            ? v
+            : 0.5 * inversesqrt(max(1.0 - x * x, 1e-7)) - v;
+        return cross(a, b) * thetaSinTheta;
+    }
+
+    // How much of the cosine lobe the rectangle covers, once `invM` has bent
+    // that lobe into the shape of the surface's own.
+    //
+    // The horizon is dealt with by the table rather than by clipping the
+    // polygon against it. Clipping means a variable-length vertex list and a
+    // branch per edge; the table is one fetch. It is also more faithful than
+    // the closed form that is often used in its place — measured against
+    // this same table, that approximation is out by up to 0.18 absolute
+    // around the horizon, which is a visible over-brightening exactly where
+    // a panel grazes a surface.
+    float ltcIntegrate(vec3 n, vec3 v, vec3 p, mat3 invM,
+                       vec3 c0, vec3 c1, vec3 c2, vec3 c3) {
+        vec3 t1 = normalize(v - n * dot(v, n));
+        vec3 t2 = cross(n, t1);
+        mat3 toCosine = invM * transpose(mat3(t1, t2, n));
+
+        vec3 l0 = normalize(toCosine * (c0 - p));
+        vec3 l1 = normalize(toCosine * (c1 - p));
+        vec3 l2 = normalize(toCosine * (c2 - p));
+        vec3 l3 = normalize(toCosine * (c3 - p));
+
+        vec3 sum = ltcEdge(l0, l1) + ltcEdge(l1, l2)
+                 + ltcEdge(l2, l3) + ltcEdge(l3, l0);
+
+        float len = length(sum);
+        if (len < 1e-6) return 0.0;
+
+        // Which side of the panel the surface is on decides the sign of the
+        // form factor, and a one-sided panel throws the far side away.
+        vec3 lightNormal = cross(c1 - c0, c3 - c0);
+        float z = sum.z / len;
+        if (dot(c0 - p, lightNormal) < 0.0) return 0.0;
+
+        return len * ltcTable(vec2(z * 0.5 + 0.5, len), 1.0).w;
+    }
+
+    // Everything the rectangles add at this fragment, in the same photometric
+    // units Filament's own lights work in.
+    vec3 areaLighting(const MaterialInputs material,
+                      float metallic, float roughness) {
+        // One fetch to find out there is nothing to do, which is the usual
+        // answer and the one that has to be cheap.
+        int count = int(texelFetch(materialParams_areaLights, ivec2(0, 0), 0).w);
+        if (count <= 0) return vec3(0.0);
+
+        // Filament shifts the world origin to the camera for precision, so a
+        // shading position is camera-relative while a light arrives in the
+        // coordinates the scene was authored in. `getUserWorldPosition` undoes
+        // the shift. Directions are left alone: the shift is a translation —
+        // Filament's own `getWorldOffset` is just this matrix's last column —
+        // and a translation does not turn a vector.
+        vec3 p = getUserWorldPosition();
+        vec3 n = getWorldNormalVector();
+        vec3 v = getWorldViewVector();
+
+        float nDotV = clamp(dot(n, v), 0.0, 1.0);
+        vec2 lut = vec2(roughness, sqrt(1.0 - nDotV));
+        vec4 t1 = ltcTable(lut, 0.0);
+        vec4 t2 = ltcTable(lut, 1.0);
+
+        // The fitted inverse is sparse; these four are the only entries that
+        // are neither zero nor one, and the table stores it normalised so the
+        // middle is one.
+        mat3 invM = mat3(vec3(t1.x, 0.0, t1.y),
+                         vec3(0.0, 1.0, 0.0),
+                         vec3(t1.z, 0.0, t1.w));
+
+        vec3 diffuseColour = material.baseColor.rgb * (1.0 - metallic);
+        // The dielectric floor is Filament's own: 4% of the light reflects off
+        // any smooth surface, and a metal reflects its own colour instead.
+        vec3 f0 = mix(vec3(0.04), material.baseColor.rgb, metallic);
+        vec3 fresnel = f0 * t2.x + (1.0 - f0) * t2.y;
+
+        vec3 total = vec3(0.0);
+        for (int i = 0; i < count; i++) {
+            vec4 a0 = texelFetch(materialParams_areaLights, ivec2(0, i), 0);
+            vec4 a1 = texelFetch(materialParams_areaLights, ivec2(1, i), 0);
+            vec4 a2 = texelFetch(materialParams_areaLights, ivec2(2, i), 0);
+            vec4 a3 = texelFetch(materialParams_areaLights, ivec2(3, i), 0);
+
+            vec3 centre = a0.xyz;
+            vec3 radiance = a1.rgb;
+            vec3 right = a2.xyz * (a2.w * 0.5);
+            vec3 up = a3.xyz * (a3.w * 0.5);
+
+            vec3 c0 = centre - right - up;
+            vec3 c1 = centre + right - up;
+            vec3 c2 = centre + right + up;
+            vec3 c3 = centre - right + up;
+
+            // The polygon integral already carries the inverse square, so the
+            // only distance term here is the window that lets a light be
+            // switched off past a radius rather than followed forever.
+            vec3 toCentre = centre - p;
+            float factor = dot(toCentre, toCentre) * a1.w * a1.w;
+            float window = clamp(1.0 - factor * factor, 0.0, 1.0);
+            window *= window;
+            if (window <= 0.0) continue;
+
+            float specular = ltcIntegrate(n, v, p, invM, c0, c1, c2, c3);
+            float diffuse = ltcIntegrate(n, v, p, mat3(1.0), c0, c1, c2, c3);
+
+            total += radiance * window
+                   * (fresnel * specular + diffuseColour * diffuse);
+        }
+
+        // Filament pre-exposes light before it reaches the shader, and
+        // postLightingColor is added after that has happened, so this has to
+        // apply the exposure itself. Without it a panel is correct at EV 0
+        // and blows out the moment the camera is stopped down.
+        return total * getExposure();
+    }
+
     void material(inout MaterialInputs material) {
         vec2 uv = getUV0() * materialParams.uvTransform.xy
                 + materialParams.uvTransform.zw;
@@ -173,5 +354,13 @@ fragment {
         // which is what makes an emissive surface sit in the scene rather
         // than float on top of it.
         material.emissive = vec4(emissive, 1.0);
+
+        // Last, because it reads the finished surface: the base colour after
+        // both maps and the second layer, and the roughness after its map.
+        // Added rather than mixed — `postLightingBlending : add` — so a
+        // rectangle lights a surface alongside Filament's own lights instead
+        // of replacing what they did.
+        material.postLightingColor =
+            vec4(areaLighting(material, metallic, roughness), 0.0);
     }
 }

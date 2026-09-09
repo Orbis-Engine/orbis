@@ -570,7 +570,7 @@ private struct Scene {
   /// How many floats one light occupies, and how many the fog does. Both
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
-  private static let lightStride = 18
+  private static let lightStride = 22
 
   /// How many floats a graph pass and a graph target take. Must match
   /// OrbisRenderGraph on the Dart side and the constants in the renderer.
@@ -629,8 +629,10 @@ private struct Scene {
           lightKinds.count == lightCount, lightFlags.count == lightCount,
           lightParams.count == lightCount * Scene.lightStride,
           // A kind the renderer does not know would select a light type by
-          // falling through, which is a silent wrong answer.
-          lightKinds.allSatisfy({ $0 >= 0 && $0 <= 2 }),
+          // falling through, which is a silent wrong answer. Three is the
+          // rectangle, which is shaded by the surface material rather than by
+          // Filament and so never becomes a light type at all.
+          lightKinds.allSatisfy({ $0 >= 0 && $0 <= 3 }),
           fogParams.count == Scene.fogStride,
           precipitationParams.count == Scene.precipitationStride,
           skyParams.count == Scene.skyStride,

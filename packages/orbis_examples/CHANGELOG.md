@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.0
+
+- The Lights example has a fourth kind, **Panel**, with its two edges as
+  settings — so the thing area lights are for is visible by dragging: the
+  same lumens spread wider and softer as the panel grows, rather than getting
+  brighter.
+
 ## 0.16.0
 
 - Blocks stops taking itself apart at the draw distance. It fades nothing —

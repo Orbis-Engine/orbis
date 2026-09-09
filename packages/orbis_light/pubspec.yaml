@@ -2,7 +2,7 @@ name: orbis_light
 description: >-
   Lights described the way an artist states them — watts, metres and degrees —
   and converted to the photometric units a renderer works in.
-version: 0.1.0
+version: 0.2.0
 publish_to: none
 
 environment:
