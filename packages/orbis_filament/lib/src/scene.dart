@@ -37,7 +37,24 @@ class OrbisObject {
     this.receiveShadows = true,
     this.visible = true,
     this.layer = 0,
+    this.morphWeights,
   });
+
+  /// How far each of the mesh's shapes is dialled in, nought to one.
+  ///
+  /// A morph target is a second set of positions for the same vertices — a
+  /// face with its mouth open, a wing folded — and the weight says how far
+  /// between the two the mesh currently sits. Several add together, which is
+  /// how a face is built from a smile and a blink rather than from every
+  /// combination of the two.
+  ///
+  /// The shapes come out of the glTF; this only says how much of each. Null
+  /// leaves whatever the file set, which for most models is all zeroes.
+  ///
+  /// Not skinning. A skeleton moves a mesh by joints and morphing moves it a
+  /// vertex at a time, and they are for different things: a limb bends, a
+  /// mouth does not.
+  final List<double>? morphWeights;
 
   /// This object's identity, stable for as long as the object exists.
   final int key;
@@ -954,6 +971,12 @@ class OrbisScene {
       materialAt[materials[i].key] = i;
     }
 
+    // Morph weights, packed end to end with a count each rather than a fixed
+    // width per object. A face rig has dozens and a crate has none, and a
+    // width that suits both is a width that is wrong for both.
+    final morphCounts = Int32List(count);
+    final allWeights = <double>[];
+
     // Paths are sent once and referred to by index, because the same mesh is
     // usually on many objects and the message goes over the channel on every
     // frame of a drag.
@@ -979,7 +1002,19 @@ class OrbisScene {
       colours[i * 3] = object.colour.x;
       colours[i * 3 + 1] = object.colour.y;
       colours[i * 3 + 2] = object.colour.z;
+
+      final weights = object.morphWeights;
+      if (weights != null && weights.isNotEmpty) {
+        morphCounts[i] = weights.length;
+        allWeights.addAll(weights);
+      }
     }
+
+    // Never empty, because the far side takes a pointer and an empty typed
+    // list has none to give.
+    final morphWeights = Float32List.fromList(
+      allWeights.isEmpty ? const [0.0] : allWeights,
+    );
 
     final materialCount = materials.length;
     final materialKeys = Int64List(materialCount);
@@ -1059,6 +1094,8 @@ class OrbisScene {
       'colours': colours,
       'meshes': meshes,
       'objectFlags': flags,
+      'objectMorphCounts': morphCounts,
+      'objectMorphWeights': morphWeights,
       'meshPaths': paths,
       'objectMaterials': objectMaterials,
       'materialKeys': materialKeys,

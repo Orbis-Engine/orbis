@@ -42,12 +42,17 @@ NS_ASSUME_NONNULL_BEGIN
 /// them are pooled rather than destroyed: a scene arrives on every drag of a
 /// slider, and re-reading a glTF file at that rate would make an editor
 /// unusable.
+/// `morphCounts` is `count` shape counts, and `morphWeights` holds them all
+/// end to end in the same order — a face rig has dozens of shapes and a crate
+/// has none, so a fixed width per object would be wrong for both.
 - (void)applyObjects:(const int64_t *)keys
           transforms:(const float *)transforms
              colours:(const float *)colours
               meshes:(const int32_t *)meshes
                flags:(const int32_t *)flags
            materials:(const int32_t *)materials
+         morphCounts:(const int32_t *)morphCounts
+        morphWeights:(const float *)morphWeights
                paths:(NSArray<NSString *> *)paths
                count:(uint32_t)count;
 

@@ -1088,12 +1088,16 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   const int32_t noMesh[1] = {-1};
   const int32_t flags[1] = {kCastsShadows | kReceivesShadows | kVisible};
   const int32_t noMaterial[1] = {-1};
+  const int32_t noShapes[1] = {0};
+  const float noWeights[1] = {0};
   [self applyObjects:key
           transforms:identity
              colours:colour
               meshes:noMesh
                flags:flags
            materials:noMaterial
+         morphCounts:noShapes
+        morphWeights:noWeights
                paths:@[]
                count:1];
   _sceneIsOwnedByHost = false;
@@ -1899,6 +1903,34 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   renderables.setReceiveShadows(instance, (flags & kReceivesShadows) != 0);
   renderables.setLayerMask(
       instance, 0xFF, (flags & kVisible) ? layerBitOf(flags) : kHiddenLayer);
+}
+
+/// Dials a mesh's shapes in, on every renderable the model is made of.
+///
+/// A glTF's morph targets belong to its primitives, and one model is usually
+/// several — so the weights go to each of them rather than to the asset. A
+/// renderable that has no shapes is skipped rather than refused: a scene that
+/// sets a weight on the wrong object should do nothing, not stop.
+- (void)morph:(const Drawn &)drawn
+           to:(const float *)weights
+        count:(size_t)count {
+  if (drawn.instance == nullptr || count == 0) return;
+
+  auto &renderables = _engine->getRenderableManager();
+  const utils::Entity *entities = drawn.instance->getEntities();
+  const size_t parts = drawn.instance->getEntityCount();
+
+  for (size_t part = 0; part < parts; part++) {
+    auto instance = renderables.getInstance(entities[part]);
+    if (!instance) continue;
+
+    // Filament refuses more weights than the primitive was built with, and
+    // that is a precondition rather than an error code — it takes the process
+    // with it. A model with four shapes told about six gets four.
+    const size_t room = renderables.getMorphTargetCount(instance);
+    if (room == 0) continue;
+    renderables.setMorphWeights(instance, weights, std::min(count, room), 0);
+  }
 }
 
 /// Applies them to a whole object, which for a mesh is every part of it.
@@ -3731,9 +3763,15 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
               meshes:(const int32_t *)meshes
                flags:(const int32_t *)flags
            materials:(const int32_t *)materials
+         morphCounts:(const int32_t *)morphCounts
+        morphWeights:(const float *)morphWeights
                paths:(NSArray<NSString *> *)paths
                count:(uint32_t)count {
   if (_disposed) return;
+
+  // Where this object's shapes begin in the weights, walked alongside the
+  // objects: the sender packs them end to end in the order it names them.
+  size_t morphAt = 0;
 
   const uint64_t generation = ++_objectGeneration;
   auto &transformManager = _engine->getTransformManager();
@@ -3823,6 +3861,16 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       drawn.surface = wearing;
       [self dress:drawn withMaterial:wearing];
     }
+
+    // How far each of the mesh's shapes is dialled in. Written every publish
+    // rather than compared first: a weight is what animates, so it is the one
+    // number here that is expected to differ on every frame, and a memcmp to
+    // find that out is work with a known answer.
+    const size_t shapes = size_t(std::max(morphCounts[i], 0));
+    if (shapes > 0) {
+      [self morph:drawn to:morphWeights + morphAt count:shapes];
+    }
+    morphAt += shapes;
   }
 
   // Whatever this publish did not mention has left the scene. Sweeping by

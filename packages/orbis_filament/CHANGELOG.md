@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.13.0
+
+- `OrbisObject.morphWeights` dials in a mesh's shapes. A morph target is a
+  second set of positions for the same vertices — a face with its mouth open,
+  a wing folded — and the weight says how far between the two the mesh sits.
+  The shapes come out of the glTF; this says how much of each.
+
+  Packed end to end with a count per object rather than a fixed width, because
+  a face rig has dozens of shapes and a crate has none. Written on every
+  publish without comparing first: a weight is the one number here that is
+  *expected* to differ every frame, so a memcmp to find that out is work with a
+  known answer. More weights than a primitive was built with are trimmed rather
+  than passed on — Filament treats that as a precondition, which takes the
+  process with it rather than returning an error.
+
+- **Draco and meshopt glTF import already worked**, and now there is a
+  reference saying so. Both decoders are linked into the archive Orbis ships
+  (`filament::gltfio::DracoMesh`, `meshopt_decodeVertexBuffer`) and reach the
+  loader through `gltfio`'s own `ResourceLoader`. Confirmed by rendering the
+  same mesh three ways — plain, `gltfpack -cc`, and Draco — with no load error
+  and the geometry intact from a file a fortieth the size. No change was
+  needed; it was listed as unknown, and unknown is not the same as missing.
+
 ## 0.12.0
 
 - A population's distance is measured **flat, and from the cell a member

@@ -14,6 +14,8 @@
 ///   ORBIS_WALK=0           give the camera back, for an example that drives it
 ///   ORBIS_RANGE            how far a population is drawn from; 0 draws it all
 ///   ORBIS_TREES=0          leave the trees out
+///   ORBIS_MESH             a path to a .glb or .gltf, shown on its own
+///   ORBIS_MORPH            comma-separated shape weights for that model
 library;
 
 import 'dart:io';
@@ -22,6 +24,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:orbis_examples/orbis_examples.dart';
 import 'package:orbis_filament/orbis_filament.dart';
+import 'package:vector_math/vector_math_64.dart' hide Colors;
 
 void main() => runApp(const Gallery());
 
@@ -54,6 +57,43 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
   late final Ticker _clock;
 
   double _seconds = 0;
+
+  /// A scene that is one model and nothing else.
+  ///
+  /// Not an example — a way to point the renderer at a file and see what it
+  /// makes of it, which is how a question like "does this decode" gets an
+  /// answer rather than an opinion.
+  OrbisScene _justTheMesh(String path) => OrbisScene(
+    camera: _look.toRenderCamera(),
+    objects: [
+      OrbisObject(
+        key: 1,
+        mesh: path,
+        transform: Matrix4.identity(),
+        colour: Vector3(1, 1, 1),
+        morphWeights: switch (Platform.environment['ORBIS_MORPH']) {
+          final set? when set.isNotEmpty =>
+            set.split(',').map((one) => double.parse(one.trim())).toList(),
+          _ => null,
+        },
+      ),
+    ],
+    lights: [
+      OrbisLight(
+        key: 1,
+        kind: OrbisLightKind.directional,
+        direction: Vector3(-0.5, -0.7, -0.4)..normalize(),
+        colour: Vector3(1, 0.97, 0.92),
+        intensity: 90000,
+        castShadows: true,
+      ),
+    ],
+    sky: OrbisSky(
+      zenith: Vector3(0.30, 0.50, 0.78),
+      horizon: Vector3(0.72, 0.84, 0.94),
+      ambient: 24000,
+    ),
+  );
 
   Example _chosen() {
     final wanted = Platform.environment['ORBIS_EXAMPLE'];
@@ -112,7 +152,12 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) => Scaffold(
     body: GestureDetector(
       onPanUpdate: (details) => setState(() => _look.orbit(details.delta)),
-      child: OrbisView(scene: _example.scene(_look.toRenderCamera(), _seconds)),
+      child: OrbisView(
+        scene: switch (Platform.environment['ORBIS_MESH']) {
+          final path? when path.isNotEmpty => _justTheMesh(path),
+          _ => _example.scene(_look.toRenderCamera(), _seconds),
+        },
+      ),
     ),
   );
 }
