@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:vector_math/vector_math_64.dart';
@@ -173,6 +174,67 @@ class OrbisTexture {
   int get hashCode => Object.hash(path, srgb);
 }
 
+/// How a surface answers the wind.
+///
+/// Wind is a property of the world, so the obvious home for it is the scene.
+/// It lives here instead, and the reason is that a scene-level wind moves
+/// everything by the same amount — which means the wall sways with the hedge.
+/// A material states its own compliance rather than the world stating one
+/// answer for everything in it: the trunk barely moves, the canopy moves a
+/// lot, the rock does not move at all.
+///
+/// Restating it every frame costs nothing, because the scene is restated
+/// every frame regardless.
+class OrbisWind {
+  const OrbisWind({
+    this.bearing = 0,
+    this.speed = 0,
+    this.strength = 1,
+  });
+
+  /// Still air. The vertex stage returns before doing any work.
+  static const OrbisWind none = OrbisWind();
+
+  /// Degrees clockwise from north — the direction the wind blows *towards*,
+  /// matching `WeatherState.windFrom`.
+  final double bearing;
+
+  /// Metres per second. Nought is still air whatever [strength] says.
+  final double speed;
+
+  /// How much this surface answers, where one is a canopy and nought is
+  /// masonry. Above one is allowed and reads as something very light.
+  final double strength;
+
+  /// Whether this is worth sending. Still air and rigid surfaces take the
+  /// early return in the shader either way, but a material that never moves
+  /// should not claim it might.
+  bool get moves => speed > 0 && strength > 0;
+
+  /// The direction on the ground, as the shader wants it.
+  Vector2 get direction {
+    final radians = bearing * math.pi / 180;
+    return Vector2(math.sin(radians), math.cos(radians));
+  }
+
+  OrbisWind copyWith({double? bearing, double? speed, double? strength}) =>
+      OrbisWind(
+        bearing: bearing ?? this.bearing,
+        speed: speed ?? this.speed,
+        strength: strength ?? this.strength,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is OrbisWind &&
+      other.bearing == bearing &&
+      other.speed == speed &&
+      other.strength == strength;
+
+  @override
+  int get hashCode => Object.hash(bearing, speed, strength);
+}
+
 /// What a surface is made of.
 ///
 /// The numbers are physically based, which means they describe the material
@@ -230,6 +292,12 @@ class OrbisMaterial {
     this.metallic = 0.0,
     this.roughness = 0.5,
     this.reflectance = 0.5,
+    this.clearCoat = 0.0,
+    this.clearCoatRoughness = 0.1,
+    this.anisotropy = 0.0,
+    Vector3? sheenColour,
+    this.sheenRoughness = 0.3,
+    this.wind = OrbisWind.none,
     Vector3? emissive,
     this.emissiveIntensity = 0.0,
     this.ambientOcclusion = 1.0,
@@ -257,6 +325,7 @@ class OrbisMaterial {
     this.emissiveMap,
   }) : _baseColour = baseColour,
        _emissive = emissive,
+       _sheenColour = sheenColour,
        _tiling = tiling,
        _offset = offset,
        _blendTiling = blendTiling,
@@ -306,6 +375,40 @@ class OrbisMaterial {
   /// four percent, which is water, plastic, skin and most other things.
   /// Ignored entirely when [metallic] is one.
   final double reflectance;
+
+  /// A second specular lobe laid over the first, from nought to one.
+  ///
+  /// Varnish, lacquer, car paint, a wet surface — anything with a clear film
+  /// over a coloured body. It is not the same as lowering [roughness], and
+  /// that is the point: the coat carries its own Fresnel and its own
+  /// roughness, so a rough panel keeps its rough diffuse and gains a sharp
+  /// highlight on top. One lobe cannot be both at once.
+  final double clearCoat;
+
+  /// How polished the coat itself is. The body's [roughness] is unaffected.
+  final double clearCoatRoughness;
+
+  /// Stretches the highlight along the surface's tangent, from -1 to 1.
+  ///
+  /// Brushed metal, hair, a vinyl record, the base of a saucepan: surfaces
+  /// whose microscopic grooves run one way, so the reflection smears across
+  /// the grain instead of pooling. The sign is which way.
+  final double anisotropy;
+
+  /// Retroreflection at grazing angles, linear RGB. Nought is off.
+  ///
+  /// What makes cloth read as cloth. Velvet, felt and brushed wool are
+  /// brighter at their silhouette than face-on, which is the opposite of
+  /// what the standard lobe does and unreachable by any amount of roughness.
+  Vector3 get sheenColour => _sheenColour ?? Vector3.zero();
+  final Vector3? _sheenColour;
+
+  /// How tight the sheen is. Low is a narrow rim, high is a broad bloom.
+  final double sheenRoughness;
+
+  /// How this surface answers the wind. [OrbisWind.none] leaves it rigid,
+  /// which is what almost everything is.
+  final OrbisWind wind;
 
   /// Light the surface gives off, linear RGB, multiplied by
   /// [emissiveIntensity]. Kept separate from the colour so a lamp can be
@@ -433,7 +536,13 @@ class OrbisMaterial {
   static const int mapCount = 7;
 
   /// How many floats one material contributes to the message.
-  static const int stride = 26;
+  ///
+  /// Changing this means changing `materialStride` in the plugin and
+  /// `kMaterialParams` in the renderer in the same commit. Nothing crashes
+  /// when they drift — the plugin refuses every scene and the view shows an
+  /// error, which is a whole app rendering nothing. `native_contract_test`
+  /// reads all three and fails here instead.
+  static const int stride = 37;
 
   /// The bits that decide which compiled material an instance comes from and
   /// how the rasteriser is set up. Separate from the floats because a change
@@ -483,6 +592,20 @@ class OrbisMaterial {
     out[at + 23] = blendTiling.y;
     out[at + 24] = blendOffset.x;
     out[at + 25] = blendOffset.y;
+    out[at + 26] = clearCoat;
+    out[at + 27] = clearCoatRoughness;
+    out[at + 28] = anisotropy;
+    out[at + 29] = sheenColour.x;
+    out[at + 30] = sheenColour.y;
+    out[at + 31] = sheenColour.z;
+    out[at + 32] = sheenRoughness;
+    final windDirection = wind.direction;
+    out[at + 33] = windDirection.x;
+    out[at + 34] = windDirection.y;
+    // Speed and compliance are folded to nought together, so the shader's one
+    // early return covers still air and rigid surfaces alike.
+    out[at + 35] = wind.moves ? wind.speed : 0.0;
+    out[at + 36] = wind.moves ? wind.strength : 0.0;
   }
 
   OrbisMaterial copyWith({
@@ -494,6 +617,12 @@ class OrbisMaterial {
     double? metallic,
     double? roughness,
     double? reflectance,
+    double? clearCoat,
+    double? clearCoatRoughness,
+    double? anisotropy,
+    Vector3? sheenColour,
+    double? sheenRoughness,
+    OrbisWind? wind,
     Vector3? emissive,
     double? emissiveIntensity,
     double? ambientOcclusion,
@@ -516,6 +645,12 @@ class OrbisMaterial {
       metallic: metallic ?? this.metallic,
       roughness: roughness ?? this.roughness,
       reflectance: reflectance ?? this.reflectance,
+      clearCoat: clearCoat ?? this.clearCoat,
+      clearCoatRoughness: clearCoatRoughness ?? this.clearCoatRoughness,
+      anisotropy: anisotropy ?? this.anisotropy,
+      sheenColour: sheenColour ?? this.sheenColour,
+      sheenRoughness: sheenRoughness ?? this.sheenRoughness,
+      wind: wind ?? this.wind,
       emissive: emissive ?? this.emissive,
       emissiveIntensity: emissiveIntensity ?? this.emissiveIntensity,
       ambientOcclusion: ambientOcclusion ?? this.ambientOcclusion,

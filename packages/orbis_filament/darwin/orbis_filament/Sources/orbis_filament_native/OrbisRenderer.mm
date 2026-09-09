@@ -311,7 +311,7 @@ struct Drawn {
 /// How many floats one material's numbers occupy, and how many maps it has
 /// room for. Both agree with the Dart side by hand; a mismatch is caught in
 /// the plugin, which checks the array lengths before any of this is reached.
-constexpr size_t kMaterialParams = 26;
+constexpr size_t kMaterialParams = 37;
 constexpr size_t kMaterialMaps = 7;
 
 /// The maps a lit surface has, in the order the Dart side packs them.
@@ -2719,6 +2719,16 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   instance->setParameter("normalScale", 1.0f);
   instance->setParameter("uvTransform", float4{1.0f, 1.0f, 0.0f, 0.0f});
 
+  // No coat, no grain, no sheen — said explicitly, for the same reason as
+  // the blend below: undefined is not nought, and a surface that came up
+  // varnished because nobody said otherwise is a hard fault to place.
+  instance->setParameter("clearCoat", 0.0f);
+  instance->setParameter("clearCoatRoughness", 0.1f);
+  instance->setParameter("anisotropy", 0.0f);
+  instance->setParameter("sheenColor", float3{0.0f, 0.0f, 0.0f});
+  instance->setParameter("sheenRoughness", 0.3f);
+  instance->setParameter("wind", float4{0.0f, 0.0f, 0.0f, 0.0f});
+
   // Not blending, said explicitly. A material declares these whether or not
   // it uses them, and one left unset is undefined rather than nought.
   instance->setParameter("blendMode", int32_t{0});
@@ -2997,6 +3007,25 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     instance->setParameter("reflectance", params[6]);
     instance->setParameter("ambientOcclusion", params[11]);
     instance->setParameter("normalScale", params[12]);
+
+    // The three extra lobes. Every one is nought by default, so a material
+    // that asked for none is shaded as though they did not exist — but they
+    // still have to be pushed, because an instance keeps whatever it was last
+    // given and a surface that stopped being varnished would otherwise stay
+    // varnished for the rest of its life.
+    instance->setParameter("clearCoat", params[26]);
+    instance->setParameter("clearCoatRoughness", params[27]);
+    instance->setParameter("anisotropy", params[28]);
+    instance->setParameter("sheenColor",
+                           float3{params[29], params[30], params[31]});
+    instance->setParameter("sheenRoughness", params[32]);
+
+    // Wind. Direction on the ground, speed, and how much this surface
+    // answers — the last is nought for anything rigid, which is the early
+    // return in the vertex stage and therefore the cost of this feature for
+    // every surface that does not use it.
+    instance->setParameter(
+        "wind", float4{params[33], params[34], params[35], params[36]});
 
     // The second surface. Only the lit material declares these, which is why
     // they are inside this branch rather than beside baseColor — Filament

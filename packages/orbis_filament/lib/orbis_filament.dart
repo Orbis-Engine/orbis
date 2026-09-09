@@ -17,6 +17,7 @@ export 'src/material.dart'
         OrbisMaterial,
         OrbisShading,
         OrbisTexture,
+        OrbisWind,
         OrbisWrap;
 export 'src/environment.dart' show OrbisEnvironment, OrbisProbe;
 export 'src/field.dart' show OrbisField;
