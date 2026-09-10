@@ -50,6 +50,149 @@ void main() {
     expect((opaque.flags >> 9) & 1, 1, reason: 'depth write is on by default');
   });
 
+  group('wind', () {
+    test('a surface says nothing about it and does not move', () {
+      // The vertex stage is compiled into every lit surface, so the thing
+      // that has to be true is that a material which never mentions wind
+      // takes the early return. Both the speed and the compliance are nought,
+      // and either one alone is enough to stop it.
+      const material = OrbisMaterial(key: 1);
+      expect(material.wind, OrbisWind.none);
+      expect(material.wind.moves, isFalse);
+
+      final packed = Float32List(OrbisMaterial.stride);
+      material.pack(packed, 0);
+      expect(packed[35], 0.0, reason: 'speed');
+      expect(packed[36], 0.0, reason: 'compliance');
+    });
+
+    test('still air and a rigid surface both fold to nought', () {
+      // Two different ways of saying "does not move", and the shader has one
+      // early return rather than two, so both have to arrive as zero.
+      final gale = OrbisMaterial(
+        key: 1,
+        wind: const OrbisWind(bearing: 90, speed: 20, strength: 0),
+      );
+      final calm = OrbisMaterial(
+        key: 2,
+        wind: const OrbisWind(bearing: 90, speed: 0, strength: 1),
+      );
+
+      final packed = Float32List(OrbisMaterial.stride);
+      gale.pack(packed, 0);
+      expect(packed[35], 0.0, reason: 'a rigid surface in a gale');
+      calm.pack(packed, 0);
+      expect(packed[36], 0.0, reason: 'a canopy in still air');
+    });
+
+    test('a bearing becomes a direction on the ground', () {
+      // North is negative Z in a right-handed Y-up world, which is the same
+      // convention `WeatherState.windFrom` uses — the two have to agree or a
+      // scene's rain and its trees blow in different directions.
+      const north = OrbisWind(bearing: 0, speed: 1);
+      expect(north.direction.x, closeTo(0, 1e-9));
+      expect(north.direction.y, closeTo(1, 1e-9));
+
+      const east = OrbisWind(bearing: 90, speed: 1);
+      expect(east.direction.x, closeTo(1, 1e-9));
+      expect(east.direction.y, closeTo(0, 1e-9));
+    });
+
+    test('it packs where the renderer reads it', () {
+      final material = OrbisMaterial(
+        key: 1,
+        wind: const OrbisWind(bearing: 90, speed: 6, strength: 0.75),
+      );
+
+      final packed = Float32List(OrbisMaterial.stride);
+      material.pack(packed, 0);
+      expect(packed[33], near(1.0), reason: 'east, x');
+      expect(packed[34], closeTo(0, 1e-6), reason: 'east, z');
+      expect(packed[35], near(6.0));
+      expect(packed[36], near(0.75));
+    });
+
+    test('copyWith carries it', () {
+      const base = OrbisMaterial(key: 1);
+      final swaying = base.copyWith(
+        wind: const OrbisWind(bearing: 180, speed: 3),
+      );
+      expect(swaying.wind.moves, isTrue);
+      expect(swaying.wind.speed, 3);
+      expect(base.wind.moves, isFalse, reason: 'the original is untouched');
+    });
+  });
+
+  group('the three extra lobes', () {
+    test('a surface that asked for none carries none', () {
+      // The whole design rests on this: the coat, the grain and the sheen are
+      // compiled into every lit surface, so if their defaults were anything
+      // but inert, every material in every scene would quietly gain a
+      // varnish. Nought is not a tidy default here, it is the feature being
+      // off.
+      const material = OrbisMaterial(key: 1);
+      expect(material.clearCoat, 0.0);
+      expect(material.anisotropy, 0.0);
+      expect(material.sheenColour, Vector3.zero());
+
+      final packed = Float32List(OrbisMaterial.stride);
+      material.pack(packed, 0);
+      expect(packed[26], 0.0, reason: 'clear coat');
+      expect(packed[28], 0.0, reason: 'anisotropy');
+      expect(packed[29], 0.0, reason: 'sheen red');
+      expect(packed[30], 0.0, reason: 'sheen green');
+      expect(packed[31], 0.0, reason: 'sheen blue');
+    });
+
+    test('each one packs where the renderer reads it', () {
+      final material = OrbisMaterial(
+        key: 1,
+        clearCoat: 0.8,
+        clearCoatRoughness: 0.05,
+        anisotropy: -0.6,
+        sheenColour: Vector3(0.2, 0.3, 0.4),
+        sheenRoughness: 0.55,
+      );
+
+      final packed = Float32List(OrbisMaterial.stride);
+      material.pack(packed, 0);
+      expect(packed[26], near(0.8));
+      expect(packed[27], near(0.05));
+      // Negative is a direction, not a mistake: the grain runs the other way.
+      expect(packed[28], near(-0.6));
+      expect(packed[29], near(0.2));
+      expect(packed[30], near(0.3));
+      expect(packed[31], near(0.4));
+      expect(packed[32], near(0.55));
+    });
+
+    test('a second material starts where the first one ends', () {
+      // The failure this guards is the one the light stride already had once:
+      // the row grew and an offset somewhere did not follow, so everything
+      // after the first row read the row before it. Packing two and checking
+      // the second is the cheapest way to notice.
+      final packed = Float32List(OrbisMaterial.stride * 2);
+      const OrbisMaterial(key: 1, clearCoat: 1.0).pack(packed, 0);
+      const OrbisMaterial(
+        key: 2,
+        clearCoat: 0.25,
+      ).pack(packed, OrbisMaterial.stride);
+
+      expect(packed[26], near(1.0));
+      expect(packed[OrbisMaterial.stride + 26], near(0.25));
+    });
+
+    test('copyWith carries them', () {
+      const base = OrbisMaterial(key: 1);
+      final coated = base.copyWith(clearCoat: 0.5, anisotropy: 0.9);
+      expect(coated.clearCoat, 0.5);
+      expect(coated.anisotropy, 0.9);
+      // And leaves everything it was not asked about alone.
+      expect(coated.roughness, base.roughness);
+      expect(coated.sheenColour, Vector3.zero());
+    });
+  });
+
   test('the numbers pack in the order the renderer reads them', () {
     final material = OrbisMaterial(
       key: 1,

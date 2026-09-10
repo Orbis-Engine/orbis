@@ -311,7 +311,7 @@ struct Drawn {
 /// How many floats one material's numbers occupy, and how many maps it has
 /// room for. Both agree with the Dart side by hand; a mismatch is caught in
 /// the plugin, which checks the array lengths before any of this is reached.
-constexpr size_t kMaterialParams = 26;
+constexpr size_t kMaterialParams = 37;
 constexpr size_t kMaterialMaps = 7;
 
 /// The maps a lit surface has, in the order the Dart side packs them.
@@ -527,9 +527,22 @@ constexpr uint32_t kLightStride = 22;
 /// and the number at which the loop is still cheaper than the alternative.
 constexpr uint32_t kAreaLightBudget = 16;
 
-/// How many texels one rectangle occupies: centre, radiance, and the two
-/// edges with their lengths.
-constexpr uint32_t kAreaLightTexels = 4;
+/// How many texels one rectangle occupies: centre, radiance, the two edges
+/// with their lengths, whether it casts, and the matrix that says what it
+/// could see when it looked.
+///
+/// The last five are only read for a rectangle that casts, which is why they
+/// sit after the four every rectangle needs rather than among them.
+constexpr uint32_t kAreaLightTexels = 9;
+
+/// How wide the one shadow map is, in pixels.
+///
+/// One map, not an atlas, and one casting rectangle rather than sixteen. A
+/// scene has one key light and the rest are fill; giving every rectangle a
+/// map would cost sixteen scene renders a frame to shadow lights whose whole
+/// job is to not be noticed. The second one asked is reported rather than
+/// silently ignored.
+constexpr uint32_t kAreaShadowSide = 1024;
 
 /// How many compiled surfaces there are: three shading models in five blend
 /// modes, and the shadow catcher on the end.
@@ -1065,6 +1078,24 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// The tables occupy the first 64 rows and the rectangles the ones below.
   filament::Texture *_lightData;
 
+  /// The one rectangle's depth map, and everything needed to draw it.
+  ///
+  /// A view and a camera of its own rather than the scene's, because what a
+  /// light can see is a different picture from what the camera can: the same
+  /// objects, a different frustum, and no shading worth doing — only how far
+  /// away the nearest thing is in each direction.
+  filament::Texture *_areaShadow;
+  filament::RenderTarget *_areaShadowTarget;
+  filament::View *_areaShadowView;
+  filament::Camera *_areaShadowCamera;
+  utils::Entity _areaShadowCameraEntity;
+
+  /// Where the casting rectangle stood when it last looked, and whether one
+  /// is casting at all. Kept between frames because the surfaces read it out
+  /// of the light data, which is written once per frame rather than per draw.
+  filament::math::mat4f _areaShadowMatrix;
+  bool _areaShadowCasting;
+
   /// The rectangles as the GPU currently holds them, so a frame that changed
   /// none of them uploads nothing. Almost every scene has no area lights at
   /// all, and that scene should not pay a texture upload a frame to keep
@@ -1245,8 +1276,25 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   _aimLock = [[NSLock alloc] init];
   _pacing = getenv("ORBIS_PACE") != nullptr;
 
-  _engine = Engine::create(Engine::Backend::METAL);
+  // Asked for at the highest the device will give, because the standard
+  // surface needs a tenth sampler and Filament rations them by feature level:
+  // a material may have nine below the third, whatever the hardware could
+  // manage. Metal on anything Orbis runs on reports the third — but it is
+  // asked for rather than assumed, because an engine built above what the
+  // device supports fails to build at all rather than falling back.
+  Engine::Builder builder;
+  builder.backend(Engine::Backend::METAL);
+  _engine = builder.build();
   ASSERT_PRECONDITION(_engine != nullptr, "Metal is unavailable.");
+
+  // Raised after the fact rather than in the builder for the same reason:
+  // this one clamps to what is supported instead of refusing, so a device
+  // that cannot manage it keeps the surfaces it can compile rather than
+  // getting a renderer that will not start.
+  const Engine::FeatureLevel supported = _engine->getSupportedFeatureLevel();
+  if (supported > Engine::FeatureLevel::FEATURE_LEVEL_1) {
+    _engine->setActiveFeatureLevel(supported);
+  }
 
   _renderer = _engine->createRenderer();
   _scene = _engine->createScene();
@@ -2719,6 +2767,16 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   instance->setParameter("normalScale", 1.0f);
   instance->setParameter("uvTransform", float4{1.0f, 1.0f, 0.0f, 0.0f});
 
+  // No coat, no grain, no sheen — said explicitly, for the same reason as
+  // the blend below: undefined is not nought, and a surface that came up
+  // varnished because nobody said otherwise is a hard fault to place.
+  instance->setParameter("clearCoat", 0.0f);
+  instance->setParameter("clearCoatRoughness", 0.1f);
+  instance->setParameter("anisotropy", 0.0f);
+  instance->setParameter("sheenColor", float3{0.0f, 0.0f, 0.0f});
+  instance->setParameter("sheenRoughness", 0.3f);
+  instance->setParameter("wind", float4{0.0f, 0.0f, 0.0f, 0.0f});
+
   // Not blending, said explicitly. A material declares these whether or not
   // it uses them, and one left unset is undefined rather than nought.
   instance->setParameter("blendMode", int32_t{0});
@@ -2746,6 +2804,18 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // are read with texelFetch, which ignores the sampler entirely, so they are
   // not interpolated into each other by sharing this one.
   instance->setParameter("lightData", _lightData, tables);
+
+  // The rectangle's depth map. Built here if it does not exist yet rather
+  // than left unbound: Filament reports a declared sampler nobody bound on
+  // every draw, and it is right to — what it would read is undefined. A
+  // scene with no casting rectangle still binds it and never looks at it,
+  // because the flag in the light data is nought.
+  [self buildAreaShadow];
+  const TextureSampler shadowSampler(TextureSampler::MinFilter::LINEAR,
+                                     TextureSampler::MagFilter::LINEAR,
+                                     TextureSampler::WrapMode::CLAMP_TO_EDGE);
+  instance->setParameter("areaShadow", _areaShadow, shadowSampler);
+
   [self bindFieldTo:instance];
 }
 
@@ -2997,6 +3067,25 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     instance->setParameter("reflectance", params[6]);
     instance->setParameter("ambientOcclusion", params[11]);
     instance->setParameter("normalScale", params[12]);
+
+    // The three extra lobes. Every one is nought by default, so a material
+    // that asked for none is shaded as though they did not exist — but they
+    // still have to be pushed, because an instance keeps whatever it was last
+    // given and a surface that stopped being varnished would otherwise stay
+    // varnished for the rest of its life.
+    instance->setParameter("clearCoat", params[26]);
+    instance->setParameter("clearCoatRoughness", params[27]);
+    instance->setParameter("anisotropy", params[28]);
+    instance->setParameter("sheenColor",
+                           float3{params[29], params[30], params[31]});
+    instance->setParameter("sheenRoughness", params[32]);
+
+    // Wind. Direction on the ground, speed, and how much this surface
+    // answers — the last is nought for anything rigid, which is the early
+    // return in the vertex stage and therefore the cost of this feature for
+    // every surface that does not use it.
+    instance->setParameter(
+        "wind", float4{params[33], params[34], params[35], params[36]});
 
     // The second surface. Only the lit material declares these, which is why
     // they are inside this branch rather than beside baseColor — Filament
@@ -3606,7 +3695,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 /// The conversion from what an artist states to what the integral wants
 /// happens here rather than in the shader, because it is the same answer for
 /// every fragment the light touches.
-- (void)packRectangle:(const float *)p into:(float *)out {
+- (void)packRectangle:(const float *)p into:(float *)out casting:(BOOL)casting {
   const float3 colour = {p[0], p[1], p[2]};
   const float lumens = p[3];
   const float3 centre = {p[4], p[5], p[6]};
@@ -3666,6 +3755,34 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   out[13] = up.y;
   out[14] = up.z;
   out[15] = height;
+
+  // Whether this one casts, and the two dials the lookup needs.
+  //
+  // The bias is in map depth and the spread in map texels, which are the
+  // units the two artefacts they fight actually appear in: acne is a depth
+  // comparison landing on the wrong side of itself, and a hard edge is a
+  // filter narrower than the light that cast it.
+  out[16] = casting ? 1.0f : 0.0f;
+  out[17] = 0.0015f;
+  // Widened by the panel's own size, which is the whole point of a rectangle
+  // being a light rather than a point: a bigger source gives a softer edge,
+  // and here that is literally a wider filter. Divided by the map's side so
+  // the dial stays in texels however large the map is.
+  out[18] = (0.75f + std::min(std::max(width, height), 8.0f) * 0.35f) /
+            float(kAreaShadowSide);
+  out[19] = 0.0f;
+
+  if (casting) {
+    // Column major, as the shader's mat4 constructor reads it: four texels,
+    // each one a column.
+    const filament::math::mat4f &m = _areaShadowMatrix;
+    for (int c = 0; c < 4; c++) {
+      out[20 + c * 4 + 0] = m[c][0];
+      out[20 + c * 4 + 1] = m[c][1];
+      out[20 + c * 4 + 2] = m[c][2];
+      out[20 + c * 4 + 3] = m[c][3];
+    }
+  }
 }
 
 /// Puts this frame's rectangles on the GPU, and tells the surfaces if how
@@ -3699,6 +3816,132 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
           Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
           Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
           [](void *buffer, size_t, void *) { free(buffer); }));
+}
+
+/// Draws what the casting rectangle can see, into its own depth map.
+///
+/// Nothing at all when no rectangle casts, which is the usual answer: the
+/// view is not rendered, so the map keeps whatever it held and the surfaces
+/// never look at it because their flag is nought.
+- (void)renderAreaShadow {
+  if (!_areaShadowCasting || _areaShadowView == nullptr) return;
+  _renderer->render(_areaShadowView);
+}
+
+/// The one rectangle's depth map, and the view that draws it.
+///
+/// Built on first use rather than at startup, because most scenes have no
+/// casting rectangle and a megapixel of depth is not worth reserving against
+/// the chance of one.
+- (void)buildAreaShadow {
+  if (_areaShadow != nullptr) return;
+
+  _areaShadow = Texture::Builder()
+                    .width(kAreaShadowSide)
+                    .height(kAreaShadowSide)
+                    .levels(1)
+                    // Depth rather than colour: the scene is drawn with no
+                    // shading at all, so there is nothing to keep but how far
+                    // away it was. A colour target would mean a material of
+                    // its own on every object to write distance into it.
+                    .format(Texture::InternalFormat::DEPTH32F)
+                    .usage(Texture::Usage::DEPTH_ATTACHMENT |
+                           Texture::Usage::SAMPLEABLE)
+                    .build(*_engine);
+
+  _areaShadowTarget = RenderTarget::Builder()
+                          .texture(RenderTarget::AttachmentPoint::DEPTH,
+                                   _areaShadow)
+                          .build(*_engine);
+
+  _areaShadowCameraEntity = utils::EntityManager::get().create();
+  _areaShadowCamera = _engine->createCamera(_areaShadowCameraEntity);
+
+  _areaShadowView = _engine->createView();
+  _areaShadowView->setScene(_scene);
+  _areaShadowView->setCamera(_areaShadowCamera);
+  _areaShadowView->setRenderTarget(_areaShadowTarget);
+  _areaShadowView->setViewport({0, 0, kAreaShadowSide, kAreaShadowSide});
+  // Nothing here is looked at, so nothing here is worth computing. Filament
+  // still runs the fragment stage for anything that could discard, which is
+  // why a masked leaf still cuts its own shape out of the shadow.
+  _areaShadowView->setShadowingEnabled(false);
+  _areaShadowView->setPostProcessingEnabled(false);
+  _areaShadowView->setFrustumCullingEnabled(true);
+}
+
+/// Where the casting rectangle stands, as a matrix that turns a point in the
+/// world into a place on its depth map.
+///
+/// A perspective frustum rather than an orthographic one, because a panel is
+/// somewhere rather than everywhere: a wall two metres behind a lamp should
+/// not be in its map, and a light that fills the room in front of it is what
+/// the falloff radius already describes.
+- (BOOL)aimAreaShadowAt:(const float *)p {
+  const float3 centre = {p[4], p[5], p[6]};
+  float3 normal = {p[7], p[8], p[9]};
+  if (length(normal) < 1e-6f) return NO;
+  normal = normalize(normal);
+
+  const float falloff = p[10];
+  const float width = std::max(p[17], 1e-4f);
+  const float height = std::max(p[18], 1e-4f);
+
+  // How far it is worth looking. The window the shader applies already stops
+  // the light at the falloff, so anything past it is out of the picture
+  // whatever the map says.
+  const float reach = falloff > 1e-3f ? falloff : 40.0f;
+
+  // Near is set off the panel's own size rather than at some fixed epsilon:
+  // depth precision is spent between near and far, and a near plane a
+  // thousandth of the far one throws most of it away for a light whose
+  // nearest interesting occluder is a pace in front of it.
+  const float near = std::max(0.05f, std::max(width, height) * 0.05f);
+  if (reach <= near) return NO;
+
+  // A hundred and twenty degrees, fixed.
+  //
+  // A panel lights the whole hemisphere in front of it and one perspective
+  // map cannot hold a hemisphere, so this is a choice about where to spend
+  // the pixels rather than a measurement. Wider than this and the map is all
+  // distortion at the edges where nothing needs it; narrower and a surface
+  // off to one side falls outside and is declared unshadowed.
+  //
+  // Deriving it from the panel's own size was the first attempt and was
+  // wrong: a two-metre softbox came out at a hundred and seventy degrees,
+  // which is very nearly a hemisphere squeezed into a square, and the depths
+  // it wrote were too coarse to compare against anything.
+  //
+  // Falling outside is the safe failure — the lookup returns fully lit, so a
+  // surface the map cannot see keeps the light it would have had.
+  constexpr float kAreaShadowFov = 120.0f;
+  _areaShadowCamera->setCustomProjection(
+      filament::math::mat4(filament::math::mat4f::perspective(
+          kAreaShadowFov, 1.0f, near, reach,
+          filament::math::mat4f::Fov::VERTICAL)),
+      near, reach);
+
+  // A panel emits along its normal, so that is where it looks. Any up will do
+  // as long as it is not the direction of travel.
+  const float3 up =
+      std::abs(normal.y) > 0.9f ? float3{1, 0, 0} : float3{0, 1, 0};
+  _areaShadowCamera->lookAt(centre, centre + normal * reach, up);
+
+  // What a surface has to be multiplied by to land on the map. Filament keeps
+  // the world shifted to the camera for precision, and this matrix is applied
+  // to `getUserWorldPosition` — the unshifted one — so it is built from the
+  // camera's own unshifted transform.
+  //
+  // The *rendering* projection, not the culling one. They differ: Filament
+  // renders with the far plane at infinity and depth reversed — one at the
+  // near plane falling towards nought — and the culling matrix keeps the
+  // finite far it was given. Comparing a depth taken from one against a map
+  // written with the other puts every surface on the wrong side of itself,
+  // which is a scene rendered entirely in shadow.
+  _areaShadowMatrix =
+      filament::math::mat4f(_areaShadowCamera->getProjectionMatrix() *
+                            _areaShadowCamera->getViewMatrix());
+  return YES;
 }
 
 /// The two fitted tables, side by side in one texture.
@@ -4787,6 +5030,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   float rectangles[kAreaLightBudget * kAreaLightTexels * 4] = {};
   uint32_t rectangleCount = 0;
   uint32_t rectanglesAsked = 0;
+  // Cleared every frame, so the rectangle that casts is decided by this
+  // frame's scene rather than by whichever one happened to be first the last
+  // time the lights changed.
+  _areaShadowCasting = false;
 
   for (uint32_t i = 0; i < count; i++) {
     const int32_t kind = kinds[i];
@@ -4795,7 +5042,27 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     if (kind == 3) {
       rectanglesAsked++;
       if (rectangleCount < kAreaLightBudget) {
-        [self packRectangle:p into:rectangles + rectangleCount * kAreaLightTexels * 4];
+        // One map, so the first rectangle that asks to cast gets it. The
+        // rest are shaded without one rather than refused: a fill light with
+        // no shadow is what a fill light looks like anyway, and dropping it
+        // would take its light away as well as its shadow.
+        BOOL casting = NO;
+        if ((flags[i] & 1) != 0) {
+          if (!_areaShadowCasting) {
+            [self buildAreaShadow];
+            if ([self aimAreaShadowAt:p]) {
+              _areaShadowCasting = true;
+              casting = YES;
+            }
+          } else {
+            notes[@"areaShadows"] =
+                @"Only one rectangular light casts a shadow. The others are "
+                @"lit without one.";
+          }
+        }
+        [self packRectangle:p
+                       into:rectangles + rectangleCount * kAreaLightTexels * 4
+                    casting:casting];
         rectangleCount++;
       }
       continue;
@@ -6080,6 +6347,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // The surfaces read the atlas built up to last frame, so they are pointed
   // at it before anything is drawn.
   [self bindFieldEverywhere];
+  // Before the scene, because the surfaces the scene draws read this. A map
+  // rendered afterwards would be a frame behind, which for a light that moves
+  // is a shadow that lags the thing casting it.
+  [self renderAreaShadow];
   [self renderPasses];
   // After the scene, because what the field reads is the picture the scene
   // just made. The atlas it writes is therefore what next frame's surfaces
