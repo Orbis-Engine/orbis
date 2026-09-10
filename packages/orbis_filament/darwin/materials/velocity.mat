@@ -1,0 +1,74 @@
+// How far each pixel of a moving object travelled since the last frame.
+//
+// Drawn only for objects whose transform changed, and only into the velocity
+// target: the renderer lends each of their renderables this material for the
+// length of one draw and then gives them their own back. Everything else in
+// the frame has only the camera's motion, which the resolve pass rebuilds
+// from depth without drawing anything.
+//
+// Why a pass of its own rather than a second output on the lit material:
+// Filament's surface materials write exactly one colour — a custom `output`
+// is only accepted in the post-process domain, which matc confirms by
+// refusing one here. So the motion of a surface cannot ride along with its
+// shading, and is drawn separately for the few things that have any.
+//
+// Both positions are worked out from the object's own vertex with matrices
+// the renderer builds on the CPU, in the host's world rather than Filament's
+// camera-relative one. That keeps this shader free of any assumption about
+// where Filament puts its world origin, and makes the two positions exactly
+// comparable: same vertex, same kind of matrix, one frame apart.
+material {
+    name : orbisVelocity,
+    shadingModel : unlit,
+    vertexDomain : object,
+    depthWrite : true,
+    depthCulling : true,
+    // Both faces, because the object's own material might be double-sided
+    // and a velocity missing from the back of a leaf is a leaf that stops
+    // blurring when it turns over.
+    culling : none,
+    parameters : [
+        // Clip space now, and clip space last frame, from the object's own
+        // space: projection × view × world, each of its own frame.
+        { type : mat4, name : nowFromModel, precision : high },
+        { type : mat4, name : thenFromModel, precision : high }
+    ],
+    variables : [ clipNow, clipThen ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec4 local = getPosition();
+        material.clipNow = materialParams.nowFromModel * local;
+        material.clipThen = materialParams.thenFromModel * local;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec4 now = variable_clipNow;
+        vec4 then = variable_clipThen;
+
+        // A point that was behind the camera last frame has no place on last
+        // frame's screen, so it is given no motion rather than an infinite
+        // one.
+        vec2 moved = vec2(0.0);
+        if (then.w > 1e-4 && now.w > 1e-4) {
+            vec2 ndcNow = now.xy / now.w;
+            vec2 ndcThen = then.xy / then.w;
+            // Into the texture's own coordinates: half the NDC span, and V
+            // running down the picture where NDC's Y runs up.
+            moved = (ndcNow - ndcThen) * vec2(0.5, -0.5);
+        }
+
+        // Blue is how far away the surface is, which is also the mark that
+        // an object was drawn here at all: the blank this is drawn over is
+        // nought, and nothing drawn is ever nought metres away. The resolve
+        // pass compares it with the scene's own depth, because this pass
+        // draws only the moving things and cannot know whether a wall stood
+        // in front of them.
+        material.baseColor = vec4(moved, max(now.w, 1e-3), 1.0);
+    }
+}

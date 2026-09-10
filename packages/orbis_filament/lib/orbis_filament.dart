@@ -21,6 +21,7 @@ export 'src/material.dart'
         OrbisWrap;
 export 'src/environment.dart' show OrbisEnvironment, OrbisProbe;
 export 'src/field.dart' show OrbisField;
+export 'src/motion_blur.dart' show OrbisMotionBlur;
 export 'src/graph.dart'
     show
         OrbisFrameCapture,
