@@ -59,6 +59,7 @@ import 'src/examples/cameras.dart';
 import 'src/examples/crowd.dart';
 import 'src/examples/day_and_night.dart';
 import 'src/examples/lights.dart';
+import 'src/examples/panel_shadow.dart';
 import 'src/examples/many.dart';
 import 'src/examples/materials.dart';
 import 'src/examples/meshes.dart';
@@ -83,6 +84,7 @@ import 'src/examples/weather.dart';
 List<Example> engineExamples() => [
   SurfaceExample(),
   LightsExample(),
+  PanelShadowExample(),
   ProbesExample(),
   BounceExample(),
   FieldExample(),
