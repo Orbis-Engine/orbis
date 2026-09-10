@@ -59,6 +59,7 @@
 #include <cmath>
 #include <exception>
 
+#include "OrbisDecals.h"
 #include "generated/lit_opaque_material.h"
 #include "generated/sharpen_material.h"
 #include "generated/smaa_edges_material.h"
@@ -297,6 +298,10 @@ struct Drawn {
   /// default surface tinted by [colour]. Starts at an index no publish can
   /// name, so the first one always dresses.
   int32_t surface = -2;
+
+  /// The layer bit written into this object's own instance for decals to
+  /// test against. One, layer nought, is what a fresh instance is given.
+  int32_t decalLayer = 1;
 
   /// A mesh's own materials, kept from the moment one is overridden so that
   /// clearing the override puts the model back the way the file had it.
@@ -543,6 +548,17 @@ constexpr uint32_t kAreaLightTexels = 9;
 /// job is to not be noticed. The second one asked is reported rather than
 /// silently ignored.
 constexpr uint32_t kAreaShadowSide = 1024;
+
+/// How big every decal's picture is once it is in the array, and how many
+/// different pictures one view can hold.
+///
+/// One size for all of them because a texture array's layers share one: a
+/// picture is resampled to this square on the way in. Five hundred and
+/// twelve is a poster read from across a room; sixteen of them with their
+/// mips is twenty-two megabytes, reserved only once a scene names a picture.
+constexpr uint32_t kDecalPictureSide = 512;
+constexpr uint32_t kDecalPictureLayers = 16;
+constexpr uint32_t kDecalPictureLevels = 10;
 
 /// How many compiled surfaces there are: three shading models in five blend
 /// modes, and the shadow catcher on the end.
@@ -1102,6 +1118,24 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// saying so.
   std::vector<float> _areaLightsOnGpu;
 
+  /// Decals: one row of numbers each, and one layer of picture each.
+  ///
+  /// The numbers are rewritten in place like the rectangles', so a surface
+  /// binds the texture once. The pictures are built the first time a scene
+  /// names one; until then surfaces are pointed at a one-texel stand-in,
+  /// because Filament refuses to draw a material with a sampler nobody bound.
+  filament::Texture *_decalData;
+  filament::Texture *_decalPictures;
+  filament::Texture *_decalBlankPictures;
+  std::vector<float> _decalsOnGpu;
+
+  /// Which layer each picture went into, by path. Negative for a picture
+  /// that could not be read (-1) or found no room (-2): kept, so a missing
+  /// file is looked for once rather than every frame.
+  std::unordered_map<std::string, int32_t> _decalPictureLayer;
+  uint32_t _decalPictureCount;
+  NSMutableDictionary<NSString *, NSString *> *_decalNotes;
+
 
   /// Assets that could not be loaded. Sticky, because a file is read once and
   /// a failure that reported itself only on the frame of the attempt would
@@ -1323,6 +1357,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   _assetNotes = [NSMutableDictionary dictionary];
   _objectNotes = [NSMutableDictionary dictionary];
   _lightNotes = [NSMutableDictionary dictionary];
+  _decalNotes = [NSMutableDictionary dictionary];
   [self startAssetLoader];
   [self buildGeometry];
   [self allocateBuffers];
@@ -2817,6 +2852,12 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   instance->setParameter("areaShadow", _areaShadow, shadowSampler);
 
   [self bindFieldTo:instance];
+
+  // Decals, and the layer the surface is on — layer nought until an object
+  // says otherwise, which is where every object that never mentions layers
+  // lives.
+  [self bindDecalsTo:instance];
+  instance->setParameter("decalLayer", int32_t{1});
 }
 
 /// How much of the field reaches surfaces, held below where it feeds itself.
@@ -4804,6 +4845,12 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   NSMutableDictionary<NSString *, NSString *> *notes =
       [NSMutableDictionary dictionary];
 
+  // Every layer each shared material is worn on, so a decal masked to a
+  // layer can be tested against it. A shared instance is one set of
+  // uniforms for every object wearing it, so the best it can say is all of
+  // their layers at once.
+  std::unordered_map<MaterialInstance *, int32_t> decalWearers;
+
   for (uint32_t i = 0; i < count; i++) {
     std::string path;
     const int32_t meshIndex = meshes[i];
@@ -4888,6 +4935,17 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       [self dress:drawn withMaterial:wearing];
     }
 
+    // Which layer decals see this object on. Its own instance says exactly;
+    // a shared one is gathered and written once the loop is done.
+    const int32_t decalBit = int32_t(layerBitOf(flags[i]));
+    if (drawn.material != nullptr && drawn.decalLayer != decalBit) {
+      drawn.decalLayer = decalBit;
+      drawn.material->setParameter("decalLayer", decalBit);
+    }
+    if (wearing >= 0 && wearing < static_cast<int32_t>(_materialOrder.size())) {
+      decalWearers[_materialOrder[wearing]] |= decalBit;
+    }
+
     // How far each of the mesh's shapes is dialled in. Written every publish
     // rather than compared first: a weight is what animates, so it is the one
     // number here that is expected to differ on every frame, and a memcmp to
@@ -4897,6 +4955,16 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       [self morph:drawn to:morphWeights + morphAt count:shapes];
     }
     morphAt += shapes;
+  }
+
+  // Only the lit surface paints decals, so only it has the parameter; the
+  // unlit and video ones would refuse it. Compared first, because a uniform
+  // write dirties the instance's whole block.
+  for (const auto &worn : decalWearers) {
+    MaterialInstance *instance = worn.first;
+    if (!instance->getMaterial()->hasParameter("decalLayer")) continue;
+    if (instance->getParameter<int32_t>("decalLayer") == worn.second) continue;
+    instance->setParameter("decalLayer", worn.second);
   }
 
   // Whatever this publish did not mention has left the scene. Sweeping by
@@ -5144,6 +5212,253 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   }
 
   _lightNotes = notes;
+}
+
+// ---- Decals ----
+//
+// The arithmetic — sorting, the budget, the matrix into each box — is in
+// OrbisDecals.cpp, which has nothing Apple in it. What is here is the part
+// that is this platform's: turning an image file into pixels, and handing
+// textures to Filament.
+
+/// Reads an image file into a square of premultiplied sRGB pixels.
+///
+/// ImageIO and Core Graphics, which is the one piece of decals that another
+/// platform writes again: every other port has its own way to read a PNG. The
+/// draw into the bitmap resamples to the square on the way, and
+/// premultiplies, which is what the shader's blend expects. Empty on failure.
+static std::vector<uint8_t> OrbisReadDecalPicture(NSString *path,
+                                                  uint32_t side) {
+  std::vector<uint8_t> pixels;
+  NSURL *url = [NSURL fileURLWithPath:path];
+  CGImageSourceRef source =
+      CGImageSourceCreateWithURL((__bridge CFURLRef)url, nullptr);
+  if (source == nullptr) return pixels;
+  CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, nullptr);
+  CFRelease(source);
+  if (image == nullptr) return pixels;
+
+  pixels.assign(size_t(side) * side * 4, 0);
+  CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  CGContextRef context = CGBitmapContextCreate(
+      pixels.data(), side, side, 8, size_t(side) * 4, space,
+      kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+  CGColorSpaceRelease(space);
+  if (context != nullptr) {
+    CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
+    // Row nought of the bitmap is the top of the picture, and row nought of
+    // the texture is v nought, which is the far edge of the box's z — so the
+    // top of a poster is at the top of the wall it is thrown onto.
+    CGContextDrawImage(context, CGRectMake(0, 0, side, side), image);
+    CGContextRelease(context);
+  } else {
+    pixels.clear();
+  }
+  CGImageRelease(image);
+  return pixels;
+}
+
+/// The rows the decals live in, built empty.
+- (void)buildDecalData {
+  if (_decalData != nullptr) return;
+  _decalData = Texture::Builder()
+                   .width(orbis::kDecalTexels)
+                   .height(orbis::kDecalBudget)
+                   .levels(1)
+                   .format(Texture::InternalFormat::RGBA32F)
+                   .sampler(Texture::Sampler::SAMPLER_2D)
+                   .usage(Texture::Usage::SAMPLEABLE |
+                          Texture::Usage::UPLOADABLE)
+                   .build(*_engine);
+  // Zeros, so a surface drawn before the first scene reads a count of nought
+  // rather than whatever the driver had there.
+  const size_t floats =
+      size_t(orbis::kDecalTexels) * orbis::kDecalBudget * 4;
+  float *blank = static_cast<float *>(calloc(floats, sizeof(float)));
+  _decalData->setImage(
+      *_engine, 0,
+      Texture::PixelBufferDescriptor(
+          blank, floats * sizeof(float),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+          Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+          [](void *buffer, size_t, void *) { free(buffer); }));
+  _decalsOnGpu.assign(floats, 0.0f);
+
+  // One white texel in an array of one, for surfaces to bind until a scene
+  // names a picture. An array, not the blank 2D texture: the sampler's type
+  // is part of the material, and a 2D texture in an array's slot is refused.
+  _decalBlankPictures = Texture::Builder()
+                            .width(1)
+                            .height(1)
+                            .depth(1)
+                            .levels(1)
+                            .sampler(Texture::Sampler::SAMPLER_2D_ARRAY)
+                            .format(Texture::InternalFormat::RGBA8)
+                            .build(*_engine);
+  uint8_t *white = new uint8_t[4]{255, 255, 255, 255};
+  _decalBlankPictures->setImage(
+      *_engine, 0, 0, 0, 0, 1, 1, 1,
+      Texture::PixelBufferDescriptor(
+          white, 4, Texture::Format::RGBA, Texture::Type::UBYTE,
+          [](void *buffer, size_t, void *) {
+            delete[] static_cast<uint8_t *>(buffer);
+          }));
+}
+
+/// Gives one lit surface the decals to read.
+- (void)bindDecalsTo:(MaterialInstance *)instance {
+  [self buildDecalData];
+  // Read with texelFetch, which ignores filtering; nearest says so anyway.
+  const TextureSampler exact(TextureSampler::MinFilter::NEAREST,
+                             TextureSampler::MagFilter::NEAREST,
+                             TextureSampler::WrapMode::CLAMP_TO_EDGE);
+  instance->setParameter("decalData", _decalData, exact);
+
+  // Clamped, so the picture's edge texels are not wrapped round to meet the
+  // opposite edge where the box ends. Anisotropic, because a floor decal is
+  // nearly always seen at a grazing angle.
+  TextureSampler smooth(TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+                        TextureSampler::MagFilter::LINEAR,
+                        TextureSampler::WrapMode::CLAMP_TO_EDGE);
+  smooth.setAnisotropy(8.0f);
+  instance->setParameter(
+      "decalImages",
+      _decalPictures != nullptr ? _decalPictures : _decalBlankPictures,
+      smooth);
+}
+
+/// Points every lit surface at the decal textures again — once, when the
+/// pictures' array replaces the stand-in.
+- (void)bindDecalsEverywhere {
+  for (auto &entry : _drawn) {
+    if (entry.second.material != nullptr) {
+      [self bindDecalsTo:entry.second.material];
+    }
+  }
+  for (auto &entry : _materials) {
+    if (entry.second.instance == nullptr) continue;
+    if ((entry.second.flags & 3) != 0) continue;
+    [self bindDecalsTo:entry.second.instance];
+  }
+}
+
+/// The array layer a picture is in, reading it into the next free one the
+/// first time it is named. Negative when it could not be read or there was
+/// no room, and the reason goes in `notes`.
+- (int32_t)decalLayerFor:(NSString *)path
+                   notes:(NSMutableDictionary<NSString *, NSString *> *)notes
+                uploaded:(bool *)uploaded {
+  const std::string identity(path.UTF8String);
+  auto found = _decalPictureLayer.find(identity);
+  int32_t layer = found != _decalPictureLayer.end() ? found->second : -3;
+
+  if (layer == -3) {
+    if (_decalPictureCount >= kDecalPictureLayers) {
+      layer = -2;
+    } else {
+      std::vector<uint8_t> pixels =
+          OrbisReadDecalPicture(path, kDecalPictureSide);
+      if (pixels.empty()) {
+        layer = -1;
+      } else {
+        if (_decalPictures == nullptr) {
+          _decalPictures =
+              Texture::Builder()
+                  .width(kDecalPictureSide)
+                  .height(kDecalPictureSide)
+                  .depth(kDecalPictureLayers)
+                  .levels(kDecalPictureLevels)
+                  .sampler(Texture::Sampler::SAMPLER_2D_ARRAY)
+                  // sRGB, so the hardware decodes to linear before it
+                  // filters. The pictures are premultiplied in sRGB, which is
+                  // exact wherever they are opaque and slightly dark in a
+                  // soft edge; drawing them into a linear 8-bit bitmap
+                  // instead would band every dark picture.
+                  .format(Texture::InternalFormat::SRGB8_A8)
+                  .usage(Texture::Usage::SAMPLEABLE |
+                         Texture::Usage::UPLOADABLE |
+                         Texture::Usage::GEN_MIPMAPPABLE)
+                  .build(*_engine);
+          [self bindDecalsEverywhere];
+        }
+        layer = int32_t(_decalPictureCount++);
+        const size_t bytes = pixels.size();
+        uint8_t *copy = static_cast<uint8_t *>(malloc(bytes));
+        memcpy(copy, pixels.data(), bytes);
+        _decalPictures->setImage(
+            *_engine, 0, 0, 0, uint32_t(layer), kDecalPictureSide,
+            kDecalPictureSide, 1,
+            Texture::PixelBufferDescriptor(
+                copy, bytes, Texture::Format::RGBA, Texture::Type::UBYTE,
+                [](void *buffer, size_t, void *) { free(buffer); }));
+        *uploaded = true;
+      }
+    }
+    _decalPictureLayer[identity] = layer;
+  }
+
+  if (layer == -1) {
+    notes[path] = @"This decal's picture could not be read. It is painted "
+                  @"as its tint alone.";
+  } else if (layer == -2) {
+    notes[@"decalPictures"] = [NSString
+        stringWithFormat:@"More than %u different decal pictures. The ones "
+                         @"past it are painted as their tint alone.",
+                         kDecalPictureLayers];
+  }
+  return layer;
+}
+
+- (void)applyDecals:(const float *)params
+             images:(const int32_t *)images
+              paths:(NSArray<NSString *> *)paths
+              count:(uint32_t)count {
+  if (_disposed) return;
+  [self buildDecalData];
+
+  NSMutableDictionary<NSString *, NSString *> *notes =
+      [NSMutableDictionary dictionary];
+
+  // Pictures first, only for the decals that will be painted: reading a file
+  // for one past the budget would spend a layer on something never shown.
+  std::vector<int32_t> layers(std::max(count, 1u), -1);
+  bool uploaded = false;
+  const uint32_t painted = std::min(count, orbis::kDecalBudget);
+  for (uint32_t i = 0; i < painted; i++) {
+    const int32_t index = images[i];
+    if (index < 0 || index >= static_cast<int32_t>(paths.count)) continue;
+    layers[i] = [self decalLayerFor:paths[index] notes:notes uploaded:&uploaded];
+    if (layers[i] < 0) layers[i] = -1;
+  }
+  // Once for however many arrived, rather than once each: it rebuilds every
+  // layer's chain, and a scene's first frame usually names several at once.
+  if (uploaded) _decalPictures->generateMipmaps(*_engine);
+
+  const size_t floats =
+      size_t(orbis::kDecalTexels) * orbis::kDecalBudget * 4;
+  std::vector<float> wanted(floats);
+  const orbis::DecalPacking packing =
+      orbis::packDecals(params, layers.data(), count, wanted.data());
+  if (packing.asked > packing.packed) {
+    notes[@"decals"] = [NSString
+        stringWithFormat:@"%u decals is past the %u this view paints. The "
+                         @"ones listed after that are not painted.",
+                         packing.asked, packing.packed];
+  }
+  _decalNotes = notes;
+
+  // A scene standing still uploads nothing.
+  if (wanted == _decalsOnGpu) return;
+  _decalsOnGpu = wanted;
+  float *copy = static_cast<float *>(malloc(floats * sizeof(float)));
+  memcpy(copy, wanted.data(), floats * sizeof(float));
+  _decalData->setImage(
+      *_engine, 0,
+      Texture::PixelBufferDescriptor(
+          copy, floats * sizeof(float),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+          Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+          [](void *buffer, size_t, void *) { free(buffer); }));
 }
 
 /// Takes one probe's photograph of the scene and filters it into reflections.
@@ -6603,6 +6918,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   _movies.clear();
   _movieOrder.clear();
   if (_blankTexture != nullptr) _engine->destroy(_blankTexture);
+  if (_decalData != nullptr) _engine->destroy(_decalData);
+  if (_decalPictures != nullptr) _engine->destroy(_decalPictures);
+  if (_decalBlankPictures != nullptr) _engine->destroy(_decalBlankPictures);
+  _decalData = _decalPictures = _decalBlankPictures = nullptr;
   if (_blankExternal != nullptr) _engine->destroy(_blankExternal);
   for (Material *surface : _surfaces) {
     if (surface != nullptr) _engine->destroy(surface);
@@ -6712,6 +7031,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // file, so they are reported as they are.
   [all addEntriesFromDictionary:_objectNotes];
   [all addEntriesFromDictionary:_lightNotes];
+  [all addEntriesFromDictionary:_decalNotes];
   return all;
 }
 

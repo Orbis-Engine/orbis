@@ -440,6 +440,20 @@ private final class Viewport {
       }
     }
 
+    // Every publish, including one with none: an empty list is how a decal
+    // that has been removed stops being painted.
+    let decalCount = scene.decalImages.count
+    let decalParams = decalCount == 0 ? [Float(0)] : scene.decalParams
+    let decalImages = decalCount == 0 ? [Int32(-1)] : scene.decalImages
+    decalParams.withUnsafeBufferPointer { paramPointer in
+      decalImages.withUnsafeBufferPointer { imagePointer in
+        renderer.applyDecals(paramPointer.baseAddress!,
+                             images: imagePointer.baseAddress!,
+                             paths: scene.decalPaths,
+                             count: UInt32(decalCount))
+      }
+    }
+
     let probeCount = scene.probeKeys.count
     let probeKeys = probeCount == 0 ? [Int64(0)] : scene.probeKeys
     let probeParams = probeCount == 0 ? [Float(0)] : scene.probeParams
@@ -586,6 +600,12 @@ private struct Scene {
   let populationColours: [Float]
   let skyParams: [Float]
 
+  /// Decals: a fixed stride of floats each, and an index per decal into the
+  /// paths of their pictures, -1 for none.
+  let decalParams: [Float]
+  let decalImages: [Int32]
+  let decalPaths: [String]
+
   /// How many floats one light occupies, and how many the fog does. Both
   /// match the packing on the Dart side; a mismatch is caught here as a
   /// refused message rather than there as a wrong-looking scene.
@@ -604,6 +624,8 @@ private struct Scene {
   private static let fogStride = 16
   private static let precipitationStride = 12
   private static let skyStride = 34
+  /// Must match OrbisDecal.stride and kDecalStride in OrbisDecals.h.
+  private static let decalStride = 22
 
   init?(arguments: [String: Any]) {
     guard let keys = (arguments["objectKeys"] as? FlutterStandardTypedData)?.int64s,
@@ -895,6 +917,21 @@ private struct Scene {
     self.populationChanged = populationChanged
     self.populationTransforms = populationTransforms
     self.populationColours = populationColours
+
+    // Optional like the populations: a scene that never paints anything
+    // sends nothing. What does arrive is walked by C++ against a count taken
+    // from the images, and every image index subscripts the paths.
+    let decalParams =
+      (arguments["decalParams"] as? FlutterStandardTypedData)?.floats ?? []
+    let decalImages =
+      (arguments["decalImages"] as? FlutterStandardTypedData)?.int32s ?? []
+    let decalPaths = arguments["decalPaths"] as? [String] ?? []
+    guard decalParams.count == decalImages.count * Scene.decalStride,
+          decalImages.allSatisfy({ $0 >= -1 && $0 < Int32(decalPaths.count) })
+    else { return nil }
+    self.decalParams = decalParams
+    self.decalImages = decalImages
+    self.decalPaths = decalPaths
   }
 }
 

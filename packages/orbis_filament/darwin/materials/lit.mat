@@ -209,7 +209,30 @@ material {
         { type : float4,    name : fieldCounts },
         // xy one texel of the atlas, z the normal bias as a fraction of a
         // cell, w spare.
-        { type : float4,    name : fieldAtlasStep }
+        { type : float4,    name : fieldAtlasStep },
+
+        // Projected decals: a poster, a scorch, a puddle, a road marking —
+        // a picture thrown along a box onto whatever is inside it.
+        //
+        // Painted here, into the base colour and roughness *before* the
+        // surface is lit, rather than over the finished frame. A decal
+        // composited afterwards is not lit: it glows the same in shadow as in
+        // sun, and a puddle painted over the picture cannot make the floor
+        // under it any shinier. Painted here, it is part of the surface and
+        // everything that lights a surface lights it.
+        //
+        // The boxes arrive as a texture for the same reason the rectangles
+        // do — the count changes per frame and a uniform array would be paid
+        // for by every draw whether it had decals or not. Seven texels a
+        // decal, one decal a row; the count rides in the first one.
+        { type : sampler2d,      name : decalData, precision : high },
+        // Every decal's picture, one per layer, all the same size. An array
+        // rather than an atlas so a picture's mip chain never bleeds into its
+        // neighbour's at a distance.
+        { type : sampler2dArray, name : decalImages },
+        // Which layer the object being drawn is on, as a bit. A decal paints
+        // only the layers its mask names.
+        { type : int,            name : decalLayer }
     ],
 }
 
@@ -712,6 +735,91 @@ fragment {
              * rough;
     }
 
+    // ---- Projected decals ----
+    //
+    // For each decal: take this point into the decal's box, where the box is
+    // the cube from -0.5 to 0.5, and if it is inside, look up the picture at
+    // the box's x and z and paint it over the surface. The box's own y is the
+    // projection axis, so a decal is thrown down its minus-y onto whatever
+    // stands in the way.
+    //
+    // Packed by OrbisDecals.cpp; the texel layout is written out there.
+
+    #define kDecalTexels 7
+
+    vec4 decalTexel(int decal, int texel) {
+        return texelFetch(materialParams_decalData, ivec2(texel, decal), 0);
+    }
+
+    void applyDecals(inout vec4 base, inout float metallic,
+                     inout float roughness) {
+        // One fetch to find out there is nothing to do, which is the usual
+        // answer. The same for every fragment in the draw, so the branch is
+        // uniform and the derivatives below are still taken by every lane.
+        int count = int(decalTexel(0, 6).w);
+        if (count <= 0) return;
+
+        vec3 p = getUserWorldPosition();
+
+        // The picture's mip level, worked out from how fast the position moves
+        // across the pixel — before the loop, because a derivative taken
+        // inside a branch that some neighbouring fragments skipped is
+        // undefined, and a decal's edge is exactly such a branch. Each decal
+        // then turns these into its own uv rates with the rows of its matrix.
+        vec3 dpdx = dFdx(p);
+        vec3 dpdy = dFdy(p);
+
+        // The geometric normal rather than the shading one: the angle fade is
+        // about which way the *surface* faces the projector, and a normal
+        // map's bumps would otherwise fade a decal in speckles.
+        vec3 facing = getWorldGeometricNormalVector();
+        int layer = materialParams.decalLayer;
+
+        for (int i = 0; i < count; i++) {
+            vec4 r0 = decalTexel(i, 0);
+            vec4 r1 = decalTexel(i, 1);
+            vec4 r2 = decalTexel(i, 2);
+            vec3 local = vec3(dot(r0.xyz, p) + r0.w,
+                              dot(r1.xyz, p) + r1.w,
+                              dot(r2.xyz, p) + r2.w);
+            if (any(greaterThan(abs(local), vec3(0.5)))) continue;
+
+            vec4 settings = decalTexel(i, 4);
+            if ((int(settings.w) & layer) == 0) continue;
+
+            // How square the surface is to the projector. A floor decal whose
+            // box reaches the foot of a wall would otherwise be dragged down
+            // that wall as a smear of its own edge pixels, because every
+            // point of the wall lands on the same row of the picture.
+            float square = dot(facing, decalTexel(i, 6).xyz);
+            float fade = settings.y - settings.z < 1e-4
+                ? step(settings.z, square)
+                : smoothstep(settings.z, settings.y, square);
+            if (fade <= 0.0) continue;
+
+            vec4 tint = decalTexel(i, 3);
+            vec4 picture = vec4(1.0);
+            if (settings.x >= 0.0) {
+                vec2 uv = local.xz + 0.5;
+                vec2 gx = vec2(dot(r0.xyz, dpdx), dot(r2.xyz, dpdx));
+                vec2 gy = vec2(dot(r0.xyz, dpdy), dot(r2.xyz, dpdy));
+                picture = textureGrad(materialParams_decalImages,
+                                      vec3(uv, settings.x), gx, gy);
+            }
+
+            // The pictures are stored premultiplied, which is what keeps a
+            // cut-out's edge from darkening as it is filtered down its mips:
+            // a transparent texel contributes nothing rather than its black.
+            float cover = picture.a * tint.a * fade;
+            base.rgb = base.rgb * (1.0 - cover)
+                     + picture.rgb * tint.rgb * (tint.a * fade);
+
+            vec4 surface = decalTexel(i, 5);
+            roughness = mix(roughness, surface.x, cover * surface.y);
+            metallic = mix(metallic, surface.z, cover * surface.w);
+        }
+    }
+
     void material(inout MaterialInputs material) {
         vec2 uv = getUV0() * materialParams.uvTransform.xy
                 + materialParams.uvTransform.zw;
@@ -793,6 +901,11 @@ fragment {
             roughness *= packed.g;
             metallic  *= packed.b;
         }
+        // Decals, over the finished maps and before anything is lit — so the
+        // area lights and the field below, and Filament's own lights after
+        // this returns, all see the painted surface.
+        applyDecals(base, metallic, roughness);
+        material.baseColor = base;
         material.metallic    = metallic;
         material.roughness   = roughness;
         material.reflectance = materialParams.reflectance;

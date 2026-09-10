@@ -113,6 +113,17 @@ NS_ASSUME_NONNULL_BEGIN
              params:(const float *)params
               count:(uint32_t)count;
 
+/// States what is painted onto the scene's surfaces.
+///
+/// `params` is `count` decals of twenty-two floats each — the layout is
+/// written out in OrbisDecals.h. `images` is `count` indices into `paths`,
+/// -1 for a decal that is a tint with no picture. Past the budget of
+/// thirty-two, the rest are reported rather than painted.
+- (void)applyDecals:(const float *)params
+             images:(const int32_t *)images
+              paths:(NSArray<NSString *> *)paths
+              count:(uint32_t)count;
+
 /// Sets the air the scene is seen through.
 ///
 /// `params` is sixteen floats: colour, density, distance, cut-off distance,

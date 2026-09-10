@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'decal.dart';
 import 'material.dart';
 import 'environment.dart';
 import 'field.dart';
@@ -896,7 +897,9 @@ class OrbisScene {
     OrbisEnvironment? environment,
     List<OrbisProbe>? probes,
     OrbisField? field,
+    List<OrbisDecal>? decals,
   }) : lights = lights ?? const [],
+       decals = decals ?? const [],
        probes = probes ?? const [],
        field = field ?? OrbisField.none,
        environment = environment ?? OrbisEnvironment.none,
@@ -932,6 +935,7 @@ class OrbisScene {
     OrbisPostProcess? post,
     OrbisRenderGraph? graph,
     OrbisEnvironment? environment,
+    List<OrbisDecal>? decals,
   }) => OrbisScene(
     objects: objects ?? this.objects,
     populations: populations ?? this.populations,
@@ -946,6 +950,7 @@ class OrbisScene {
     post: post ?? this.post,
     graph: graph ?? this.graph,
     environment: environment ?? this.environment,
+    decals: decals ?? this.decals,
   );
 
   final List<OrbisObject> objects;
@@ -1028,6 +1033,14 @@ class OrbisScene {
   /// Off by default, and free when off: a scene that never mentions one is
   /// lit exactly as it was.
   final OrbisField field;
+
+  /// What is painted onto the surfaces: posters, scorches, puddles, road
+  /// markings. Each one a box and a picture, projected onto whatever lit
+  /// surface is inside the box before it is lit.
+  ///
+  /// The first [OrbisDecal.budget] are painted; the renderer reports any past
+  /// that rather than dropping them without a word.
+  final List<OrbisDecal> decals;
 
   /// The highest layer an object may be on.
   ///
@@ -1182,6 +1195,24 @@ class OrbisScene {
       videoParams[at + 3] = video.seekToken.toDouble();
     }
 
+    // Decals, with their pictures sent once and pointed at, the same trick
+    // as mesh paths and material maps.
+    final decalParams = Float32List(decals.length * OrbisDecal.stride);
+    final decalImages = Int32List(decals.length);
+    final decalPaths = <String>[];
+    final decalPathAt = <String, int>{};
+    for (var i = 0; i < decals.length; i++) {
+      final decal = decals[i];
+      decal.pack(decalParams, i * OrbisDecal.stride);
+      final texture = decal.texture;
+      decalImages[i] = texture == null
+          ? -1
+          : decalPathAt.putIfAbsent(texture.path, () {
+              decalPaths.add(texture.path);
+              return decalPaths.length - 1;
+            });
+    }
+
     final lightCount = lights.length;
     final lightKeys = Int64List(lightCount);
     final lightKinds = Int32List(lightCount);
@@ -1241,6 +1272,9 @@ class OrbisScene {
       'skyEnabled': sky.drawn,
       'postParams': post.packed,
       'pipelineParams': pipeline.packed,
+      'decalParams': decalParams,
+      'decalImages': decalImages,
+      'decalPaths': decalPaths,
       'probeKeys': probeKeys,
       'probeParams': probeParams,
       'fieldParams': field.packed,
