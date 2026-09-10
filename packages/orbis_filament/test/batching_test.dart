@@ -60,19 +60,4 @@ void main() {
     expect(on.copyWith(batching: false).batching, isFalse);
     expect(sceneOf().copyWith(batching: true).batching, isTrue);
   });
-
-  test('the depth prepass is off unless asked for, and rides in the flags', () {
-    final plain = OrbisPipeline();
-    expect(plain.depthPrepass, isFalse);
-    final flags = plain.packed[15].toInt();
-    expect(flags & 8, 0);
-
-    final prepassed = OrbisPipeline(depthPrepass: true);
-    expect(prepassed.packed[15].toInt() & 8, 8);
-    // The bits that were already there are left alone.
-    expect(prepassed.packed[15].toInt() & 7, flags & 7);
-    // And the block is no wider: a flag in a spare bit rather than a
-    // nineteenth float every side would have to agree on.
-    expect(prepassed.packed.length, OrbisPipeline.stride);
-  });
 }

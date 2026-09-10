@@ -1047,16 +1047,27 @@ class OrbisScene {
   /// same flags form a group; a placeholder cube on the default surface also
   /// needs the same [OrbisObject.colour], because on that surface the colour
   /// *is* the material. An object with [OrbisObject.morphWeights] never
-  /// batches, because its shape is its own.
+  /// batches, because its shape is its own, and neither does a model wearing
+  /// its own file's materials, because every copy of a model comes with its
+  /// own set of them — give such a model an [OrbisMaterial] and it batches
+  /// like anything else.
   ///
   /// The saving is in draw calls, not in objects: the renderer still culls
   /// and sorts every object on its own, and merges what lands next to each
-  /// other once they are sorted by distance. It helps most where many small
-  /// identical things are close together, and does nothing for a scene where
-  /// every object is different.
+  /// other once they are sorted. It helps most where many small identical
+  /// things are close together, and does nothing for a scene where every
+  /// object is different — a scene with nothing to group is left running
+  /// exactly as it would with this off, measured to the pixel.
   ///
-  /// Off by default until it has been shown to draw exactly the same picture
-  /// on every example; see the Batching example for how that was measured.
+  /// **Off by default, and experimental.** Where it works it works exactly:
+  /// three thousand crates come out bit-for-bit identical batched and
+  /// unbatched, for a third off the frame's GPU time. But the merging itself
+  /// is Filament's, switched on engine-wide, and on Filament 1.76 that switch
+  /// makes some scenes come back *entirely* black — every pixel nought, sky
+  /// included — with no way to ask beforehand whether a given scene is one of
+  /// them. So a scene that turns this on has to be looked at with it on. Until
+  /// that is traced or the merging is done by hand instead, the default stays
+  /// off so that no scene which has never been looked at can be affected.
   final bool batching;
 
   /// The highest layer an object may be on.

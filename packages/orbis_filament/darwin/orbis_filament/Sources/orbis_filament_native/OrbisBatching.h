@@ -19,6 +19,25 @@
 // to one of them moves that one and nothing else, and picking, culling and
 // layers behave exactly as they did — and only what they are made of is
 // pooled.
+//
+// Two kinds of object can be made to share, and they need different amounts
+// of help:
+//
+//  * A placeholder cube wears one material instance of its own, holding its
+//    colour. Cubes of the same colour are given one pooled instance between
+//    them; each keeps its own, unwritten, so leaving a batch is a pointer put
+//    back rather than anything rebuilt.
+//  * An object wearing a named Orbis material already shares that material's
+//    single instance with everything else made of it. Nothing has to be
+//    arranged for it at all — it merges the moment the engine is told to
+//    merge — so it is counted here and then left alone.
+//
+// A model wearing its own file's materials is the case deliberately left out.
+// gltfio hands every copy its own instances, so merging them would mean
+// dressing every copy in the first copy's, which changes what the others are
+// made of rather than only how they are drawn; and it cannot be shown to draw
+// the same picture without a model file, which this repository does not have.
+// Give such a model a named material and it batches like anything else.
 #pragma once
 
 #include <array>
@@ -103,6 +122,7 @@ class BatchCensus {
   void clear() {
     _sizes.clear();
     _keys.clear();
+    _eligible.clear();
   }
 
   /// The key for one object. [colourMatters] is true for the placeholder
@@ -123,8 +143,7 @@ class BatchCensus {
   /// merged, but it still has a place in the list.
   void add(const BatchKey &key, bool eligible) {
     _keys.push_back(key);
-    _eligible.resize(_keys.size());
-    _eligible[_keys.size() - 1] = eligible;
+    _eligible.push_back(eligible);
     if (eligible) _sizes[key]++;
   }
 

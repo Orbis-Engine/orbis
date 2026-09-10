@@ -7,8 +7,7 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 import '../example.dart';
 import 'surface.dart' show linearOf;
 
-/// Surfaces stacked deep in front of each other, and a depth prepass to see
-/// whether shading each pixel once is worth drawing everything twice.
+/// Surfaces stacked deep in front of each other, to see what overdraw costs.
 ///
 /// The renderer already sorts opaque objects nearest first, so a pile of
 /// separate things standing one behind another is mostly shaded once without
@@ -16,29 +15,32 @@ import 'surface.dart' show linearOf;
 /// What sorting cannot fix is surfaces that pass *through* each other. These
 /// slabs all cross at the middle, so every one is in front of the others
 /// somewhere and behind them somewhere else, and no order of objects is the
-/// right order for every pixel. That is the case a prepass exists for.
+/// right order for every pixel. That is the case a depth prepass exists for.
 ///
-/// Be ready for it to make no difference here. Apple's GPUs work out which
-/// surface is in front for a whole tile before shading any of it, which is a
-/// prepass in hardware, so on this machine the second pass is mostly cost.
-/// The same scene on a desktop GPU with a heavy material is where it pays.
+/// It is also the scene that says a prepass is not worth building here. On an
+/// Apple GPU, going from one slab to ninety-six of them — every one of them
+/// wearing the dearest surface the engine has, three specular lobes and seven
+/// lights — moves a frame from about 3.4 ms to about 3.9 ms, and forty-eight
+/// slabs sometimes measures *faster* than one. The hardware works out which
+/// surface wins a tile before it shades any of it, which is a prepass already,
+/// so there is no fragment cost here left for a second pass to save and a
+/// second pass would only add the draws. Where it should pay is a desktop
+/// Vulkan or GL backend, which shades every layer it is handed in the order it
+/// is handed them.
 class OverdrawExample extends Example {
   OverdrawExample();
 
   @override
-  String get name => 'Depth prepass';
+  String get name => 'Overdraw';
 
   @override
   String get blurb =>
-      'Slabs that pass through each other, shaded once per pixel with the '
-      'depth laid down first — or as many times as they overlap without.';
+      'Slabs that pass through each other, so that every pixel is covered as '
+      'many times as they overlap.';
 
   @override
   ViewPoint get viewpoint =>
       const ViewPoint(yaw: 0.3, pitch: 0.25, distance: 16, height: 0);
-
-  /// Whether depth is laid down before anything is shaded.
-  bool prepass = false;
 
   /// How many slabs cross at the middle: how deep the overdraw goes.
   double slabs = 48;
@@ -52,9 +54,7 @@ class OverdrawExample extends Example {
   @override
   OrbisScene scene(OrbisCamera camera, double seconds) {
     final count = slabs.round();
-    final pipeline = OrbisPipeline(depthPrepass: prepass);
     return OrbisScene(
-      pipeline: pipeline,
       materials: [
         OrbisMaterial(
           key: _material,
@@ -128,14 +128,6 @@ class OverdrawExample extends Example {
   Widget settings(BuildContext context, VoidCallback changed) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Toggle(
-        label: 'Depth prepass',
-        value: prepass,
-        onChanged: (value) {
-          prepass = value;
-          changed();
-        },
-      ),
       Setting(
         label: 'Slabs',
         value: slabs,
@@ -160,19 +152,25 @@ class OverdrawExample extends Example {
 
   @override
   String get code => '''
-// One switch on the pipeline. Every opaque object that can be drawn depth-
-// only exactly where it is shaded gets a twin that is: same geometry, same
-// transform, the cheapest material there is, drawn before everything else.
-// The real surfaces then find the nearest depth already in the buffer, and
-// everything behind it fails the depth test before it is shaded.
+// Slabs all crossing at the middle, so no order of objects is the right
+// order for every pixel and each one is covered many times over.
 OrbisScene(
-  pipeline: OrbisPipeline(depthPrepass: true),
-  objects: slabs,
+  materials: [OrbisMaterial(key: 3, clearCoat: 1, anisotropy: 0.7)],
+  objects: [
+    for (var i = 0; i < 48; i++)
+      OrbisObject(
+        key: 100 + i,
+        material: 3,
+        transform: Matrix4.identity()
+          ..rotateY(i * math.pi / 48)
+          ..scaleByDouble(5, 3, 0.05, 1),
+      ),
+  ],
   camera: camera,
 )
 
-// Surfaces that could draw depth where they are not then shaded are left
-// out rather than risked: anything masked, see-through, swaying in the
-// wind, pushed back by a depth bias, or not writing depth at all.
+// What it is for is measuring. Turn the slabs up and watch the frame's GPU
+// time: on this machine it barely moves, because the hardware already
+// decides which surface wins a tile before shading any of it.
 ''';
 }

@@ -210,7 +210,6 @@ class OrbisPipeline {
     this.precise = false,
     this.culling = true,
     this.refraction = true,
-    this.depthPrepass = false,
   }) : shadows = shadows ?? OrbisShadows(),
        lighting = lighting ?? OrbisLighting(),
        resolution = resolution ?? OrbisResolution();
@@ -279,20 +278,6 @@ class OrbisPipeline {
   /// Whether see-through surfaces bend what is behind them.
   bool refraction;
 
-  /// Whether the depth of every opaque surface is laid down before any of
-  /// them is shaded, so each pixel is lit once rather than once per surface
-  /// that covers it.
-  ///
-  /// Opt-in because it is not free and not always a win. It draws the opaque
-  /// geometry twice — once with the cheapest shader there is, to fill the
-  /// depth buffer, and once to shade — so it pays in vertices and draw calls
-  /// for what it saves in fragments. That trade is good on a desktop GPU with
-  /// heavy surfaces stacked deep in front of each other, which shades every
-  /// layer it is handed in the order it is handed them. It is roughly nothing
-  /// on Apple's GPUs, which already sort out hidden surfaces in hardware
-  /// before shading anything, and can be a loss there.
-  bool depthPrepass;
-
   /// How many floats [packed] holds.
   static const int stride = 18;
 
@@ -316,13 +301,7 @@ class OrbisPipeline {
     out[12] = resolution.adaptive ? resolution.maxScale : resolution.scale;
     out[13] = resolution.sharpness;
     out[14] = samples.toDouble();
-    // The prepass rides in a spare bit rather than a float of its own, so the
-    // block keeps the width Swift and the renderer already check for.
-    out[15] =
-        (precise ? 1 : 0) +
-        (culling ? 2 : 0) +
-        (refraction ? 4 : 0) +
-        (depthPrepass ? 8 : 0);
+    out[15] = (precise ? 1 : 0) + (culling ? 2 : 0) + (refraction ? 4 : 0);
     out[16] = lighting.clusterNear;
     out[17] = lighting.clusterFar;
     return out;

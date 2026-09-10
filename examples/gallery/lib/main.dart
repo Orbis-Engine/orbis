@@ -33,20 +33,12 @@
 ///   ORBIS_CRATES           how many crates the Batching example draws
 ///   ORBIS_PALETTE          its colours: One, Six or Every one
 ///   ORBIS_BATCH_MATERIAL=1 its crates made of one shared material
-///   ORBIS_BATCH_MESH       a .glb for its crates, instead of the cube
+///   ORBIS_BATCH_MESH       a .glb for its crates, instead of the cube (which
+///                          only batches alongside ORBIS_BATCH_MATERIAL=1)
 ///   ORBIS_MOVING=0         hold its turning crate still
-///   ORBIS_PREPASS=0/1      the depth prepass off or on, for any example
-///   ORBIS_SLABS            how many slabs the Depth prepass example crosses
+///   ORBIS_SLABS            how many slabs the Overdraw example crosses
 ///   ORBIS_SHADOWS=0        no shadow pass, for any example
 ///   ORBIS_POST=0           no post-processing, for any example
-///   ORBIS_FORCE_INSTANCING=1  (read by the renderer) Filament's automatic
-///                          instancing on whenever batching is, even with
-///                          nothing grouped — reproduces the black frames it
-///                          causes on some scenes; see OrbisBatching.h
-///   ORBIS_DUMP_NAME        the file a dumped frame is written to, inside the
-///                          app's own temporary directory; every copy of the
-///                          gallery shares that directory, so two runs at once
-///                          otherwise overwrite one orbis_frame.png
 library;
 
 import 'dart:io';
@@ -246,19 +238,13 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     final drawn = graph == null ? scene : scene.copyWith(graph: graph);
     // Batching forced one way or the other, over whatever the example chose,
     // so one frame can be drawn both ways and the two compared pixel by pixel.
-    // The prepass the same way. The pipeline is the example's own and is
-    // built afresh for every frame, so setting it here cannot leak into the
-    // next one.
+    // The pipeline and the post-processing are the example's own and are built
+    // afresh for every frame, so setting them here cannot leak into the next
+    // one.
     if (Platform.environment['ORBIS_SHADOWS'] == '0') {
       drawn.pipeline.shadows.enabled = false;
     }
     if (Platform.environment['ORBIS_POST'] == '0') drawn.post.enabled = false;
-    switch (Platform.environment['ORBIS_PREPASS']) {
-      case '1':
-        drawn.pipeline.depthPrepass = true;
-      case '0':
-        drawn.pipeline.depthPrepass = false;
-    }
     return switch (Platform.environment['ORBIS_BATCHING']) {
       '1' => drawn.copyWith(batching: true),
       '0' => drawn.copyWith(batching: false),

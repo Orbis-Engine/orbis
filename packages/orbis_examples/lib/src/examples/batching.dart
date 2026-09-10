@@ -53,6 +53,10 @@ class BatchingExample extends Example {
 
   /// A model to use instead of the built-in cube, or null. Set by the gallery
   /// from the environment; there is no crate model in the repository.
+  ///
+  /// A model only batches alongside [material], because a model wearing its
+  /// own file's materials has a set of them per copy and cannot be made to
+  /// share without changing what the other copies are made of.
   String? mesh;
 
   /// Whether the crate in the middle turns, to show a single member of a
@@ -76,11 +80,7 @@ class BatchingExample extends Example {
     // Every one different, which is the case batching cannot help: a lerp
     // across the whole set gives each crate a colour of its own.
     _ => linearOf(
-      Color.lerp(
-        _swatches[2],
-        _swatches[3],
-        index / math.max(total - 1, 1),
-      )!,
+      Color.lerp(_swatches[2], _swatches[3], index / math.max(total - 1, 1))!,
     ),
   };
 
