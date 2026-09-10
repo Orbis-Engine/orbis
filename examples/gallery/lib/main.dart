@@ -58,6 +58,21 @@
 ///   ORBIS_SLABS            how many slabs the Overdraw example crosses
 ///   ORBIS_SHADOWS=0        no shadow pass, for any example
 ///   ORBIS_POST=0           no post-processing, for any example
+///   ORBIS_PANEL_SHADOW=0   the Panel shadows example's panel casts nothing
+///   ORBIS_PANEL            its panel's edge in metres
+///   ORBIS_PANEL_HEIGHT     how high it hangs
+///   ORBIS_SHADOW_LIGHT     which light the Shadows example casts with: Sun,
+///                          Spot or Point
+///   ORBIS_SHADOW_KIND      its edge: Sharp, Soft, Area or Variance
+///   ORBIS_SHADOW_OFF=1     no shadow pass at all
+///   ORBIS_SHADOW_MAP       the map's size in pixels
+///   ORBIS_SHADOW_CASCADES  how many cascades a sun's map is split into
+///   ORBIS_SHADOW_SPLIT     place the splits by hand, the first at this
+///                          fraction of the shadow distance
+///   ORBIS_SHADOW_CONTACT=1 screen-space contact shadows
+///   ORBIS_SHADOW_CONTACT_DISTANCE  how far each pixel marches, in metres
+///   ORBIS_SHADOW_SIZE      the light's size in metres, for the Area edge
+///   ORBIS_VSM_BLUR         the Variance edge's blur, in texels
 library;
 
 import 'dart:io';
@@ -352,6 +367,48 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       if (Platform.environment['ORBIS_CIRCLING'] == '0') {
         example.orbiting = false;
       }
+    }
+    if (example is PanelShadowExample) {
+      if (Platform.environment['ORBIS_PANEL_SHADOW'] == '0') {
+        example.shadows = false;
+      }
+      example.panel = _number('ORBIS_PANEL') ?? example.panel;
+      example.height = _number('ORBIS_PANEL_HEIGHT') ?? example.height;
+    }
+    if (example is ShadowsExample) {
+      final light = Platform.environment['ORBIS_SHADOW_LIGHT'];
+      if (light != null) {
+        example.light = ShadowLight.values.firstWhere(
+          (one) => one.label == light,
+          orElse: () => example.light,
+        );
+      }
+      final shadows = example.shadows;
+      final kind = Platform.environment['ORBIS_SHADOW_KIND'];
+      if (kind != null) {
+        shadows.kind = OrbisShadowKind.values.firstWhere(
+          (one) => one.label == kind,
+          orElse: () => shadows.kind,
+        );
+      }
+      if (Platform.environment['ORBIS_SHADOW_OFF'] == '1') {
+        shadows.enabled = false;
+      }
+      shadows.mapSize = _number('ORBIS_SHADOW_MAP')?.round() ?? shadows.mapSize;
+      shadows.cascades =
+          _number('ORBIS_SHADOW_CASCADES')?.round() ?? shadows.cascades;
+      final split = _number('ORBIS_SHADOW_SPLIT');
+      if (split != null) {
+        example.handSplits = true;
+        example.firstSplit = split;
+      }
+      if (Platform.environment['ORBIS_SHADOW_CONTACT'] == '1') {
+        shadows.contact = true;
+      }
+      shadows.contactDistance =
+          _number('ORBIS_SHADOW_CONTACT_DISTANCE') ?? shadows.contactDistance;
+      example.lightSize = _number('ORBIS_SHADOW_SIZE') ?? example.lightSize;
+      shadows.variance.blur = _number('ORBIS_VSM_BLUR') ?? shadows.variance.blur;
     }
     if (example is FieldExample) {
       example.intensity = _number('ORBIS_FIELD') ?? example.intensity;

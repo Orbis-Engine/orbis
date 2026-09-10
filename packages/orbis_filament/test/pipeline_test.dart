@@ -71,6 +71,73 @@ void main() {
     expect(contactOnly[8], 2);
   });
 
+  test('the variance flags pack beside the older two', () {
+    final packed = OrbisPipeline(
+      shadows: OrbisShadows(
+        stable: true,
+        variance: OrbisVarianceShadows(
+          highPrecision: true,
+          mipmapping: true,
+          exponential: true,
+        ),
+      ),
+    ).packed;
+    expect(packed[8], 1 + 4 + 8 + 16);
+  });
+
+  test('the defaults are the ones the renderer had before', () {
+    // A scene written before these dials existed must draw the same, so
+    // every default here is Filament's own.
+    final packed = OrbisPipeline().packed;
+    expect(packed, hasLength(28));
+    expect(packed.sublist(18, 21), [0, 0, 0], reason: 'lambda places them');
+    expect(packed[21], 1, reason: 'physical penumbra falloff');
+    expect(packed[22], 0, reason: 'no anisotropy');
+    expect(packed[23], 0, reason: 'no blur');
+    expect(packed[24], closeTo(0.15, 1e-6));
+    expect(packed[25], 1, reason: 'one sample');
+    expect(packed[26], closeTo(0.3, 1e-6));
+    expect(packed[27], 8);
+  });
+
+  test(
+    'cascade splits and the contact trace land where the renderer looks',
+    () {
+      final packed = OrbisPipeline(
+        shadows: OrbisShadows(
+          cascades: 4,
+          splits: [0.1, 0.3, 0.6],
+          softnessFalloff: 2,
+          contactDistance: 0.8,
+          contactSteps: 16,
+          variance: OrbisVarianceShadows(
+            blur: 3,
+            anisotropy: 2,
+            samples: 4,
+            lightBleedReduction: 0.4,
+          ),
+        ),
+      ).packed;
+      expect(packed[18], closeTo(0.1, 1e-6));
+      expect(packed[19], closeTo(0.3, 1e-6));
+      expect(packed[20], closeTo(0.6, 1e-6));
+      expect(packed[21], 2);
+      expect(packed[22], 2);
+      expect(packed[23], 3);
+      expect(packed[24], closeTo(0.4, 1e-6));
+      expect(packed[25], 4);
+      expect(packed[26], closeTo(0.8, 1e-6));
+      expect(packed[27], 16);
+    },
+  );
+
+  test('a short split list fills only what it has', () {
+    final packed = OrbisPipeline(
+      shadows: OrbisShadows(cascades: 2, splits: [0.25]),
+    ).packed;
+    expect(packed.sublist(18, 21), [0.25, 0, 0]);
+  });
+
   test('the view flags pack together', () {
     expect(OrbisPipeline().packed[15], 6, reason: 'culling and refraction');
     expect(

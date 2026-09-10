@@ -93,6 +93,7 @@
 #include "generated/mist_material.h"
 #include "generated/instanced_material.h"
 #include "generated/shadowcatcher_material.h"
+#include "OrbisShadows.h"
 #include "generated/sky_material.h"
 #include "generated/rain_material.h"
 
@@ -1042,6 +1043,12 @@ static constexpr NSUInteger kMaxPostParams = 128;
 
   /// The last pipeline settings applied, so a scene republished sixty times
   /// a second only reconfigures the view when something actually moved.
+  ///
+  /// Larger than the block a current host sends, deliberately: a host that
+  /// sends more is a newer one, and its extra floats are dropped rather than
+  /// written past the end of this. The assertion is what keeps the two facts
+  /// in step, because the truncation is silent and reads as a dial that has
+  /// stopped working.
   float _pipelineParams[32];
   NSUInteger _pipelineCount;
 
@@ -1133,6 +1140,9 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// is casting at all. Kept between frames because the surfaces read it out
   /// of the light data, which is written once per frame rather than per draw.
   filament::math::mat4f _areaShadowMatrix;
+  // Where the casting rectangle stood when its map was drawn: the near plane
+  // and field of view the surface needs to turn map depth back into metres.
+  orbis::AreaShadowFrame _areaShadowFrame;
   bool _areaShadowCasting;
 
   /// The rectangles as the GPU currently holds them, so a frame that changed
@@ -2231,6 +2241,13 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   if (!instance) return;
   renderables.setCastShadows(instance, (flags & kCastsShadows) != 0);
   renderables.setReceiveShadows(instance, (flags & kReceivesShadows) != 0);
+  // Contact shadows are asked for twice in Filament: by the light, and by
+  // every surface that is to receive them. Without the second the light's
+  // switch does nothing at all — measured: the frame was byte-identical with
+  // it on and off. Every receiver says yes here, so the pipeline's contact
+  // switch is the one that decides; with it off, no light marches anything.
+  renderables.setScreenSpaceContactShadows(
+      instance, (flags & kReceivesShadows) != 0);
   renderables.setLayerMask(
       instance, 0xFF, (flags & kVisible) ? layerBitOf(flags) : kHiddenLayer);
 }
@@ -2949,8 +2966,12 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // scene with no casting rectangle still binds it and never looks at it,
   // because the flag in the light data is nought.
   [self buildAreaShadow];
-  const TextureSampler shadowSampler(TextureSampler::MinFilter::LINEAR,
-                                     TextureSampler::MagFilter::LINEAR,
+  // Nearest, not linear. The lookup does its own filtering, and a linear tap
+  // between two depths is a distance at which nothing stands; OpenGL ES also
+  // refuses to filter a depth texture that has no comparison mode, and reads
+  // it as nought — which here would be a shadow that silently never appears.
+  const TextureSampler shadowSampler(TextureSampler::MinFilter::NEAREST,
+                                     TextureSampler::MagFilter::NEAREST,
                                      TextureSampler::WrapMode::CLAMP_TO_EDGE);
   instance->setParameter("areaShadow", _areaShadow, shadowSampler);
 
@@ -3869,9 +3890,14 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   }
   tangent = normalize(tangent);
 
-  // Crossed this way round so that the polygon's own normal — which the
-  // integral takes as cross(right, up) — comes out facing the surfaces the
-  // light travels towards, and the back of the panel stays dark.
+  // Crossed this way round so that cross(right, up) — which is what both the
+  // integral and the shadow lookup take as the panel's axis — comes out as
+  // *minus* the normal: it points from a lit surface back at the panel. The
+  // integral wants that sign to keep the front lit and the back dark, and the
+  // lookup wants it to tell a surface facing the panel from one edge-on to
+  // it. Worth stating outright, because the identity that makes it true —
+  // cross(t, cross(t, n)) is minus n — is not obvious at a glance, and both
+  // readers of it would silently do the wrong thing if it flipped.
   const float3 up = cross(tangent, normal);
 
   // Lumens to luminance. A one-sided Lambertian panel of area A emitting a
@@ -3903,21 +3929,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   out[14] = up.z;
   out[15] = height;
 
-  // Whether this one casts, and the two dials the lookup needs.
-  //
-  // The bias is in map depth and the spread in map texels, which are the
-  // units the two artefacts they fight actually appear in: acne is a depth
-  // comparison landing on the wrong side of itself, and a hard edge is a
-  // filter narrower than the light that cast it.
-  out[16] = casting ? 1.0f : 0.0f;
-  out[17] = 0.0015f;
-  // Widened by the panel's own size, which is the whole point of a rectangle
-  // being a light rather than a point: a bigger source gives a softer edge,
-  // and here that is literally a wider filter. Divided by the map's side so
-  // the dial stays in texels however large the map is.
-  out[18] = (0.75f + std::min(std::max(width, height), 8.0f) * 0.35f) /
-            float(kAreaShadowSide);
-  out[19] = 0.0f;
+  // Whether this one casts, and the numbers the lookup needs to turn what
+  // the map holds into metres and a penumbra: see packAreaShadowSettings.
+  orbis::packAreaShadowSettings(casting, _areaShadowFrame, width, height,
+                                out + 16);
 
   if (casting) {
     // Column major, as the shader's mat4 constructor reads it: four texels,
@@ -4025,69 +4040,45 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 /// not be in its map, and a light that fills the room in front of it is what
 /// the falloff radius already describes.
 - (BOOL)aimAreaShadowAt:(const float *)p {
-  const float3 centre = {p[4], p[5], p[6]};
-  float3 normal = {p[7], p[8], p[9]};
-  if (length(normal) < 1e-6f) return NO;
-  normal = normalize(normal);
+  orbis::AreaShadowFrame frame;
+  if (!orbis::frameAreaShadow(float3{p[4], p[5], p[6]},
+                              float3{p[7], p[8], p[9]}, p[17], p[18], p[10],
+                              frame)) {
+    return NO;
+  }
+  _areaShadowFrame = frame;
 
-  const float falloff = p[10];
-  const float width = std::max(p[17], 1e-4f);
-  const float height = std::max(p[18], 1e-4f);
-
-  // How far it is worth looking. The window the shader applies already stops
-  // the light at the falloff, so anything past it is out of the picture
-  // whatever the map says.
-  const float reach = falloff > 1e-3f ? falloff : 40.0f;
-
-  // Near is set off the panel's own size rather than at some fixed epsilon:
-  // depth precision is spent between near and far, and a near plane a
-  // thousandth of the far one throws most of it away for a light whose
-  // nearest interesting occluder is a pace in front of it.
-  const float near = std::max(0.05f, std::max(width, height) * 0.05f);
-  if (reach <= near) return NO;
-
-  // A hundred and twenty degrees, fixed.
-  //
-  // A panel lights the whole hemisphere in front of it and one perspective
-  // map cannot hold a hemisphere, so this is a choice about where to spend
-  // the pixels rather than a measurement. Wider than this and the map is all
-  // distortion at the edges where nothing needs it; narrower and a surface
-  // off to one side falls outside and is declared unshadowed.
-  //
-  // Deriving it from the panel's own size was the first attempt and was
-  // wrong: a two-metre softbox came out at a hundred and seventy degrees,
-  // which is very nearly a hemisphere squeezed into a square, and the depths
-  // it wrote were too coarse to compare against anything.
-  //
-  // Falling outside is the safe failure — the lookup returns fully lit, so a
-  // surface the map cannot see keeps the light it would have had.
-  constexpr float kAreaShadowFov = 120.0f;
-  _areaShadowCamera->setCustomProjection(
-      filament::math::mat4(filament::math::mat4f::perspective(
-          kAreaShadowFov, 1.0f, near, reach,
-          filament::math::mat4f::Fov::VERTICAL)),
-      near, reach);
-
-  // A panel emits along its normal, so that is where it looks. Any up will do
-  // as long as it is not the direction of travel.
-  const float3 up =
-      std::abs(normal.y) > 0.9f ? float3{1, 0, 0} : float3{0, 1, 0};
-  _areaShadowCamera->lookAt(centre, centre + normal * reach, up);
+  // Filament's own projection: the far plane at infinity for drawing, the
+  // finite one kept only for culling. A custom matrix with a finite far was
+  // used here before, and it works, but it puts the map's depth on a curve
+  // that depends on both planes; at infinity it is exactly near / distance,
+  // which the surface can turn back into metres with one divide.
+  _areaShadowCamera->setProjection(frame.fovDegrees, 1.0, frame.near,
+                                   frame.far, Camera::Fov::VERTICAL);
+  _areaShadowCamera->lookAt(frame.eye, frame.target, frame.up);
 
   // What a surface has to be multiplied by to land on the map. Filament keeps
   // the world shifted to the camera for precision, and this matrix is applied
   // to `getUserWorldPosition` — the unshifted one — so it is built from the
   // camera's own unshifted transform.
   //
-  // The *rendering* projection, not the culling one. They differ: Filament
-  // renders with the far plane at infinity and depth reversed — one at the
-  // near plane falling towards nought — and the culling matrix keeps the
-  // finite far it was given. Comparing a depth taken from one against a map
-  // written with the other puts every surface on the wrong side of itself,
-  // which is a scene rendered entirely in shadow.
-  _areaShadowMatrix =
-      filament::math::mat4f(_areaShadowCamera->getProjectionMatrix() *
-                            _areaShadowCamera->getViewMatrix());
+  // The *rendering* projection, not the culling one, and then the remap
+  // Filament applies in every vertex shader: the camera's matrix is the
+  // OpenGL one, z from minus one to one, and the depth buffer holds that
+  // turned into nought to one and reversed. Leaving the remap out was why
+  // this shadow never showed: the surface compared a number near one against
+  // a map near nought, and was lit wherever it stood. Found by drawing, per
+  // pixel, whether the map held anything and which convention it agreed with
+  // — it held the right depths all along.
+  //
+  // With the remap in place the Panel shadows example darkens 126k of its
+  // 1.92M pixels by a tenth or more when the panel is asked to cast, the
+  // umbra under an occluder falling to a fifth of the lit floor beside it
+  // (31.0 to 6.2 levels of luminance) while the lit floor itself does not
+  // move. Without it, nothing changed but the dither.
+  _areaShadowMatrix = orbis::depthFromClip() *
+                      filament::math::mat4f(_areaShadowCamera->getProjectionMatrix() *
+                                            _areaShadowCamera->getViewMatrix());
   return YES;
 }
 
@@ -4555,6 +4546,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 }
 
 - (void)setPipeline:(const float *)params count:(NSUInteger)count {
+  static_assert(orbis::pipeline::kPipelineStride <= 32,
+                "the pipeline block has outgrown _pipelineParams: widen the "
+                "array and the clamp below, or the newest dials are dropped");
   if (_disposed || _view == nullptr) return;
   if (count > 32) count = 32;
 
@@ -4566,33 +4560,12 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     return;
   }
   const bool shadowsChanged =
-      _pipelineCount != count ||
-      std::memcmp(_pipelineParams, params, sizeof(float) * 10) != 0;
+      orbis::shadowSettingsDiffer(_pipelineParams, _pipelineCount, params, count);
   std::memcpy(_pipelineParams, params, sizeof(float) * count);
   _pipelineCount = count;
 
-  const bool shadowing = params[0] != 0.0f;
-  _view->setShadowingEnabled(shadowing);
-
-  switch (static_cast<int>(params[1])) {
-    case 1:
-      _view->setShadowType(ShadowType::DPCF);
-      break;
-    case 2:
-      _view->setShadowType(ShadowType::PCSS);
-      break;
-    case 3:
-      _view->setShadowType(ShadowType::VSM);
-      break;
-    default:
-      _view->setShadowType(ShadowType::PCF);
-      break;
-  }
-
-  SoftShadowOptions soft;
-  soft.penumbraScale = params[9];
-  soft.penumbraRatioScale = 1.0f;
-  _view->setSoftShadowOptions(soft);
+  // On or off, which kind, and the dials of the soft and variance kinds.
+  orbis::applyViewShadows(*_view, params, count);
 
   // The multisample count is the one setting here that reallocates every
   // buffer in the view, so it is set through the same comparison as the rest
@@ -4644,38 +4617,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   if (_pipelineCount == 0) return;
 
   LightManager::ShadowOptions options = lights.getShadowOptions(instance);
-  options.mapSize = static_cast<uint32_t>(_pipelineParams[2]);
-  const int cascades = static_cast<int>(_pipelineParams[3]);
-  options.shadowCascades = static_cast<uint8_t>(cascades < 1   ? 1
-                                                : cascades > 4 ? 4
-                                                               : cascades);
-  // Zero means "as far as the camera sees", and that is a reasonable thing to
-  // ask for — but it was only half honoured. The cascade splits below fall
-  // back to a hundred metres when it is zero while shadowFar stayed zero, so
-  // the splits described one distance and the shadow described another, and
-  // the result is a scene where every surface samples as shadowed. A sun at a
-  // hundred thousand lux then lights nothing, which is a very confusing way
-  // for a default to fail.
-  //
-  // One fallback, used by both.
-  constexpr float kDefaultShadowFar = 100.0f;
-  const float shadowFar =
-      _pipelineParams[4] > 0 ? _pipelineParams[4] : kDefaultShadowFar;
-  options.shadowFar = shadowFar;
-  options.constantBias = _pipelineParams[6];
-  options.normalBias = _pipelineParams[7];
-  const int shadowFlags = static_cast<int>(_pipelineParams[8]);
-  options.stable = (shadowFlags & 1) != 0;
-  options.screenSpaceContactShadows = (shadowFlags & 2) != 0;
-
-  // Where each cascade hands over to the next. Practical splits are the
-  // usual compromise: evenly spaced wastes the near cascades on ground the
-  // camera is standing on, and logarithmic wastes the far ones on sky.
-  if (options.shadowCascades > 1) {
-    LightManager::ShadowCascades::computePracticalSplits(
-        options.cascadeSplitPositions, options.shadowCascades, 0.1f, shadowFar,
-        _pipelineParams[5]);
-  }
+  orbis::applyLightShadows(options, _pipelineParams, _pipelineCount);
   lights.setShadowOptions(instance, options);
 }
 
