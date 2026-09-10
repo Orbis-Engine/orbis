@@ -181,6 +181,19 @@ material {
         // samplers are the scarce thing in a material and tiles are free.
         { type : sampler2d, name : lightData, precision : high },
 
+        // What a rectangle can see, from where it stands.
+        //
+        // Filament shadows its own lights and a rectangle is not one of them,
+        // so this is the panel's own depth map: the scene drawn once from the
+        // light's point of view, kept as distance rather than colour. A
+        // surface further from the panel than what this holds is behind
+        // something, and takes none of that light.
+        //
+        // The tenth sampler, which is why the surface asks for the third
+        // feature level. Below it a material may have nine however capable
+        // the machine is, and the ninth was already spent.
+        { type : sampler2d, name : areaShadow, precision : high },
+
         // The world-space irradiance field, if the scene has one.
         //
         // Read here rather than composited over the finished picture, because
@@ -364,6 +377,64 @@ fragment {
         return len * ltcTable(vec2(z * 0.5 + 0.5, len), 1.0).w;
     }
 
+    // How much of one rectangle reaches this point.
+    //
+    // The panel's depth map holds, for every direction it can see, the
+    // distance to the nearest thing in that direction. Projecting the shading
+    // point into the same frame and comparing says whether it is that nearest
+    // thing or something behind it.
+    //
+    // Filtered rather than sampled once, and the width of the filter is the
+    // whole reason an area light is worth having: a point source gives a
+    // knife edge, and a panel gives a penumbra that widens with its own size.
+    // Taking one tap would produce a hard-edged shadow from a soft light,
+    // which reads as *more* wrong than no shadow at all — a shadow that
+    // says the light is a point when everything else in the frame says it is
+    // a window.
+    float rectangleShadow(vec3 p, vec4 settings, mat4 toLight) {
+        vec4 clip = toLight * vec4(p, 1.0);
+        // Behind the panel, or outside the frustum it drew: nothing was
+        // recorded there, so nothing can be said to be in the way.
+        if (clip.w <= 0.0) return 1.0;
+
+        vec3 ndc = clip.xyz / clip.w;
+        vec2 uv = ndc.xy * 0.5 + 0.5;
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
+            return 1.0;
+        }
+
+        // Filament reverses depth and puts the far plane at infinity: one at
+        // the near plane falling towards nought, which spends the float's
+        // precision where the geometry is rather than where it is not. So a
+        // *larger* number is nearer, and nought is infinitely far — which is
+        // also what an untouched map holds, and therefore reads as nothing in
+        // the way rather than as everything.
+        float depth = ndc.z;
+        if (depth <= 0.0) return 1.0;
+
+        // Along the surface rather than towards the light: a bias that pushes
+        // towards the panel makes a surface facing it hover, and one that
+        // pushes along the depth makes a grazing surface stripe. The dial is
+        // in texels of the map, which is the unit the acne is actually in.
+        float bias = settings.y;
+        float spread = settings.z;
+
+        float lit = 0.0;
+        // Nine taps in a square. Not a ring or a disc: the map is square, the
+        // spread is uniform, and a rotated kernel costs a per-pixel sine to
+        // hide banding that a wider box does not have in the first place.
+        for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+                vec2 at = uv + vec2(float(x), float(y)) * spread;
+                float held = textureLod(materialParams_areaShadow, at, 0.0).r;
+                // Nearer or level with what the panel saw, so this is the
+                // thing it was looking at. Reversed depth, so the bias adds.
+                lit += (depth + bias) >= held ? 1.0 : 0.0;
+            }
+        }
+        return lit * (1.0 / 9.0);
+    }
+
     // Everything the rectangles add at this fragment, in the same photometric
     // units Filament's own lights work in.
     vec3 areaLighting(const MaterialInputs material,
@@ -430,7 +501,24 @@ fragment {
             float specular = ltcIntegrate(n, v, p, invM, c0, c1, c2, c3);
             float diffuse = ltcIntegrate(n, v, p, mat3(1.0), c0, c1, c2, c3);
 
-            total += radiance * window
+            // Whether this one casts, and where it was standing when it drew
+            // what it could see. Fetched inside the branch rather than beside
+            // the four above, because most rectangles do not cast and four
+            // more fetches on every one of them would be paid by every
+            // surface in the scene.
+            vec4 shadowSettings =
+                texelFetch(materialParams_lightData, ivec2(4, int(kLtcRows) + i), 0);
+            float reaches = 1.0;
+            if (shadowSettings.x > 0.5) {
+                mat4 toLight = mat4(
+                    texelFetch(materialParams_lightData, ivec2(5, int(kLtcRows) + i), 0),
+                    texelFetch(materialParams_lightData, ivec2(6, int(kLtcRows) + i), 0),
+                    texelFetch(materialParams_lightData, ivec2(7, int(kLtcRows) + i), 0),
+                    texelFetch(materialParams_lightData, ivec2(8, int(kLtcRows) + i), 0));
+                reaches = rectangleShadow(p, shadowSettings, toLight);
+            }
+
+            total += radiance * window * reaches
                    * (fresnel * specular + diffuseColour * diffuse);
         }
 
