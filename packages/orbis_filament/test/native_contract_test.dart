@@ -24,9 +24,15 @@ void main() {
   final swift = _read(
     'darwin/orbis_filament/Sources/orbis_filament/OrbisFilamentPlugin.swift',
   );
-  final native = _read(
-    'darwin/orbis_filament/Sources/orbis_filament_native/OrbisRenderer.mm',
-  );
+  // The renderer, and the plain C++ beside it that it calls into: a number
+  // that lives in either is the renderer's.
+  final native =
+      _read(
+        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisRenderer.mm',
+      ) +
+      _read(
+        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisDecals.h',
+      );
 
   group('the strides the three sides share', () {
     // Dart's number, what Swift calls it, and what the renderer calls it —
@@ -48,6 +54,7 @@ void main() {
       'fog': (OrbisFog.stride, 'fogStride', null),
       'precipitation': (OrbisPrecipitation.stride, 'precipitationStride', null),
       'the sky': (OrbisSky.stride, 'skyStride', null),
+      'a decal': (OrbisDecal.stride, 'decalStride', 'kDecalStride'),
     };
 
     contract.forEach((what, agreed) {
@@ -72,6 +79,15 @@ void main() {
         }
       });
     });
+  });
+
+  test('the decal budget Dart reports against is the one the renderer '
+      'paints', () {
+    final found = RegExp(
+      r'constexpr uint32_t kDecalBudget\s*=\s*(\d+)',
+    ).firstMatch(native);
+    expect(found, isNotNull, reason: 'OrbisDecals.h no longer says');
+    expect(int.parse(found!.group(1)!), OrbisDecal.budget);
   });
 }
 

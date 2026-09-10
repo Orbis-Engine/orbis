@@ -36,6 +36,7 @@ export 'src/examples/bistro.dart'
 export 'src/examples/cameras.dart' show CamerasExample;
 export 'src/examples/crowd.dart' show CrowdExample;
 export 'src/examples/day_and_night.dart' show DayAndNightExample;
+export 'src/examples/decals.dart' show DecalsExample;
 export 'src/examples/lights.dart' show LightsExample;
 export 'src/examples/many.dart' show ManyExample;
 export 'src/examples/materials.dart' show MaterialsExample;
@@ -59,6 +60,7 @@ import 'src/examples/bistro.dart';
 import 'src/examples/cameras.dart';
 import 'src/examples/crowd.dart';
 import 'src/examples/day_and_night.dart';
+import 'src/examples/decals.dart';
 import 'src/examples/lights.dart';
 import 'src/examples/panel_shadow.dart';
 import 'src/examples/many.dart';
@@ -87,6 +89,7 @@ List<Example> engineExamples() => [
   SurfaceExample(),
   LightsExample(),
   PanelShadowExample(),
+  DecalsExample(),
   ProbesExample(),
   BounceExample(),
   FieldExample(),
