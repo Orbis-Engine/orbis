@@ -40,6 +40,7 @@ export 'src/pipeline.dart'
         OrbisShadowKind,
         OrbisShadows;
 export 'src/population.dart' show OrbisFade, OrbisPopulation;
+export 'src/splats.dart' show OrbisSplats;
 export 'src/video.dart' show OrbisVideo;
 export 'src/post.dart'
     show

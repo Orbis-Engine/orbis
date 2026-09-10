@@ -420,6 +420,8 @@ private final class Viewport {
       }
     }
 
+    scene.splats.apply(to: renderer)
+
     let lightCount = scene.lightCount
     let lightKeys = lightCount == 0 ? [Int64(0)] : scene.lightKeys
     let lightKinds = lightCount == 0 ? [Int32(0)] : scene.lightKinds
@@ -584,6 +586,9 @@ private struct Scene {
   let populationChanged: [Int32]
   let populationTransforms: [Float]
   let populationColours: [Float]
+
+  /// Gaussian splat clouds, decoded and checked in OrbisSplatMessage.swift.
+  let splats: SplatMessage
   let skyParams: [Float]
 
   /// How many floats one light occupies, and how many the fog does. Both
@@ -895,6 +900,9 @@ private struct Scene {
     self.populationChanged = populationChanged
     self.populationTransforms = populationTransforms
     self.populationColours = populationColours
+
+    guard let splats = SplatMessage(arguments: arguments) else { return nil }
+    self.splats = splats
   }
 }
 

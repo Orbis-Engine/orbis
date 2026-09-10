@@ -26,6 +26,7 @@
 #include <filament/SwapChain.h>
 
 #import "OrbisSurface.h"
+#include "OrbisSplatSet.h"
 #include <filament/TransformManager.h>
 #include <filament/VertexBuffer.h>
 #include <filament/View.h>
@@ -1130,6 +1131,12 @@ static constexpr NSUInteger kMaxPostParams = 128;
   Material *_instancedMaterial;
   std::unordered_map<int32_t, Grown> _populations;
   uint64_t _populationGeneration;
+
+  /// Gaussian splat clouds. Everything about them is in OrbisSplatSet, in
+  /// plain C++; this only holds it, feeds it the scene and the camera, and
+  /// passes on what it could not load.
+  std::unique_ptr<orbis::SplatScene> _splats;
+  NSMutableDictionary<NSString *, NSString *> *_splatNotes;
   VertexBuffer *_vertexBuffer;
   IndexBuffer *_indexBuffer;
 
@@ -2596,6 +2603,64 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       }
       grown.shown[draw] = wanted;
     }
+  }
+}
+
+- (BOOL)hasSplats {
+  return _splats != nullptr && !_splats->empty();
+}
+
+- (void)applySplats:(const int32_t *)keys
+              flags:(const int32_t *)flags
+          revisions:(const int32_t *)revisions
+             params:(const float *)params
+              paths:(NSArray<NSString *> *)paths
+            changed:(const int32_t *)changed
+      changedCounts:(const int32_t *)changedCounts
+       changedCount:(uint32_t)changedCount
+               data:(const uint8_t *)data
+         dataLength:(size_t)dataLength
+              count:(uint32_t)count {
+  if (_disposed) return;
+  if (_splats == nullptr) {
+    if (count == 0) return;
+    _splats = std::make_unique<orbis::SplatScene>(*_engine, *_scene);
+  }
+
+  // Where each changed cloud's records begin in the packed bytes.
+  std::unordered_map<int32_t, std::pair<size_t, size_t>> arriving;
+  size_t at = 0;
+  for (uint32_t c = 0; c < changedCount; c++) {
+    const size_t bytes = size_t(std::max(changedCounts[c], 0)) *
+                         orbis::kSplatRecordBytes;
+    if (at + bytes > dataLength) break;
+    arriving[changed[c]] = {at, bytes};
+    at += bytes;
+  }
+
+  std::vector<orbis::SplatRequest> requests(count);
+  for (uint32_t i = 0; i < count; i++) {
+    orbis::SplatRequest &request = requests[i];
+    request.key = keys[i];
+    request.flags = flags[i];
+    request.revision = revisions[i];
+    request.params = params + size_t(i) * orbis::kSplatParams;
+    request.path = i < paths.count ? std::string(paths[i].UTF8String) : "";
+    auto found = arriving.find(keys[i]);
+    if (found != arriving.end()) {
+      request.data = data + found->second.first;
+      request.bytes = found->second.second;
+    }
+  }
+
+  std::vector<std::pair<std::string, std::string>> notes;
+  _splats->apply(requests, notes);
+
+  if (_splatNotes == nil) _splatNotes = [NSMutableDictionary dictionary];
+  [_splatNotes removeAllObjects];
+  for (const auto &note : notes) {
+    _splatNotes[@(note.first.c_str())] = @(note.second.c_str());
+    NSLog(@"[orbis] splats: %s: %s", note.first.c_str(), note.second.c_str());
   }
 }
 
@@ -6313,6 +6378,13 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 
   [self placeCamera];
   [self rangePopulations];
+  // After the camera is placed, because the order depends on which way it
+  // faces. The sort itself is on the sorter's own thread; this only asks for
+  // one and uploads whichever has finished.
+  if (_splats != nullptr) {
+    const auto forward = _camera->getForwardVector();
+    _splats->update(float3{float(forward.x), float(forward.y), float(forward.z)});
+  }
 
   SwapChain *target = _swapChains[_backIndex];
   if (!target) return;
@@ -6500,6 +6572,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // Filament asserts on anything still alive when the engine goes down, so the
   // teardown mirrors construction in reverse.
   [self removeEverything];
+  // Its renderables, instances, textures and material, and its sorting
+  // threads joined, while the engine they belong to is still there.
+  _splats.reset();
 
   // The graph's own views, cameras and targets, before the scene they point
   // at goes. _disposed is already set, so releaseGraph has to be able to run
@@ -6712,6 +6787,7 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // file, so they are reported as they are.
   [all addEntriesFromDictionary:_objectNotes];
   [all addEntriesFromDictionary:_lightNotes];
+  if (_splatNotes != nil) [all addEntriesFromDictionary:_splatNotes];
   return all;
 }
 

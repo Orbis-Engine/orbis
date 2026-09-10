@@ -107,6 +107,9 @@ class _OrbisViewState extends State<OrbisView> {
   /// different things sent to them.
   final Map<int, int> _sentRevisions = {};
 
+  /// The same, for splat clouds held in memory.
+  final Map<int, int> _sentSplatRevisions = {};
+
   Duration _stamp = Duration.zero;
 
   /// This frame's moment, in seconds, on Flutter's own clock.
@@ -139,6 +142,7 @@ class _OrbisViewState extends State<OrbisView> {
         scene.toMessage(
           id,
           sentRevisions: _sentRevisions,
+          sentSplatRevisions: _sentSplatRevisions,
           // The frame's own timestamp, which is the clock everything in the
           // frame was worked out on — including wherever the camera decided
           // to be.
@@ -155,6 +159,12 @@ class _OrbisViewState extends State<OrbisView> {
       _sentRevisions.removeWhere(
         (key, _) => !scene.populations.any((p) => p.key == key),
       );
+      _sentSplatRevisions
+        ..clear()
+        ..addAll({
+          for (final cloud in scene.splats)
+            if (cloud.data != null) cloud.key: cloud.revision,
+        });
       if (notes != null && notes.isNotEmpty) {
         widget.onSceneNotes?.call(notes);
       }

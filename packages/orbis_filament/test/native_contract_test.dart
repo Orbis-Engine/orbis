@@ -73,6 +73,42 @@ void main() {
       });
     });
   });
+
+  // The splat numbers live in their own files on both native sides, because
+  // the feature does: its Swift decoding in OrbisSplatMessage.swift and its
+  // C++ in OrbisSplats.h.
+  group('the numbers Gaussian splats share', () {
+    final splatSwift = _read(
+      'darwin/orbis_filament/Sources/orbis_filament/OrbisSplatMessage.swift',
+    );
+    final splatNative = _read(
+      'darwin/orbis_filament/Sources/orbis_filament_native/OrbisSplats.h',
+    );
+    final material = _read('darwin/materials/splat.mat');
+
+    test('a cloud is ${OrbisSplats.stride} floats wide everywhere', () {
+      expect(_swiftValue(splatSwift, 'splatStride'), OrbisSplats.stride);
+      expect(_nativeValue(splatNative, 'kSplatParams'), OrbisSplats.stride);
+    });
+
+    test('a splat record is ${OrbisSplats.recordBytes} bytes everywhere', () {
+      expect(_swiftValue(splatSwift, 'recordBytes'), OrbisSplats.recordBytes);
+      expect(
+        _nativeValue(splatNative, 'kSplatRecordBytes'),
+        OrbisSplats.recordBytes,
+      );
+    });
+
+    test('the shader and the uploader agree on the texture width', () {
+      final width = RegExp(
+        r'constexpr uint32_t kSplatTextureWidth\s*=\s*(\d+)',
+      ).firstMatch(splatNative);
+      final shader = RegExp(r'#define kWidth (\d+)').firstMatch(material);
+      expect(width, isNotNull);
+      expect(shader, isNotNull);
+      expect(shader!.group(1), width!.group(1));
+    });
+  });
 }
 
 /// `private static let name = 12`, whatever the access level.
