@@ -28,6 +28,11 @@
 ///   ORBIS_BOUNCE_RADIUS    how far it looks, in metres
 ///   ORBIS_BOUNCE_THICKNESS how solid the depth buffer's surfaces are
 ///   ORBIS_BOUNCE_SLICES    how many directions each pixel fans along
+///   ORBIS_VOLUME_AT        where the Environment volumes walk stands, 0 in
+///                          the courtyard to 1 at the back of the hall; stops
+///                          the walk, and prints what the volumes resolved to
+///   ORBIS_VOLUMES_OFF=1    the same place with the volumes left out
+///   ORBIS_VOLUME_BLEND     how far outside the hall its look reaches, metres
 library;
 
 import 'dart:io';
@@ -318,6 +323,37 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;
       example.reach = _number('ORBIS_BOUNCE_RADIUS') ?? example.reach;
       if (Platform.environment['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
+    }
+
+    if (example is EnvironmentVolumesExample) {
+      final at = _number('ORBIS_VOLUME_AT');
+      if (at != null) {
+        example.walking = false;
+        example.along = at;
+      }
+      example.blend = _number('ORBIS_VOLUME_BLEND') ?? example.blend;
+      if (Platform.environment['ORBIS_VOLUMES_OFF'] == '1') {
+        example.volumes = false;
+      }
+      // The numbers the frame was drawn with, beside the frame. A blend is
+      // checked for a step by reading these along a sweep, not by eye.
+      if (at != null) {
+        final scene = example.scene(_look.toRenderCamera(), 0);
+        final seen = scene.resolved();
+        String three(Vector3 v) => [
+          v.x,
+          v.y,
+          v.z,
+        ].map((c) => c.toStringAsFixed(4)).join(',');
+        stderr.writeln(
+          '[volumes] at=$at z=${scene.camera.position.z.toStringAsFixed(3)} '
+          'fogDensity=${seen.fog.density.toStringAsFixed(5)} '
+          'fogColour=${three(seen.fog.colour)} '
+          'ambient=${seen.sky.ambient.toStringAsFixed(1)} '
+          'skyColour=${three(seen.sky.colour)} '
+          'shutter=${seen.camera.shutterSpeed.toStringAsFixed(6)}',
+        );
+      }
     }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;

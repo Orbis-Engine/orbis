@@ -47,6 +47,7 @@ export 'src/examples/post.dart' show PostExample;
 export 'src/examples/video.dart' show VideoExample;
 export 'src/examples/voxels.dart' show VoxelExample;
 export 'src/examples/weather.dart' show WeatherExample;
+export 'src/examples/volumes.dart' show EnvironmentVolumesExample;
 export 'src/examples/surface.dart' show SurfaceExample, linearOf;
 
 import 'src/example.dart';
@@ -71,6 +72,7 @@ import 'src/examples/surface.dart';
 import 'src/examples/video.dart';
 import 'src/examples/voxels.dart';
 import 'src/examples/weather.dart';
+import 'src/examples/volumes.dart';
 
 /// Every example that needs nothing but the engine, in the order to show them.
 ///
@@ -90,6 +92,7 @@ List<Example> engineExamples() => [
   FieldExample(),
   DayAndNightExample(),
   WeatherExample(),
+  EnvironmentVolumesExample(),
   ManyExample(),
   CrowdExample(),
   CamerasExample(),
