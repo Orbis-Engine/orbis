@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'material.dart';
+import 'outline.dart';
 import 'environment.dart';
 import 'field.dart';
 import 'graph.dart';
@@ -896,7 +897,9 @@ class OrbisScene {
     OrbisEnvironment? environment,
     List<OrbisProbe>? probes,
     OrbisField? field,
+    OrbisOutline? outline,
   }) : lights = lights ?? const [],
+       outline = outline ?? OrbisOutline.none,
        probes = probes ?? const [],
        field = field ?? OrbisField.none,
        environment = environment ?? OrbisEnvironment.none,
@@ -932,6 +935,7 @@ class OrbisScene {
     OrbisPostProcess? post,
     OrbisRenderGraph? graph,
     OrbisEnvironment? environment,
+    OrbisOutline? outline,
   }) => OrbisScene(
     objects: objects ?? this.objects,
     populations: populations ?? this.populations,
@@ -946,6 +950,9 @@ class OrbisScene {
     post: post ?? this.post,
     graph: graph ?? this.graph,
     environment: environment ?? this.environment,
+    probes: probes,
+    field: field,
+    outline: outline ?? this.outline,
   );
 
   final List<OrbisObject> objects;
@@ -1028,6 +1035,15 @@ class OrbisScene {
   /// Off by default, and free when off: a scene that never mentions one is
   /// lit exactly as it was.
   final OrbisField field;
+
+  /// Which objects have a line drawn round them, and how.
+  ///
+  /// On the scene rather than on the objects because it is about the view of
+  /// the world rather than the world: a game never sets it, and an editor
+  /// changes it on every click without touching a single object. Nothing is
+  /// outlined until somebody says otherwise, and nothing is paid for until
+  /// then either.
+  final OrbisOutline outline;
 
   /// The highest layer an object may be on.
   ///
@@ -1251,6 +1267,8 @@ class OrbisScene {
       'graphPasses': graph.packedPasses,
       'graphTargets': graph.packedTargets,
       'graphTargetNames': [for (final target in graph.targets) target.name],
+      'outlineKeys': outline.packedKeys,
+      'outlineParams': outline.packed,
       // When the application reckons this is, in its own seconds.
       //
       // The renderer draws far more often than it is told anything, and works

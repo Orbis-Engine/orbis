@@ -334,6 +334,18 @@ NS_ASSUME_NONNULL_BEGIN
             shutter:(float)shutter
         sensitivity:(float)sensitivity;
 
+/// Says which objects to draw an outline round, and how.
+///
+/// `keys` are objects' keys, the active ones first; `params` is fourteen
+/// floats: the colour of the rest of the selection and of the active object,
+/// each as display RGBA from nought to one, the width in pixels, what to do
+/// with hidden parts (0 shown, 1 faint, 2 dashed, 3 not drawn), how opaque a
+/// hidden part is, the dash length in pixels, how many of `keys` are active,
+/// and one spare. A count of nought draws nothing and costs nothing.
+- (void)setOutlineKeys:(const int64_t *)keys
+                 count:(uint32_t)count
+                params:(const float *)params;
+
 /// Requests new dimensions. Safe from any thread — the work happens at the
 /// top of the next frame, on the thread that owns the engine.
 - (void)resizeToWidth:(uint32_t)width height:(uint32_t)height;

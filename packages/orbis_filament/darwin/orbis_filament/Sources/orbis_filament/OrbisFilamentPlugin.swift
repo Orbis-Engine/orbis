@@ -478,6 +478,17 @@ private final class Viewport {
     renderer.setExposure(scene.aperture,
                          shutter: scene.shutterSpeed,
                          sensitivity: scene.sensitivity)
+
+    // After the objects, because the keys it names are theirs. An empty
+    // selection still goes, so that clearing one turns the outline off.
+    let outlineKeys = scene.outlineKeys.isEmpty ? [Int64(0)] : scene.outlineKeys
+    outlineKeys.withUnsafeBufferPointer { keyPointer in
+      scene.outlineParams.withUnsafeBufferPointer { paramPointer in
+        renderer.setOutlineKeys(keyPointer.baseAddress!,
+                                count: UInt32(scene.outlineKeys.count),
+                                params: paramPointer.baseAddress!)
+      }
+    }
   }
 
   /// What the scene asked for that could not be given, and why.
@@ -566,6 +577,11 @@ private struct Scene {
   let graphTargets: [Float]
   let graphTargetNames: [String]
 
+  /// The objects to outline, the active ones first, and how the outline
+  /// looks. Always a whole row of settings, even when nothing is outlined.
+  let outlineKeys: [Int64]
+  let outlineParams: [Float]
+
   /// The application's own clock, in seconds, when this scene was worked out.
   let at: Double
   let orthographic: Bool
@@ -604,6 +620,9 @@ private struct Scene {
   private static let fogStride = 16
   private static let precipitationStride = 12
   private static let skyStride = 34
+  /// Must match OrbisOutline.stride in Dart and kOutlineParams in the
+  /// renderer's outline.
+  private static let outlineStride = 14
 
   init?(arguments: [String: Any]) {
     guard let keys = (arguments["objectKeys"] as? FlutterStandardTypedData)?.int64s,
@@ -680,6 +699,21 @@ private struct Scene {
     self.fieldParams =
       fieldParams.count == Scene.fieldStride ? fieldParams : []
     self.fieldFrom = arguments["fieldFrom"] as? String ?? ""
+
+    // Optional like the rest: a host that has never heard of outlines
+    // outlines nothing. A settings row of the wrong length is refused as a
+    // whole rather than read short, because C++ reads a fixed fourteen.
+    let outlineKeys =
+      (arguments["outlineKeys"] as? FlutterStandardTypedData)?.int64s ?? []
+    let outlineParams =
+      (arguments["outlineParams"] as? FlutterStandardTypedData)?.floats ?? []
+    if outlineParams.count == Scene.outlineStride {
+      self.outlineKeys = outlineKeys
+      self.outlineParams = outlineParams
+    } else {
+      self.outlineKeys = []
+      self.outlineParams = [Float](repeating: 0, count: Scene.outlineStride)
+    }
 
     // Not in the guard above: a scene without it is a scene with the
     // defaults, not a scene that fails to arrive.

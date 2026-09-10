@@ -28,6 +28,11 @@
 ///   ORBIS_BOUNCE_RADIUS    how far it looks, in metres
 ///   ORBIS_BOUNCE_THICKNESS how solid the depth buffer's surfaces are
 ///   ORBIS_BOUNCE_SLICES    how many directions each pixel fans along
+///   ORBIS_OUTLINE=0        the Outline example with nothing outlined
+///   ORBIS_OUTLINE_OTHERS=0 outline only the active object
+///   ORBIS_OUTLINE_WIDTH    how wide the outline is, in pixels
+///   ORBIS_OUTLINE_HIDDEN   shown, faint, dashed or hidden: the part a wall hides
+///   ORBIS_AA               off, fxaa or temporal, under the Outline example
 library;
 
 import 'dart:io';
@@ -318,6 +323,22 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;
       example.reach = _number('ORBIS_BOUNCE_RADIUS') ?? example.reach;
       if (Platform.environment['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
+    }
+
+    if (example is OutlineExample) {
+      if (Platform.environment['ORBIS_OUTLINE'] == '0') example.on = false;
+      if (Platform.environment['ORBIS_OUTLINE_OTHERS'] == '0') {
+        example.others = false;
+      }
+      example.width = _number('ORBIS_OUTLINE_WIDTH') ?? example.width;
+      final hidden = Platform.environment['ORBIS_OUTLINE_HIDDEN'];
+      if (hidden != null && hidden.isNotEmpty) {
+        example.occluded = OrbisOccluded.values.byName(hidden);
+      }
+      final aa = Platform.environment['ORBIS_AA'];
+      if (aa != null && aa.isNotEmpty) {
+        example.antiAliasing = AntiAliasing.values.byName(aa);
+      }
     }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;

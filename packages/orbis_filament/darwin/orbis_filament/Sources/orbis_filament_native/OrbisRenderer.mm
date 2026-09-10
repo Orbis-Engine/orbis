@@ -26,6 +26,8 @@
 #include <filament/SwapChain.h>
 
 #import "OrbisSurface.h"
+#include "OrbisOutline.h"
+#include <memory>
 #include <filament/TransformManager.h>
 #include <filament/VertexBuffer.h>
 #include <filament/View.h>
@@ -1229,6 +1231,18 @@ static constexpr NSUInteger kMaxPostParams = 128;
   float _jerkTotal;
   int _stepCount;
   bool _dumped;
+
+  /// The selection outline, made the first time something is highlighted
+  /// and not before: a renderer nobody asks for an outline holds nothing
+  /// for one.
+  std::unique_ptr<orbis::Outline> _outline;
+
+  /// Which objects are highlighted, by key, the active ones first. Resolved
+  /// to entities at the top of each frame rather than when they arrive,
+  /// because an object can be rebuilt as a different mesh between the two.
+  std::vector<int64_t> _outlineKeys;
+  uint32_t _outlinePrimaryCount;
+  orbis::OutlineStyle _outlineStyle;
 }
 
 - (nullable instancetype)initWithWidth:(uint32_t)width height:(uint32_t)height {
@@ -6201,6 +6215,54 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   [_presentLock unlock];
 }
 
+- (void)setOutlineKeys:(const int64_t *)keys
+                 count:(uint32_t)count
+                params:(const float *)params {
+  if (_disposed) return;
+  _outlineKeys.assign(keys, keys + count);
+  _outlineStyle = orbis::OutlineStyle::from(params);
+  const float primary = std::isfinite(params[12]) ? params[12] : 0.0f;
+  _outlinePrimaryCount =
+      std::min(count, static_cast<uint32_t>(std::max(0.0f, primary)));
+}
+
+/// Draws the selection outline over the finished frame.
+///
+/// After every pass, whatever the graph was, because the outline belongs on
+/// the picture as it will be seen: after tone mapping, so its colour is the
+/// colour asked for, and after anti-aliasing, so it never enters a history
+/// and never crawls. Nothing at all happens while nothing is highlighted.
+- (void)drawOutline {
+  if (_outlineKeys.empty()) {
+    if (_outline) _outline->setEntities({}, {});
+    return;
+  }
+
+  std::vector<utils::Entity> primary;
+  std::vector<utils::Entity> others;
+  for (size_t i = 0; i < _outlineKeys.size(); i++) {
+    auto found = _drawn.find(_outlineKeys[i]);
+    if (found == _drawn.end()) continue;
+    const Drawn &drawn = found->second;
+    std::vector<utils::Entity> &into = i < _outlinePrimaryCount ? primary : others;
+    // Every entity of a model, not only its root: the root of a glTF is a
+    // transform and the geometry hangs below it.
+    if (drawn.instance != nullptr) {
+      const utils::Entity *entities = drawn.instance->getEntities();
+      into.insert(into.end(), entities,
+                  entities + drawn.instance->getEntityCount());
+    } else if (drawn.entity) {
+      into.push_back(drawn.entity);
+    }
+  }
+
+  if (!_outline) _outline = std::make_unique<orbis::Outline>(*_engine);
+  _outline->setStyle(_outlineStyle);
+  _outline->setEntities(primary, others);
+  _outline->render(*_renderer, *_scene, *_camera, _width, _height,
+                   kAllLayers);
+}
+
 /// Draws every pass of the frame, in the order the graph put them in.
 ///
 /// A graph nobody set is one pass, every layer, into the picture — which is
@@ -6356,6 +6418,8 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // just made. The atlas it writes is therefore what next frame's surfaces
   // sample — one frame behind, which is what every temporal method trades.
   [self runField];
+  // Last of all, over whatever the graph put on the screen.
+  [self drawOutline];
   _renderer->endFrame();
 
   // Flutter may sample the moment this returns, so the frame has to be on the
@@ -6505,6 +6569,11 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   // at goes. _disposed is already set, so releaseGraph has to be able to run
   // afterwards — it checks the engine rather than that flag for exactly this.
   [self releaseGraph];
+
+  // Its views and scenes point at the camera and share the scene's entities,
+  // so it goes before either of them.
+  _outline.reset();
+  _outlineKeys.clear();
 
   for (auto &pair : _meshes) {
     if (pair.second.asset) _assetLoader->destroyAsset(pair.second.asset);
