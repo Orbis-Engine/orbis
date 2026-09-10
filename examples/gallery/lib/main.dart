@@ -28,6 +28,10 @@
 ///   ORBIS_BOUNCE_RADIUS    how far it looks, in metres
 ///   ORBIS_BOUNCE_THICKNESS how solid the depth buffer's surfaces are
 ///   ORBIS_BOUNCE_SLICES    how many directions each pixel fans along
+///   ORBIS_DECALS_OFF=1     paint none of the Decals example's decals
+///   ORBIS_DECAL_ONLY       paint only that one of them, counting from 0
+///   ORBIS_DECAL_FADE_OFF=1 turn their angle fade off
+///   ORBIS_DECAL_MASK_OFF=1 let the paint splash reach the crate's layer
 library;
 
 import 'dart:io';
@@ -318,6 +322,15 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;
       example.reach = _number('ORBIS_BOUNCE_RADIUS') ?? example.reach;
       if (Platform.environment['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
+    }
+    if (example is DecalsExample) {
+      final environment = Platform.environment;
+      if (environment['ORBIS_DECALS_OFF'] == '1') example.on = false;
+      if (environment['ORBIS_DECAL_FADE_OFF'] == '1') example.angleFade = false;
+      if (environment['ORBIS_DECAL_MASK_OFF'] == '1') {
+        example.spareTheCrate = false;
+      }
+      example.only = _number('ORBIS_DECAL_ONLY')?.round();
     }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;
