@@ -28,6 +28,11 @@
 ///   ORBIS_BOUNCE_RADIUS    how far it looks, in metres
 ///   ORBIS_BOUNCE_THICKNESS how solid the depth buffer's surfaces are
 ///   ORBIS_BOUNCE_SLICES    how many directions each pixel fans along
+///   ORBIS_SPLAT            a .ply or .splat capture for the Gaussian splats
+///                          example to show instead of its generated ring
+///   ORBIS_SPLAT_COUNT      how many splats the generated ring has
+///   ORBIS_SPLAT_SORT=0     draw them unsorted, to measure what the sort does
+///   ORBIS_SPLAT_PILLAR=0   take the solid pillar out of the ring
 library;
 
 import 'dart:io';
@@ -318,6 +323,18 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;
       example.reach = _number('ORBIS_BOUNCE_RADIUS') ?? example.reach;
       if (Platform.environment['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
+    }
+
+    if (example is SplatsExample) {
+      final capture = Platform.environment['ORBIS_SPLAT'];
+      if (capture != null && capture.isNotEmpty) example.path = capture;
+      example.count = _number('ORBIS_SPLAT_COUNT')?.round() ?? example.count;
+      if (Platform.environment['ORBIS_SPLAT_SORT'] == '0') {
+        example.sorted = false;
+      }
+      if (Platform.environment['ORBIS_SPLAT_PILLAR'] == '0') {
+        example.pillar = false;
+      }
     }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;
