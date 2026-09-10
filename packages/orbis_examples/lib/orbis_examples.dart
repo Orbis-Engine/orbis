@@ -45,6 +45,7 @@ export 'src/examples/outline.dart' show OutlineExample;
 export 'src/examples/pipeline.dart' show PipelineExample;
 export 'src/examples/probes.dart' show ProbesExample;
 export 'src/examples/runner.dart' show RunnerExample;
+export 'src/examples/splats.dart' show SplatsExample;
 export 'src/examples/post.dart' show PostExample;
 export 'src/examples/video.dart' show VideoExample;
 export 'src/examples/voxels.dart' show VoxelExample;
@@ -72,6 +73,7 @@ import 'src/examples/pipeline.dart';
 import 'src/examples/probes.dart';
 import 'src/examples/runner.dart';
 import 'src/examples/post.dart';
+import 'src/examples/splats.dart';
 import 'src/examples/surface.dart';
 import 'src/examples/video.dart';
 import 'src/examples/voxels.dart';
@@ -100,6 +102,7 @@ List<Example> engineExamples() => [
   EnvironmentVolumesExample(),
   ManyExample(),
   CrowdExample(),
+  SplatsExample(),
   CamerasExample(),
   MeshesExample(),
   MaterialsExample(),

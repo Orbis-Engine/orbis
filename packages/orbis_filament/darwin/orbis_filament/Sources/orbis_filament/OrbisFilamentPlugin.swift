@@ -420,6 +420,8 @@ private final class Viewport {
       }
     }
 
+    scene.splats.apply(to: renderer)
+
     let lightCount = scene.lightCount
     let lightKeys = lightCount == 0 ? [Int64(0)] : scene.lightKeys
     let lightKinds = lightCount == 0 ? [Int32(0)] : scene.lightKinds
@@ -614,6 +616,9 @@ private struct Scene {
   let populationChanged: [Int32]
   let populationTransforms: [Float]
   let populationColours: [Float]
+
+  /// Gaussian splat clouds, decoded and checked in OrbisSplatMessage.swift.
+  let splats: SplatMessage
   let skyParams: [Float]
 
   /// Decals: a fixed stride of floats each, and an index per decal into the
@@ -966,6 +971,8 @@ private struct Scene {
     self.decalParams = decalParams
     self.decalImages = decalImages
     self.decalPaths = decalPaths
+    guard let splats = SplatMessage(arguments: arguments) else { return nil }
+    self.splats = splats
   }
 }
 

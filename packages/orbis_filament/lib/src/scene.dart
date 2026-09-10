@@ -14,6 +14,7 @@ import 'volumes.dart';
 import 'package:vector_math/vector_math_64.dart';
 
 import 'population.dart';
+import 'splats.dart';
 
 /// One thing to draw: where it is, what it is made of, and how it behaves
 /// towards light.
@@ -891,6 +892,7 @@ class OrbisScene {
     OrbisFog? fog,
     OrbisPrecipitation? precipitation,
     List<OrbisPopulation>? populations,
+    List<OrbisSplats>? splats,
     List<OrbisMaterial>? materials,
     List<OrbisVideo>? videos,
     OrbisPostProcess? post,
@@ -915,6 +917,7 @@ class OrbisScene {
        videos = videos ?? const [],
        post = post ?? OrbisPostProcess(),
        populations = populations ?? const [],
+       splats = splats ?? const [],
        sky = sky ?? OrbisSky(),
        fog = fog ?? OrbisFog.none,
        precipitation = precipitation ?? OrbisPrecipitation.none;
@@ -930,6 +933,7 @@ class OrbisScene {
   OrbisScene copyWith({
     List<OrbisObject>? objects,
     List<OrbisPopulation>? populations,
+    List<OrbisSplats>? splats,
     List<OrbisLight>? lights,
     List<OrbisMaterial>? materials,
     List<OrbisVideo>? videos,
@@ -955,6 +959,7 @@ class OrbisScene {
     volumes: volumes ?? this.volumes,
     objects: objects ?? this.objects,
     populations: populations ?? this.populations,
+    splats: splats ?? this.splats,
     lights: lights ?? this.lights,
     materials: materials ?? this.materials,
     videos: videos ?? this.videos,
@@ -979,6 +984,13 @@ class OrbisScene {
   /// them would mean either paying an object's price for every tree or losing
   /// an object's individuality for every one that needs it.
   final List<OrbisPopulation> populations;
+
+  /// Clouds of 3D Gaussians: captured places, or generated ones.
+  ///
+  /// Apart from [objects] and [populations] because they are not surfaces.
+  /// They are drawn after everything solid, sorted back to front among
+  /// themselves, and hidden by anything solid in front of them.
+  final List<OrbisSplats> splats;
 
   /// Every light in the scene. A scene with none is lit by its sky alone,
   /// which is dim and even and perfectly legitimate.
@@ -1113,6 +1125,7 @@ class OrbisScene {
   Map<String, Object> toMessage(
     int textureId, {
     Map<int, int>? sentRevisions,
+    Map<int, int>? sentSplatRevisions,
     double? at,
   }) {
     // Volumes are resolved here, where the scene is packed, so that every
@@ -1355,6 +1368,63 @@ class OrbisScene {
       // clock the camera was actually solved on.
       'at': at ?? 0.0,
       ...?_populationMessage(sentRevisions),
+      ...?_splatMessage(sentSplatRevisions),
+    };
+  }
+
+  /// What the renderer needs to know about the splat clouds.
+  ///
+  /// Absent altogether when there are none, so every scene that never uses
+  /// them sends exactly what it sent before. The records of an in-memory
+  /// cloud travel only when its revision is not the one the renderer holds —
+  /// [sent] — for the same reason a population's transforms do.
+  Map<String, Object>? _splatMessage(Map<int, int>? sent) {
+    if (splats.isEmpty) return null;
+
+    final count = splats.length;
+    final keys = Int32List(count);
+    final flags = Int32List(count);
+    final revisions = Int32List(count);
+    final params = Float32List(count * OrbisSplats.stride);
+    final paths = <String>[];
+    final changed = <OrbisSplats>[];
+    var bytes = 0;
+
+    for (var i = 0; i < count; i++) {
+      final cloud = splats[i];
+      keys[i] = cloud.key;
+      flags[i] = cloud.flags;
+      revisions[i] = cloud.revision;
+      cloud.packParams(params, i * OrbisSplats.stride);
+      paths.add(cloud.path ?? '');
+      final data = cloud.data;
+      if (data != null && (sent == null || sent[cloud.key] != cloud.revision)) {
+        changed.add(cloud);
+        bytes += data.length;
+      }
+    }
+
+    final data = Uint8List(bytes);
+    final changedKeys = Int32List(changed.length);
+    final changedCounts = Int32List(changed.length);
+    var at = 0;
+    for (var i = 0; i < changed.length; i++) {
+      final records = changed[i].data!;
+      changedKeys[i] = changed[i].key;
+      changedCounts[i] = changed[i].count;
+      data.setRange(at, at + records.length, records);
+      at += records.length;
+    }
+
+    return {
+      'splatKeys': keys,
+      'splatFlags': flags,
+      'splatRevisions': revisions,
+      'splatParams': params,
+      'splatPaths': paths,
+      'splatChanged': changedKeys,
+      'splatChangedCounts': changedCounts,
+      'splatData': data,
     };
   }
 

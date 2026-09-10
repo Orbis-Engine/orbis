@@ -272,6 +272,29 @@ NS_ASSUME_NONNULL_BEGIN
                  colours:(const float *)colours
                    count:(uint32_t)count;
 
+/// Whether any Gaussian splat clouds are held, so a scene that has just
+/// dropped its last one still gets the call that clears them.
+@property(nonatomic, readonly) BOOL hasSplats;
+
+/// States the scene's Gaussian splat clouds.
+///
+/// Parallel arrays of `count`: the key each is kept against, its flags (bit
+/// one sorts it), its revision, eighteen floats of transform, opacity and
+/// brightness, and a path — empty for a cloud sent in memory. `changed`
+/// names the in-memory clouds whose records are in `data`, packed end to end
+/// in that order, `changedCounts` saying how many 32-byte records each has.
+- (void)applySplats:(const int32_t *)keys
+              flags:(const int32_t *)flags
+          revisions:(const int32_t *)revisions
+             params:(const float *)params
+              paths:(NSArray<NSString *> *)paths
+            changed:(const int32_t *)changed
+      changedCounts:(const int32_t *)changedCounts
+       changedCount:(uint32_t)changedCount
+               data:(const uint8_t *)data
+         dataLength:(size_t)dataLength
+              count:(uint32_t)count;
+
 /// Sets the sky: its gradient, the body in it, its cloud, and its lightning.
 ///
 /// `params` is thirty-one floats, in the order `OrbisSky` packs them: the

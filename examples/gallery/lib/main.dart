@@ -42,6 +42,11 @@
 ///   ORBIS_OUTLINE_WIDTH    how wide the outline is, in pixels
 ///   ORBIS_OUTLINE_HIDDEN   shown, faint, dashed or hidden: the part a wall hides
 ///   ORBIS_AA               off, fxaa or temporal, under the Outline example
+///   ORBIS_SPLAT            a .ply or .splat capture for the Gaussian splats
+///                          example to show instead of its generated ring
+///   ORBIS_SPLAT_COUNT      how many splats the generated ring has
+///   ORBIS_SPLAT_SORT=0     draw them unsorted, to measure what the sort does
+///   ORBIS_SPLAT_PILLAR=0   take the solid pillar out of the ring
 library;
 
 import 'dart:io';
@@ -387,6 +392,18 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       final aa = Platform.environment['ORBIS_AA'];
       if (aa != null && aa.isNotEmpty) {
         example.antiAliasing = AntiAliasing.values.byName(aa);
+      }
+    }
+
+    if (example is SplatsExample) {
+      final capture = Platform.environment['ORBIS_SPLAT'];
+      if (capture != null && capture.isNotEmpty) example.path = capture;
+      example.count = _number('ORBIS_SPLAT_COUNT')?.round() ?? example.count;
+      if (Platform.environment['ORBIS_SPLAT_SORT'] == '0') {
+        example.sorted = false;
+      }
+      if (Platform.environment['ORBIS_SPLAT_PILLAR'] == '0') {
+        example.pillar = false;
       }
     }
 
