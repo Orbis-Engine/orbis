@@ -27,6 +27,7 @@ export 'src/example.dart'
         Setting,
         Toggle,
         ViewPoint;
+export 'src/examples/batching.dart' show BatchingExample;
 export 'src/examples/benchmark.dart' show BenchmarkExample;
 export 'src/examples/blend.dart' show BlendExample;
 export 'src/examples/bounce.dart' show BounceExample;
@@ -38,6 +39,7 @@ export 'src/examples/crowd.dart' show CrowdExample;
 export 'src/examples/day_and_night.dart' show DayAndNightExample;
 export 'src/examples/lights.dart' show LightsExample;
 export 'src/examples/many.dart' show ManyExample;
+export 'src/examples/overdraw.dart' show OverdrawExample;
 export 'src/examples/materials.dart' show MaterialsExample;
 export 'src/examples/meshes.dart' show MeshesExample;
 export 'src/examples/pipeline.dart' show PipelineExample;
@@ -50,6 +52,7 @@ export 'src/examples/weather.dart' show WeatherExample;
 export 'src/examples/surface.dart' show SurfaceExample, linearOf;
 
 import 'src/example.dart';
+import 'src/examples/batching.dart';
 import 'src/examples/benchmark.dart';
 import 'src/examples/blend.dart';
 import 'src/examples/bounce.dart';
@@ -61,6 +64,7 @@ import 'src/examples/day_and_night.dart';
 import 'src/examples/lights.dart';
 import 'src/examples/panel_shadow.dart';
 import 'src/examples/many.dart';
+import 'src/examples/overdraw.dart';
 import 'src/examples/materials.dart';
 import 'src/examples/meshes.dart';
 import 'src/examples/pipeline.dart';
@@ -91,6 +95,8 @@ List<Example> engineExamples() => [
   DayAndNightExample(),
   WeatherExample(),
   ManyExample(),
+  BatchingExample(),
+  OverdrawExample(),
   CrowdExample(),
   CamerasExample(),
   MeshesExample(),

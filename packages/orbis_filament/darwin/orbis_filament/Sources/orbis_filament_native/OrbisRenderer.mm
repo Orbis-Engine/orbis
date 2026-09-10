@@ -92,6 +92,8 @@
 #include "generated/sky_material.h"
 #include "generated/rain_material.h"
 
+#include "OrbisBatching.h"
+
 
 using namespace filament;
 using namespace filament::math;
@@ -108,6 +110,17 @@ struct Mesh {
   filament::gltfio::FilamentAsset *asset = nullptr;
   std::vector<filament::gltfio::FilamentInstance *> all;
   std::vector<filament::gltfio::FilamentInstance *> spare;
+
+  /// What the file's primitives are made of, one per primitive in the order
+  /// the instance walks them, taken from the first copy ever built.
+  ///
+  /// What batched copies wear instead of their own. gltfio gives every copy
+  /// its own material instances — identical ones, from the same file — and
+  /// Filament will only merge two draws that share one, so copies that each
+  /// wear their own are never merged however alike they are. These belong to
+  /// that first copy and live as long as the asset does, which is exactly as
+  /// long as anything can be drawn from it.
+  std::vector<filament::MaterialInstance *> surfaces;
 };
 
 /// The most copies Filament will draw from one renderable.
@@ -302,6 +315,16 @@ struct Drawn {
   /// clearing the override puts the model back the way the file had it.
   /// Empty while nothing has been overridden, which is the usual case.
   std::vector<filament::MaterialInstance *> ownMaterials;
+
+  /// The shared surface a batched placeholder cube is wearing, or null for
+  /// its own. Borrowed from the colour pool rather than owned: the cube's own
+  /// [material] is kept, and its colour kept written, so leaving a batch is
+  /// a pointer swapped back and nothing rebuilt.
+  filament::MaterialInstance *pooled = nullptr;
+
+  /// Whether a batched mesh is wearing the file's shared surfaces (see
+  /// Mesh::surfaces) rather than the ones its own copy came with.
+  bool shared = false;
 
   /// The publish that last mentioned this object. Anything not stamped by the
   /// current one has left the scene.
@@ -869,6 +892,18 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// lights arrive in separate calls.
   uint64_t _objectGeneration;
   uint64_t _lightGeneration;
+
+  /// Whether identical objects are merged into instanced draws. See
+  /// OrbisBatching.h for what that means here and why it is mostly a question
+  /// of what objects are made of.
+  BOOL _batching;
+  orbis::BatchCensus _census;
+  orbis::ColourPool<filament::MaterialInstance> _colourPool;
+
+  /// What the last publish batched: objects in a group large enough to merge,
+  /// and how many groups. Nought while batching is off.
+  uint32_t _batchedObjects;
+  uint32_t _batchGroups;
 
   gltfio::AssetLoader *_assetLoader;
   gltfio::ResourceLoader *_resourceLoader;
@@ -2104,6 +2139,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     // made of it — and the next object to take the instance out draws with a
     // pointer to something destroyed. Which is a crash, and the way to get
     // one is to turn a material off and on again.
+    //
+    // Out of any batch first, or putting it "back" would put it back onto the
+    // file's shared surfaces rather than onto its own.
+    drawn.shared = false;
     if (!drawn.ownMaterials.empty()) {
       [self dress:drawn withMaterial:-1];
       drawn.ownMaterials.clear();
@@ -2125,12 +2164,16 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     _engine->destroy(drawn.material);
     drawn.material = nullptr;
   }
+  // Borrowed, so only forgotten. The pool lets it go once nobody asks.
+  drawn.pooled = nullptr;
 }
 
 /// Empties the scene of everything a host put in it.
 - (void)removeEverything {
   for (auto &pair : _drawn) [self recycle:pair.second];
   _drawn.clear();
+  // After the objects, which were the only things wearing these.
+  _colourPool.clear([self](MaterialInstance *spent) { _engine->destroy(spent); });
 
   auto &entities = utils::EntityManager::get();
   for (auto &pair : _lit) {
@@ -2205,6 +2248,21 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     Mesh *mesh = [self meshAtPath:path];
     if (mesh != nullptr) drawn.instance = [self takeInstanceOf:mesh];
     if (drawn.instance != nullptr) {
+      // The first copy ever built says what the file's primitives are made
+      // of, for batched copies to share. Taken here, before anything can have
+      // dressed it: a copy out of the pool has already been put back onto its
+      // own surfaces by `recycle`.
+      if (mesh->surfaces.empty()) {
+        auto &renderables = _engine->getRenderableManager();
+        const utils::Entity *entities = drawn.instance->getEntities();
+        for (size_t i = 0; i < drawn.instance->getEntityCount(); i++) {
+          auto renderable = renderables.getInstance(entities[i]);
+          if (!renderable) continue;
+          for (size_t p = 0; p < renderables.getPrimitiveCount(renderable); p++) {
+            mesh->surfaces.push_back(renderables.getMaterialInstanceAt(renderable, p));
+          }
+        }
+      }
       _scene->addEntities(drawn.instance->getEntities(),
                           drawn.instance->getEntityCount());
       return;
@@ -2854,6 +2912,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       [self bindFieldTo:entry.second.material];
     }
   }
+  // The batched cubes' shared surfaces are lit surfaces too. Left out, a
+  // batched crate would read no bounced light, and batching would be visible.
+  _colourPool.forEach([self](MaterialInstance *shared) { [self bindFieldTo:shared]; });
   for (auto &entry : _materials) {
     if (entry.second.instance == nullptr) continue;
     if ((entry.second.flags & 3) != 0) continue;
@@ -4740,9 +4801,21 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     const utils::Entity *entities = drawn.instance->getEntities();
     const size_t entityCount = drawn.instance->getEntityCount();
 
+    // A batched copy with no material of its own named wears the file's
+    // shared surfaces rather than its own identical ones, which is the only
+    // thing that lets Filament merge it with the others.
+    const std::vector<MaterialInstance *> *sharing = nullptr;
+    if (instance == nullptr && drawn.shared) {
+      auto found = _meshes.find(drawn.path);
+      if (found != _meshes.end() && !found->second.surfaces.empty()) {
+        sharing = &found->second.surfaces;
+      }
+    }
+
     // The file's own materials, kept the first time one is overridden. Every
-    // primitive in order, so putting them back is the same walk.
-    if (instance != nullptr && drawn.ownMaterials.empty()) {
+    // primitive in order, so putting them back is the same walk. Sharing is
+    // an override like any other as far as putting things back goes.
+    if ((instance != nullptr || sharing != nullptr) && drawn.ownMaterials.empty()) {
       for (size_t i = 0; i < entityCount; i++) {
         auto renderable = renderableManager.getInstance(entities[i]);
         if (!renderable) continue;
@@ -4759,6 +4832,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       if (!renderable) continue;
       for (size_t p = 0; p < renderableManager.getPrimitiveCount(renderable); p++) {
         MaterialInstance *chosen = instance;
+        if (chosen == nullptr && sharing != nullptr && slot < sharing->size()) {
+          chosen = (*sharing)[slot];
+        }
         if (chosen == nullptr) {
           if (slot >= drawn.ownMaterials.size()) { slot++; continue; }
           chosen = drawn.ownMaterials[slot];
@@ -4776,8 +4852,11 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   auto renderable = renderableManager.getInstance(drawn.entity);
   if (!renderable) return;
   // No material named: back to the object's own instance, which is what its
-  // colour is written into.
-  MaterialInstance *chosen = instance != nullptr ? instance : drawn.material;
+  // colour is written into — or, batched, to the one surface every cube of
+  // that exact colour shares.
+  MaterialInstance *chosen = instance != nullptr ? instance
+                             : drawn.pooled != nullptr ? drawn.pooled
+                                                       : drawn.material;
   if (chosen != nullptr) {
     renderableManager.setMaterialInstanceAt(renderable, 0, chosen);
   }
@@ -4803,6 +4882,33 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   auto &transformManager = _engine->getTransformManager();
   NSMutableDictionary<NSString *, NSString *> *notes =
       [NSMutableDictionary dictionary];
+
+  // Who is like whom, counted before anything is built, because whether one
+  // object batches depends on how many others share its key. A morphing
+  // object is never merged — Filament refuses to merge anything with morph
+  // targets, and its weights are its own — and a hidden one is not drawn, so
+  // neither is counted.
+  //
+  // Models are left out unless ORBIS_BATCH_MESHES=1 asks for them. Their
+  // sharing works — the copies wear the file's shared surfaces and Filament
+  // merges them — but with a shadow pass and post-processing both on, a
+  // scene of batched models came back entirely black, and so did two scenes
+  // with Filament's merging on and nothing of Orbis's grouped at all. It is
+  // Filament's merging that goes wrong, not what is merged, and until that
+  // is found only the placeholder cube, which every scene tested draws
+  // identically, is batched. See OrbisBatching.h.
+  static const bool batchMeshes = getenv("ORBIS_BATCH_MESHES") != nullptr;
+  _census.clear();
+  if (_batching) {
+    for (uint32_t i = 0; i < count; i++) {
+      const bool eligible = morphCounts[i] <= 0 && (flags[i] & kVisible) != 0 &&
+                            (meshes[i] < 0 || batchMeshes);
+      _census.add(orbis::BatchCensus::keyFor(meshes[i], materials[i],
+                                             colours + i * 3, flags[i],
+                                             meshes[i] < 0 && materials[i] < 0),
+                  eligible);
+    }
+  }
 
   for (uint32_t i = 0; i < count; i++) {
     std::string path;
@@ -4883,7 +4989,32 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     const bool remade = wearing >= 0 &&
                         wearing < static_cast<int32_t>(_materialRebuilt.size()) &&
                         _materialRebuilt[wearing];
-    if (wearing != drawn.surface || remade) {
+
+    // Batched: what it would otherwise wear alone, it now shares. An object
+    // wearing a named material already shares that material's one instance
+    // with everything else made of it, so there is nothing to do for it —
+    // it merges once the engine is told to merge.
+    MaterialInstance *pooled = nullptr;
+    bool shared = false;
+    if (_census.batches(i) && wearing < 0) {
+      if (drawn.material != nullptr) {
+        pooled = _colourPool.take(colours + i * 3, generation,
+                                  [self](const float *colour) {
+          MaterialInstance *made = [self surfaceAt:0]->createInstance();
+          [self setDefaultsOn:made];
+          made->setParameter("baseColor",
+                             float4{colour[0], colour[1], colour[2], 1.0f});
+          return made;
+        });
+      } else if (drawn.instance != nullptr) {
+        shared = true;
+      }
+    }
+    const bool regrouped = pooled != drawn.pooled || shared != drawn.shared;
+    drawn.pooled = pooled;
+    drawn.shared = shared;
+
+    if (wearing != drawn.surface || remade || regrouped) {
       drawn.surface = wearing;
       [self dress:drawn withMaterial:wearing];
     }
@@ -4911,10 +5042,59 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     it = _drawn.erase(it);
   }
 
+  // Shared surfaces nobody asked for this time. After every object has been
+  // re-dressed and every departed one recycled, so nothing still wears them.
+  _colourPool.sweep(generation,
+                    [self](MaterialInstance *spent) { _engine->destroy(spent); });
+  _batchedObjects = _batching ? _census.batchedObjects() : 0;
+  _batchGroups = _batching ? _census.batchGroups() : 0;
+
+  // Filament's merging only while something here has actually been made to
+  // share. It is engine-wide and it is not neutral: with it switched on and
+  // nothing grouped, two of the gallery's scenes (Panel shadows, and the
+  // thousand objects) came back entirely black, sky included — Filament
+  // merging something of its own that Orbis never asked it to. A scene with
+  // nothing to batch therefore runs exactly as it would with batching off.
+  //
+  // ORBIS_FORCE_INSTANCING=1 switches it on whenever batching is, grouped or
+  // not, which is how that failure is reproduced.
+  static const bool forced = getenv("ORBIS_FORCE_INSTANCING") != nullptr;
+  const bool merging = _batching && (_batchGroups > 0 || forced);
+  if (merging != _engine->isAutomaticInstancingEnabled()) {
+    _engine->setAutomaticInstancingEnabled(merging);
+  }
+
   [self sweepUnnamedMeshes];
 
   _objectNotes = notes;
   _sceneIsOwnedByHost = true;
+}
+
+/// Whether identical objects are merged into instanced draws.
+///
+/// Two halves, and both are needed. Filament's own automatic instancing
+/// merges consecutive draws that use the same geometry and the same material
+/// instance, carrying each copy's transform in a per-instance block — and
+/// `applyObjects` is what makes identical objects actually share an instance.
+/// Either without the other does nothing.
+///
+/// Engine-wide in Filament; every viewport here has its own engine, so it is
+/// this viewport's setting and nobody else's.
+- (void)setBatching:(BOOL)enabled {
+  if (_disposed || _engine == nullptr) return;
+  if (enabled == _batching) return;
+  _batching = enabled;
+  // Switched off at once; switched on only by `applyObjects`, and only once
+  // it has found something to merge.
+  if (!enabled) _engine->setAutomaticInstancingEnabled(false);
+}
+
+- (uint32_t)batchedObjects {
+  return _batchedObjects;
+}
+
+- (uint32_t)batchGroups {
+  return _batchGroups;
 }
 
 /// Drops the geometry of any file no object names any more.
@@ -6478,6 +6658,17 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     // anybody would use it for.
     NSLog(@"[orbis] frame %d: cpu %.2f ms, gpu %.2f ms (median of recent)",
           _frameCount, [self cpuMilliseconds], [self gpuMilliseconds]);
+    // What batching did, beside what the frame cost, so the two can be read
+    // against each other in one log. Renderables are what Filament culls and
+    // sorts one at a time; the groups are what each pass is left drawing for
+    // the batched objects if every group merges completely. Filament merges
+    // only draws that land next to each other after it sorts by depth, so the
+    // real count sits between the groups and the objects — this is the
+    // ceiling on the saving, not a measurement of it.
+    NSLog(@"[orbis] batching %s: %zu renderables, %u objects batched into "
+          @"%u groups (%zu shared colour surfaces)",
+          _batching ? "on" : "off", _scene->getRenderableCount(),
+          _batchedObjects, _batchGroups, _colourPool.size());
     _surface->writeFrame(_presentedIndex);
   }
 }

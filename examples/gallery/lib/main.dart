@@ -28,6 +28,25 @@
 ///   ORBIS_BOUNCE_RADIUS    how far it looks, in metres
 ///   ORBIS_BOUNCE_THICKNESS how solid the depth buffer's surfaces are
 ///   ORBIS_BOUNCE_SLICES    how many directions each pixel fans along
+///   ORBIS_BATCHING=0/1     batching off or on, for any example, so the same
+///                          frame can be drawn both ways and compared
+///   ORBIS_CRATES           how many crates the Batching example draws
+///   ORBIS_PALETTE          its colours: One, Six or Every one
+///   ORBIS_BATCH_MATERIAL=1 its crates made of one shared material
+///   ORBIS_BATCH_MESH       a .glb for its crates, instead of the cube
+///   ORBIS_MOVING=0         hold its turning crate still
+///   ORBIS_PREPASS=0/1      the depth prepass off or on, for any example
+///   ORBIS_SLABS            how many slabs the Depth prepass example crosses
+///   ORBIS_SHADOWS=0        no shadow pass, for any example
+///   ORBIS_POST=0           no post-processing, for any example
+///   ORBIS_FORCE_INSTANCING=1  (read by the renderer) Filament's automatic
+///                          instancing on whenever batching is, even with
+///                          nothing grouped — reproduces the black frames it
+///                          causes on some scenes; see OrbisBatching.h
+///   ORBIS_DUMP_NAME        the file a dumped frame is written to, inside the
+///                          app's own temporary directory; every copy of the
+///                          gallery shares that directory, so two runs at once
+///                          otherwise overwrite one orbis_frame.png
 library;
 
 import 'dart:io';
@@ -224,7 +243,27 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
   /// environment asked for.
   OrbisScene _underEffect(OrbisScene scene) {
     final graph = _effectGraph();
-    return graph == null ? scene : scene.copyWith(graph: graph);
+    final drawn = graph == null ? scene : scene.copyWith(graph: graph);
+    // Batching forced one way or the other, over whatever the example chose,
+    // so one frame can be drawn both ways and the two compared pixel by pixel.
+    // The prepass the same way. The pipeline is the example's own and is
+    // built afresh for every frame, so setting it here cannot leak into the
+    // next one.
+    if (Platform.environment['ORBIS_SHADOWS'] == '0') {
+      drawn.pipeline.shadows.enabled = false;
+    }
+    if (Platform.environment['ORBIS_POST'] == '0') drawn.post.enabled = false;
+    switch (Platform.environment['ORBIS_PREPASS']) {
+      case '1':
+        drawn.pipeline.depthPrepass = true;
+      case '0':
+        drawn.pipeline.depthPrepass = false;
+    }
+    return switch (Platform.environment['ORBIS_BATCHING']) {
+      '1' => drawn.copyWith(batching: true),
+      '0' => drawn.copyWith(batching: false),
+      _ => drawn,
+    };
   }
 
   /// One model, one light, and whatever graph was asked for.
@@ -313,6 +352,19 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       example.intensity = _number('ORBIS_FIELD') ?? example.intensity;
       example.retention = _number('ORBIS_RETENTION') ?? example.retention;
       if (Platform.environment['ORBIS_FIELD_OFF'] == '1') example.on = false;
+    }
+    if (example is BatchingExample) {
+      example.count = _number('ORBIS_CRATES') ?? example.count;
+      example.palette = Platform.environment['ORBIS_PALETTE'] ?? example.palette;
+      if (Platform.environment['ORBIS_BATCH_MATERIAL'] == '1') {
+        example.material = true;
+      }
+      final mesh = Platform.environment['ORBIS_BATCH_MESH'];
+      if (mesh != null && mesh.isNotEmpty) example.mesh = mesh;
+      if (Platform.environment['ORBIS_MOVING'] == '0') example.moving = false;
+    }
+    if (example is OverdrawExample) {
+      example.slabs = _number('ORBIS_SLABS') ?? example.slabs;
     }
     if (example is BounceExample) {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;

@@ -191,6 +191,11 @@ private final class Viewport {
   /// numbers per pass, in the order they ran.
   var passTimings: [NSNumber] { engine.sync { self.renderer.passTimings } }
 
+  /// What the last scene batched: objects merged, and into how many groups.
+  var batching: [UInt32] {
+    engine.sync { [self.renderer.batchedObjects, self.renderer.batchGroups] }
+  }
+
   func start() {
     clock.start { [weak self] in self?.tick() }
   }
@@ -291,6 +296,10 @@ private final class Viewport {
           names: scene.graphTargetNames)
       }
     }
+
+    // Before the objects, because it is while they are reconciled that it is
+    // decided which of them share what they are made of.
+    renderer.setBatching(scene.batching)
 
     // Videos before materials before objects, each because the next one may
     // point at it and a thing that does not exist yet reads as a thing that
@@ -545,6 +554,10 @@ private struct Scene {
   let precipitationEnabled: Bool
   let precipitationParams: [Float]
   let skyEnabled: Bool
+  /// Whether identical objects are merged into instanced draws. Optional on
+  /// the wire and off when absent, so a host that has never heard of it
+  /// draws exactly as it did.
+  let batching: Bool
 
   /// Everything done to the image after the scene is drawn.
   ///
@@ -839,6 +852,7 @@ private struct Scene {
     self.orthographic = orthographic
     self.viewHeight = Float(viewHeight)
     self.skyParams = skyParams
+    self.batching = arguments["batching"] as? Bool ?? false
 
     // Absent when a scene has none, which is every scene that never uses
     // them — so this stays optional rather than being required of everybody.
@@ -1029,6 +1043,7 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
       result([
         "gpuMilliseconds": viewport.gpuMilliseconds,
         "passTimings": viewport.passTimings,
+        "batching": viewport.batching,
       ])
 
     case "dispose":

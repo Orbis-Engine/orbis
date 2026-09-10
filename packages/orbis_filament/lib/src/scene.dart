@@ -896,6 +896,7 @@ class OrbisScene {
     OrbisEnvironment? environment,
     List<OrbisProbe>? probes,
     OrbisField? field,
+    this.batching = false,
   }) : lights = lights ?? const [],
        probes = probes ?? const [],
        field = field ?? OrbisField.none,
@@ -932,7 +933,9 @@ class OrbisScene {
     OrbisPostProcess? post,
     OrbisRenderGraph? graph,
     OrbisEnvironment? environment,
+    bool? batching,
   }) => OrbisScene(
+    batching: batching ?? this.batching,
     objects: objects ?? this.objects,
     populations: populations ?? this.populations,
     lights: lights ?? this.lights,
@@ -1028,6 +1031,33 @@ class OrbisScene {
   /// Off by default, and free when off: a scene that never mentions one is
   /// lit exactly as it was.
   final OrbisField field;
+
+  /// Whether objects that are the same thing are drawn together.
+  ///
+  /// A hundred crates with one mesh, one material and the same shadow and
+  /// layer settings are a hundred draws per pass without this, and far fewer
+  /// with it: they are made to share what they are made of, and the renderer
+  /// merges their draws into instanced ones, each copy carrying its own
+  /// transform. Nothing about the objects changes — each is still its own
+  /// entry in [objects] with its own key, moving one moves only that one, and
+  /// picking still answers with the one that was clicked.
+  ///
+  /// What batches is decided per publish, by counting. Four or more objects
+  /// with the same [OrbisObject.mesh], the same [OrbisObject.material] and the
+  /// same flags form a group; a placeholder cube on the default surface also
+  /// needs the same [OrbisObject.colour], because on that surface the colour
+  /// *is* the material. An object with [OrbisObject.morphWeights] never
+  /// batches, because its shape is its own.
+  ///
+  /// The saving is in draw calls, not in objects: the renderer still culls
+  /// and sorts every object on its own, and merges what lands next to each
+  /// other once they are sorted by distance. It helps most where many small
+  /// identical things are close together, and does nothing for a scene where
+  /// every object is different.
+  ///
+  /// Off by default until it has been shown to draw exactly the same picture
+  /// on every example; see the Batching example for how that was measured.
+  final bool batching;
 
   /// The highest layer an object may be on.
   ///
@@ -1207,6 +1237,7 @@ class OrbisScene {
       'objectMorphWeights': morphWeights,
       'meshPaths': paths,
       'objectMaterials': objectMaterials,
+      'batching': batching,
       'materialKeys': materialKeys,
       'materialFlags': materialFlags,
       'materialParams': materialParams,

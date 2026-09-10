@@ -103,8 +103,18 @@ class AppleSurface final : public OrbisSurface {
 
     // The application is sandboxed, so this goes to its own temporary
     // directory rather than anywhere a caller might name.
-    NSString* where =
-        [NSTemporaryDirectory() stringByAppendingPathComponent:@"orbis_frame.png"];
+    //
+    // ORBIS_DUMP_NAME picks the file within it. Every copy of the gallery
+    // shares one container, so two runs on one machine — two worktrees, or
+    // one comparison running while somebody else draws a frame — otherwise
+    // write the same file, and a with/without comparison ends up measuring
+    // somebody else's scene. Only the last component is used, so it cannot
+    // reach outside the directory.
+    const char* named = getenv("ORBIS_DUMP_NAME");
+    NSString* file = named != nullptr && named[0] != '\0'
+                         ? [@(named) lastPathComponent]
+                         : @"orbis_frame.png";
+    NSString* where = [NSTemporaryDirectory() stringByAppendingPathComponent:file];
     const char* path = where.UTF8String;
 
     CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
