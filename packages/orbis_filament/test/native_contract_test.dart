@@ -55,6 +55,9 @@ void main() {
       'precipitation': (OrbisPrecipitation.stride, 'precipitationStride', null),
       'the sky': (OrbisSky.stride, 'skyStride', null),
       'a decal': (OrbisDecal.stride, 'decalStride', 'kDecalStride'),
+      // The renderer's side of this one is in the outline's own header,
+      // checked below, because the outline lives in plain C++ of its own.
+      'an outline': (OrbisOutline.stride, 'outlineStride', null),
     };
 
     contract.forEach((what, agreed) {
@@ -88,6 +91,44 @@ void main() {
     ).firstMatch(native);
     expect(found, isNotNull, reason: 'OrbisDecals.h no longer says');
     expect(int.parse(found!.group(1)!), OrbisDecal.budget);
+  });
+
+  group('the outline', () {
+    final header = _read(
+      'darwin/orbis_filament/Sources/orbis_filament_native/OrbisOutline.h',
+    );
+
+    test('reads as many settings as Dart packs', () {
+      expect(
+        _nativeValue(header, 'kOutlineParams'),
+        OrbisOutline.stride,
+        reason:
+            'Dart packs ${OrbisOutline.stride} floats for an outline and the '
+            'renderer reads a different number',
+      );
+    });
+
+    test('numbers the hidden styles as Dart does', () {
+      for (final style in OrbisOccluded.values) {
+        expect(
+          RegExp(
+            r'\b' + style.name + r'\s*=\s*' + '${style.index}' + r'\b',
+          ).hasMatch(header),
+          isTrue,
+          reason:
+              '${style.name} is ${style.index} in Dart and not in the '
+              "renderer's Occluded",
+        );
+      }
+    });
+
+    test('is compiled into the CocoaPods build as well as SwiftPM', () {
+      // SwiftPM compiles every file in the target's directory; CocoaPods only
+      // the extensions it is told. A .cpp it is not told about is a link
+      // error in one build system and a working app in the other.
+      final podspec = _read('darwin/orbis_filament.podspec');
+      expect(podspec, contains('cpp'));
+    });
   });
 }
 

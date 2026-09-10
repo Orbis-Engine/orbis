@@ -37,6 +37,11 @@
 ///   ORBIS_DECAL_ONLY       paint only that one of them, counting from 0
 ///   ORBIS_DECAL_FADE_OFF=1 turn their angle fade off
 ///   ORBIS_DECAL_MASK_OFF=1 let the paint splash reach the crate's layer
+///   ORBIS_OUTLINE=0        the Outline example with nothing outlined
+///   ORBIS_OUTLINE_OTHERS=0 outline only the active object
+///   ORBIS_OUTLINE_WIDTH    how wide the outline is, in pixels
+///   ORBIS_OUTLINE_HIDDEN   shown, faint, dashed or hidden: the part a wall hides
+///   ORBIS_AA               off, fxaa or temporal, under the Outline example
 library;
 
 import 'dart:io';
@@ -366,6 +371,22 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
           'skyColour=${three(seen.sky.colour)} '
           'shutter=${seen.camera.shutterSpeed.toStringAsFixed(6)}',
         );
+      }
+    }
+
+    if (example is OutlineExample) {
+      if (Platform.environment['ORBIS_OUTLINE'] == '0') example.on = false;
+      if (Platform.environment['ORBIS_OUTLINE_OTHERS'] == '0') {
+        example.others = false;
+      }
+      example.width = _number('ORBIS_OUTLINE_WIDTH') ?? example.width;
+      final hidden = Platform.environment['ORBIS_OUTLINE_HIDDEN'];
+      if (hidden != null && hidden.isNotEmpty) {
+        example.occluded = OrbisOccluded.values.byName(hidden);
+      }
+      final aa = Platform.environment['ORBIS_AA'];
+      if (aa != null && aa.isNotEmpty) {
+        example.antiAliasing = AntiAliasing.values.byName(aa);
       }
     }
 

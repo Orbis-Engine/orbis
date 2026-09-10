@@ -22,6 +22,7 @@ export 'src/material.dart'
         OrbisWrap;
 export 'src/environment.dart' show OrbisEnvironment, OrbisProbe;
 export 'src/field.dart' show OrbisField;
+export 'src/outline.dart' show OrbisOccluded, OrbisOutline;
 export 'src/graph.dart'
     show
         OrbisFrameCapture,

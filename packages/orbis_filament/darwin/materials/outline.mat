@@ -1,0 +1,103 @@
+// The selection outline, pass two: the nearest row, and the edge drawn over
+// the finished frame.
+//
+// Reads what the rows pass found — for each pixel, how far along its row the
+// nearest outlined pixel of each kind is — and looks up and down the column
+// for the nearest of those, which makes the distance Euclidean. A pixel within
+// the outline's width of a silhouette and not on one is outline.
+//
+// Drawn straight over the picture the frame has already presented, after tone
+// mapping and after anti-aliasing. That is deliberate twice over. The colour
+// arrives as a display colour and lands as exactly that colour, with no curve
+// bending an orange into a brown. And the outline never enters the temporal
+// anti-aliasing's history, which would smear it across frames and make it
+// crawl whenever the camera moved.
+material {
+    name : orbisOutline,
+    shadingModel : unlit,
+    vertexDomain : device,
+    requires : [ uv0 ],
+    // Over the frame, not instead of it. Premultiplied, like everything
+    // Filament blends.
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    parameters : [
+        { type : sampler2d, name : rows, precision : high },
+        { type : int, name : reach },
+        // How wide, in pixels. Fractional widths give a soft outer pixel.
+        { type : float, name : width },
+        // Display colours, straight alpha: the active object's and the rest.
+        { type : float4, name : primaryColour },
+        { type : float4, name : otherColour },
+        // How much of the edge survives where the object is hidden, and the
+        // length of a dash there in pixels — nought for a continuous line.
+        { type : float, name : hiddenOpacity },
+        { type : float, name : dash }
+    ]
+}
+
+fragment {
+    #define ORBIS_MOST_REACH 18
+
+    // Source-over, with the source given straight and the result kept
+    // premultiplied.
+    vec4 over(vec4 under, vec4 colour, float amount) {
+        float a = colour.a * amount;
+        return vec4(colour.rgb * a, a) + under * (1.0 - a);
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        ivec2 size = textureSize(materialParams_rows, 0);
+        vec2 at = getUV0() * vec2(size);
+        ivec2 here = clamp(ivec2(at), ivec2(0), size - 1);
+        int reach = min(materialParams.reach, ORBIS_MOST_REACH);
+
+        // Squared distances, so the column search is additions and one root
+        // at the end rather than a root per tap.
+        vec4 nearest = vec4(1e8);
+        for (int dy = -ORBIS_MOST_REACH; dy <= ORBIS_MOST_REACH; dy++) {
+            if (abs(dy) > reach) continue;
+            int y = here.y + dy;
+            if (y < 0 || y >= size.y) continue;
+            vec4 along = texelFetch(materialParams_rows, ivec2(here.x, y), 0);
+            nearest = min(nearest, along * along + vec4(float(dy * dy)));
+        }
+        vec4 away = sqrt(nearest);
+
+        // On a silhouette of any kind is not outline. That includes the
+        // hidden part of a selected object: the edge goes round the whole
+        // shape, not along the line where a wall happens to cut across it.
+        float inside = min(min(away.x, away.y), min(away.z, away.w));
+        if (inside < 0.5) {
+            material.baseColor = vec4(0.0);
+            return;
+        }
+
+        // Fully covered out to the width, then one pixel of falloff — which
+        // is what rounds the corners rather than leaving them stepped.
+        vec4 cover = clamp(vec4(materialParams.width + 1.0) - away, 0.0, 1.0);
+
+        // Hidden parts fainter, and dashed if asked. The dashes run
+        // diagonally in screen space, so they read as a pattern on any edge
+        // direction and stand still while the object does.
+        float dashOn = 1.0;
+        if (materialParams.dash > 0.0) {
+            float phase = fract((at.x + at.y) / (2.0 * materialParams.dash));
+            dashOn = phase < 0.5 ? 1.0 : 0.0;
+        }
+        cover.zw *= materialParams.hiddenOpacity * dashOn;
+
+        // Least important first, so the brightest edge ends up on top: a
+        // visible edge is never dimmed by a hidden one behind it.
+        vec4 colour = vec4(0.0);
+        colour = over(colour, materialParams.otherColour, cover.w);
+        colour = over(colour, materialParams.primaryColour, cover.z);
+        colour = over(colour, materialParams.otherColour, cover.y);
+        colour = over(colour, materialParams.primaryColour, cover.x);
+        material.baseColor = colour;
+    }
+}
