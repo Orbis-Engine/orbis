@@ -7,6 +7,7 @@ import 'graph.dart';
 import 'pipeline.dart';
 import 'video.dart';
 import 'post.dart';
+import 'volumes.dart';
 
 import 'package:vector_math/vector_math_64.dart';
 
@@ -896,8 +897,10 @@ class OrbisScene {
     OrbisEnvironment? environment,
     List<OrbisProbe>? probes,
     OrbisField? field,
+    List<OrbisEnvironmentVolume>? volumes,
   }) : lights = lights ?? const [],
        probes = probes ?? const [],
+       volumes = volumes ?? const [],
        field = field ?? OrbisField.none,
        environment = environment ?? OrbisEnvironment.none,
        pipeline = pipeline ?? OrbisPipeline(),
@@ -932,7 +935,16 @@ class OrbisScene {
     OrbisPostProcess? post,
     OrbisRenderGraph? graph,
     OrbisEnvironment? environment,
+    List<OrbisProbe>? probes,
+    OrbisField? field,
+    List<OrbisEnvironmentVolume>? volumes,
   }) => OrbisScene(
+    // The probes and the field used to be missing here, so any copy quietly
+    // dropped them. Resolving the volumes copies every scene that has any,
+    // which is how it was noticed.
+    probes: probes ?? this.probes,
+    field: field ?? this.field,
+    volumes: volumes ?? this.volumes,
     objects: objects ?? this.objects,
     populations: populations ?? this.populations,
     lights: lights ?? this.lights,
@@ -1029,6 +1041,29 @@ class OrbisScene {
   /// lit exactly as it was.
   final OrbisField field;
 
+  /// The regions of the world that look different from the rest of it — a
+  /// dim hall off a sunny courtyard, a foggy cave.
+  ///
+  /// Resolved against [camera] when the scene is sent: the fog, sky,
+  /// environment, exposure and grade that go over the channel are this
+  /// scene's own, moved towards whatever the volumes around the camera ask
+  /// for. The renderer never sees a volume, so none of this is native code.
+  /// See [resolved] for the scene that is actually drawn.
+  final List<OrbisEnvironmentVolume> volumes;
+
+  /// This scene as it looks from [at] — the camera's position unless said
+  /// otherwise — with every volume applied and none left in it.
+  ///
+  /// What [toMessage] sends. Public because a host wants to ask the same
+  /// question: what the fog is where the player is standing, to decide
+  /// whether to play the echoey footsteps.
+  OrbisScene resolved([Vector3? at]) {
+    if (volumes.isEmpty) return this;
+    return OrbisEnvironmentSettings.of(
+      this,
+    ).resolve(volumes, at ?? camera.position).applyTo(this);
+  }
+
   /// The highest layer an object may be on.
   ///
   /// Seven of them, because the renderer's own mask is eight bits and the
@@ -1054,6 +1089,17 @@ class OrbisScene {
     Map<int, int>? sentRevisions,
     double? at,
   }) {
+    // Volumes are resolved here, where the scene is packed, so that every
+    // host gets them without calling anything and the message stays the
+    // shape the renderer already reads.
+    if (volumes.isNotEmpty) {
+      return resolved().toMessage(
+        textureId,
+        sentRevisions: sentRevisions,
+        at: at,
+      );
+    }
+
     final count = objects.length;
     final keys = Int64List(count);
     final transforms = Float32List(count * 16);

@@ -41,6 +41,12 @@ export 'src/pipeline.dart'
         OrbisShadows;
 export 'src/population.dart' show OrbisFade, OrbisPopulation;
 export 'src/video.dart' show OrbisVideo;
+export 'src/volumes.dart'
+    show
+        OrbisEnvironmentOverrides,
+        OrbisEnvironmentSettings,
+        OrbisEnvironmentVolume,
+        OrbisVolumeShape;
 export 'src/post.dart'
     show
         AntiAliasing,
