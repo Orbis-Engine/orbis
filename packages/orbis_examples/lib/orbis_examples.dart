@@ -40,8 +40,10 @@ export 'src/examples/lights.dart' show LightsExample;
 export 'src/examples/many.dart' show ManyExample;
 export 'src/examples/materials.dart' show MaterialsExample;
 export 'src/examples/meshes.dart' show MeshesExample;
+export 'src/examples/panel_shadow.dart' show PanelShadowExample;
 export 'src/examples/pipeline.dart' show PipelineExample;
 export 'src/examples/probes.dart' show ProbesExample;
+export 'src/examples/shadows.dart' show ShadowLight, ShadowsExample;
 export 'src/examples/runner.dart' show RunnerExample;
 export 'src/examples/post.dart' show PostExample;
 export 'src/examples/video.dart' show VideoExample;
@@ -60,6 +62,7 @@ import 'src/examples/crowd.dart';
 import 'src/examples/day_and_night.dart';
 import 'src/examples/lights.dart';
 import 'src/examples/panel_shadow.dart';
+import 'src/examples/shadows.dart';
 import 'src/examples/many.dart';
 import 'src/examples/materials.dart';
 import 'src/examples/meshes.dart';
@@ -85,6 +88,7 @@ List<Example> engineExamples() => [
   SurfaceExample(),
   LightsExample(),
   PanelShadowExample(),
+  ShadowsExample(),
   ProbesExample(),
   BounceExample(),
   FieldExample(),

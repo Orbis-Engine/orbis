@@ -50,6 +50,23 @@ void main() {
       'the sky': (OrbisSky.stride, 'skyStride', null),
     };
 
+    // The pipeline block is passed through by the plugin unchecked, and its
+    // offsets are named in the shadows code rather than the renderer — so it
+    // is compared there. A block one float short reads a zero where a dial
+    // should be, which for the contact distance is a shadow traced nowhere.
+    test('the pipeline is ${OrbisPipeline.stride} wide everywhere', () {
+      final shadows = _read(
+        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisShadows.h',
+      );
+      expect(
+        _nativeValue(shadows, 'kPipelineStride'),
+        OrbisPipeline.stride,
+        reason:
+            'Dart packs ${OrbisPipeline.stride} floats for the pipeline and '
+            'the renderer names a different number of offsets',
+      );
+    });
+
     contract.forEach((what, agreed) {
       final (dart, swiftName, nativeName) = agreed;
 
