@@ -56,6 +56,20 @@ NS_ASSUME_NONNULL_BEGIN
                paths:(NSArray<NSString *> *)paths
                count:(uint32_t)count;
 
+/// Whether identical objects are drawn as one instanced draw.
+///
+/// Objects with the same mesh, the same material (and, for the placeholder
+/// cube, the same colour) and the same shadow and layer flags are made to
+/// share one material instance, and Filament's automatic instancing merges
+/// their draws. They stay separate objects: a transform written to one moves
+/// that one. Set before `applyObjects`, which is where the sharing is decided.
+- (void)setBatching:(BOOL)enabled;
+
+/// What the last `applyObjects` batched: objects in groups large enough to
+/// merge, and how many such groups there were. Nought while batching is off.
+@property(nonatomic, readonly) uint32_t batchedObjects;
+@property(nonatomic, readonly) uint32_t batchGroups;
+
 /// States what every material in the scene is made of.
 ///
 /// Published whole each frame like everything else, and keyed the same way:

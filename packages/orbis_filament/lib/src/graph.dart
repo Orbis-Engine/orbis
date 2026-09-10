@@ -647,19 +647,42 @@ class OrbisPassTiming {
 /// the three a fixed pipeline cannot answer without being instrumented by
 /// hand every time somebody asks.
 class OrbisFrameCapture {
-  const OrbisFrameCapture({this.passes = const [], this.milliseconds = 0});
+  const OrbisFrameCapture({
+    this.passes = const [],
+    this.milliseconds = 0,
+    this.batchedObjects = 0,
+    this.batchGroups = 0,
+  });
 
   final List<OrbisPassTiming> passes;
 
   /// What the whole frame cost.
   final double milliseconds;
 
+  /// How many objects the last publish put into a group big enough to merge.
+  ///
+  /// Nought with [OrbisScene.batching] off, and nought with it on in a scene
+  /// where nothing is repeated. It counts objects rather than draws saved,
+  /// because the two are not the same number: Filament merges only the draws
+  /// that land next to each other once it has sorted them, so a group of
+  /// forty may come out as one draw or as three.
+  final int batchedObjects;
+
+  /// How many such groups there were — one draw each if every group merges
+  /// whole, so [batchedObjects] minus this is the ceiling on the draws saved.
+  final int batchGroups;
+
   /// Reads a capture out of what the renderer sent back.
   ///
   /// Two floats per pass — what it cost and how many draws it made — in the
   /// order the passes were scheduled, so the names come from this side rather
   /// than crossing as strings sixty times a second.
-  factory OrbisFrameCapture.from(Float32List packed, List<String> names) {
+  factory OrbisFrameCapture.from(
+    Float32List packed,
+    List<String> names, {
+    int batchedObjects = 0,
+    int batchGroups = 0,
+  }) {
     final passes = <OrbisPassTiming>[];
     for (var i = 0; i < names.length && i * 2 + 1 < packed.length; i++) {
       passes.add(
@@ -673,6 +696,8 @@ class OrbisFrameCapture {
     return OrbisFrameCapture(
       passes: passes,
       milliseconds: passes.fold(0.0, (sum, pass) => sum + pass.milliseconds),
+      batchedObjects: batchedObjects,
+      batchGroups: batchGroups,
     );
   }
 

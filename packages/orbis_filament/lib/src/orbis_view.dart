@@ -71,12 +71,24 @@ class OrbisView extends StatefulWidget {
     final timings = stats?['passTimings'];
     if (timings is! List) return const OrbisFrameCapture();
 
+    // Two numbers rather than one per pass, because batching is decided once
+    // per publish and every pass then draws whatever that decision left it.
+    // Absent from a renderer that has never heard of batching, which is why
+    // they are read defensively rather than indexed.
+    final batching = stats?['batching'];
+    final batched = batching is List && batching.isNotEmpty
+        ? batching.first
+        : null;
+    final groups = batching is List && batching.length > 1 ? batching[1] : null;
+
     return OrbisFrameCapture.from(
       Float32List.fromList([
         for (final value in timings)
           if (value is num) value.toDouble(),
       ]),
       passNames,
+      batchedObjects: batched is num ? batched.toInt() : 0,
+      batchGroups: groups is num ? groups.toInt() : 0,
     );
   }
 
