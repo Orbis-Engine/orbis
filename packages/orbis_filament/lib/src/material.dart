@@ -186,11 +186,7 @@ class OrbisTexture {
 /// Restating it every frame costs nothing, because the scene is restated
 /// every frame regardless.
 class OrbisWind {
-  const OrbisWind({
-    this.bearing = 0,
-    this.speed = 0,
-    this.strength = 1,
-  });
+  const OrbisWind({this.bearing = 0, this.speed = 0, this.strength = 1});
 
   /// Still air. The vertex stage returns before doing any work.
   static const OrbisWind none = OrbisWind();

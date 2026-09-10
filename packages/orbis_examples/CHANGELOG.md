@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.21.0
+
+- **A new example, Panel shadows.** A rectangular light over a pale floor with
+  three occluders at three heights, and a toggle for whether it casts. There was
+  nowhere to look at a rectangular light before this: the Lights example has a
+  Panel setting, but its camera sits nearly horizontal, which shows the lit
+  sides of things and almost none of the floor they stand on — and a shadow
+  lives on the ground.
+
+  It is also the harness that shows the shadow does not work yet. With the
+  toggle on and off the two frames differ only by dithering, with no shadow
+  shape anywhere in the difference.
+
 ## 0.20.0
 
 - **A new example, Reflection probes.** A chrome box turned a half-right angle

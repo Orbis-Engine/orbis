@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.21.0
+
+- **Specular anti-aliasing, and occlusion that stops darkening twice.**
+  Roughness is a statement about detail too small to see, and a normal map
+  carries exactly that detail — so once it falls below a pixel the shading
+  frame changes faster than the frame can sample it, which reads as glitter
+  crawling over every normal-mapped surface. The distribution is now widened
+  by the normal's own sub-pixel variance, which turns those bumps back into
+  the roughness they always were.
+
+  Alongside it, `multiBounceAmbientOcclusion` and a simple specular occlusion.
+  Applying an occlusion term once treats every blocked photon as absorbed,
+  which is why heavily occluded surfaces went muddy and lost their colour; and
+  the specular half was not occluded at all, so a mirror at the bottom of a
+  crevice reflected the whole environment.
+
+- **The irradiance field reaches metals.** Its contribution was multiplied by
+  one minus metalness, which is right for diffuse and meant a metal took
+  nothing at all: a chrome ball in a room lit entirely by bounced light was lit
+  by nothing. It now samples along the reflection, faded in by roughness,
+  because a probe keeps six texels of octahedron — a believable blurred
+  reflection and nothing sharper. Polished surfaces keep asking the environment
+  map and the probes, which have real mip chains.
+
+- **Clear coat, anisotropy and sheen.** `OrbisMaterial.clearCoat`,
+  `anisotropy` and `sheenColour`: varnish over a rough body, a highlight
+  smeared along the grain, and the retroreflection that makes cloth read as
+  cloth. None is reachable by any amount of roughness. Every one is nought by
+  default and inert when it is, so no existing material changes.
+
+- **Wind, as a vertex stage.** `OrbisWind` on a material says how much that
+  surface answers the wind, and the surface bends in three frequency bands — a
+  trunk leaning into a gust, the elastic recoil past centre, and a flutter that
+  does not stop when the gust does. Phase comes from where the instance stands,
+  so ten thousand copies of one mesh sway out of step without carrying a byte
+  more per vertex.
+
+  On the material rather than on the scene: a scene-level wind moves everything
+  by the same amount, and the wall would sway with the hedge.
+
+- **The engine asks for every sampler the device has.** The standard surface
+  sat on nine, which was Filament's limit by feature level rather than the
+  hardware's. The engine now asks for the highest level the device reports and
+  clamps to it.
+
+- **Rectangular lights can be asked to cast a shadow, and the asking is not yet
+  answered.** The plumbing is in — a depth map drawn from where the panel
+  stands, and a filtered lookup in the surface that widens with the panel's own
+  size — but it does not yet occlude anything: rendered with and without, the
+  two pictures differ only by dithering. Setting `castShadows` on an area light
+  is presently inert rather than wrong.
+
+- The material row is thirty-seven floats, from twenty-six.
+
 ## 0.20.0
 
 - **Reflection probes.** `OrbisProbe` is the scene photographing itself from a

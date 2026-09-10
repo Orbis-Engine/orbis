@@ -173,10 +173,10 @@ void main() {
       // the second is the cheapest way to notice.
       final packed = Float32List(OrbisMaterial.stride * 2);
       const OrbisMaterial(key: 1, clearCoat: 1.0).pack(packed, 0);
-      const OrbisMaterial(key: 2, clearCoat: 0.25).pack(
-        packed,
-        OrbisMaterial.stride,
-      );
+      const OrbisMaterial(
+        key: 2,
+        clearCoat: 0.25,
+      ).pack(packed, OrbisMaterial.stride);
 
       expect(packed[26], near(1.0));
       expect(packed[OrbisMaterial.stride + 26], near(0.25));
