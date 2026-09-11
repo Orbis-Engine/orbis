@@ -59,6 +59,13 @@ namespace {
 #include "generated/lit_fade_material.h"
 #include "generated/lit_masked_material.h"
 #include "generated/lit_add_material.h"
+// The slim lit surface: chosen instead of the five above when the engine
+// cannot manage feature level 3. See lit_slim.mat and surfaceAt below.
+#include "generated/lit_slim_opaque_material.h"
+#include "generated/lit_slim_transparent_material.h"
+#include "generated/lit_slim_fade_material.h"
+#include "generated/lit_slim_masked_material.h"
+#include "generated/lit_slim_add_material.h"
 #include "generated/unlit_opaque_material.h"
 #include "generated/unlit_transparent_material.h"
 #include "generated/unlit_fade_material.h"
@@ -191,6 +198,26 @@ void Renderer::startWithWidth(uint32_t width, uint32_t height) {
     _engine->setActiveFeatureLevel(supported);
   }
 
+  // The standard lit surface needs the third level for its twelve samplers.
+  // A device that cannot reach it — the iOS simulator, anything older than
+  // an A13, OpenGL ES 3.0, WebGL 2 — gets the slim surface instead: nine
+  // samplers, chosen once here from what the engine just answered and never
+  // revisited, because a GPU does not grow more mid-session. surfaceAt reads
+  // this to build the slim five packages in place of the standard five, and
+  // every place that would otherwise bind a sampler the slim surface does
+  // not declare reads it too.
+  _slimSurface = supported < Engine::FeatureLevel::FEATURE_LEVEL_3;
+  if (_slimSurface) {
+    _surfaceNotes["surface"] = orbis::format(
+        "This device supports Filament feature level %d, below the "
+        "standard lit surface's third, so the slim surface is used "
+        "instead. Base colour, normal, metallic/roughness, occlusion and "
+        "emissive maps, ground blending and decals all draw as usual; "
+        "rectangular area lights are not shadowed and the irradiance "
+        "field does not light this scene.",
+        int(supported));
+  }
+
   _renderer = _engine->createRenderer();
   _scene = _engine->createScene();
   _view = _engine->createView();
@@ -241,8 +268,9 @@ void Renderer::startWithWidth(uint32_t width, uint32_t height) {
                          0,     0.53f, 0.1f,  10.0f,     80.0f, 0};
   applyLights(sunKey, sunKind, sunFlags, sun, 1);
 
-  orbis::log("[orbis] engine ready in %.0f ms",
-        (orbis::now() - startedFrom) * 1000);
+  orbis::log("[orbis] engine ready in %.0f ms, %s surface (feature level %d)",
+        (orbis::now() - startedFrom) * 1000,
+        _slimSurface ? "slim" : "standard", int(supported));
 }
 
 void Renderer::buildGeometry() {
@@ -1633,10 +1661,33 @@ Material *Renderer::surfaceAt(int index) {
       kvideo_fadeMaterial_len,        kvideo_maskedMaterial_len,
       kvideo_addMaterial_len,         kshadowcatcherMaterial_len,
   };
+
+  // The slim lit surface's own five packages, in the same blend order as
+  // the standard grid's first five (shading 0, "lit") — so the index that
+  // would have picked lit_opaque..lit_add picks its slim equivalent
+  // instead. _slimSurface is decided once in startWithWidth and does not
+  // change, so an engine never mixes the two.
+  static const uint8_t *slimLitPackages[5] = {
+      klit_slim_opaqueMaterial, klit_slim_transparentMaterial,
+      klit_slim_fadeMaterial,   klit_slim_maskedMaterial,
+      klit_slim_addMaterial,
+  };
+  static const size_t slimLitSizes[5] = {
+      klit_slim_opaqueMaterial_len, klit_slim_transparentMaterial_len,
+      klit_slim_fadeMaterial_len,   klit_slim_maskedMaterial_len,
+      klit_slim_addMaterial_len,
+  };
+
   if (index < 0 || index >= kSurfaceCount) index = 0;
   if (_surfaces[index] == nullptr) {
-    _surfaces[index] =
-        Material::Builder().package(packages[index], sizes[index]).build(*_engine);
+    if (_slimSurface && index < 5) {
+      _surfaces[index] = Material::Builder()
+                             .package(slimLitPackages[index], slimLitSizes[index])
+                             .build(*_engine);
+    } else {
+      _surfaces[index] =
+          Material::Builder().package(packages[index], sizes[index]).build(*_engine);
+    }
   }
   return _surfaces[index];
 }
@@ -1712,18 +1763,36 @@ void Renderer::setDefaultsOn(MaterialInstance *instance) {
     instance->setParameter(kMapFlags[i], false);
   }
 
-  // The rectangular area lights, which only the lit surface shades — and this
-  // runs for exactly the lit surfaces, the plain-coloured ones included. Bound
-  // once and never again: both textures outlive every surface that reads them,
-  // because the tables never change and the lights are rewritten in place.
+  // The rectangular area lights, which only a lit surface shades — full or
+  // slim alike, and this runs for both. Bound once and never again: the
+  // texture outlives every surface that reads it, because the tables never
+  // change and the lights are rewritten in place.
   buildLtcTables();
   const TextureSampler tables(TextureSampler::MinFilter::LINEAR,
                               TextureSampler::MagFilter::LINEAR,
                               TextureSampler::WrapMode::CLAMP_TO_EDGE);
   // Filtered, which the fitted tables need. The rectangles in the rows below
   // are read with texelFetch, which ignores the sampler entirely, so they are
-  // not interpolated into each other by sharing this one.
+  // not interpolated into each other by sharing this one — nor, on the slim
+  // surface, are the decal rows below them.
   instance->setParameter("lightData", _lightData, tables);
+
+  // Decals, and the layer the surface is on — layer nought until an object
+  // says otherwise, which is where every object that never mentions layers
+  // lives. Both surfaces bind this: the slim one keeps the picture array and
+  // reads its boxes out of lightData's own tail instead of a sampler of its
+  // own — see bindDecalsTo.
+  bindDecalsTo(instance);
+  instance->setParameter("decalLayer", int32_t{1});
+
+  if (_slimSurface) {
+    // Nine samplers were spent above: five maps, two for ground blending,
+    // lightData and decalImages. There is no tenth to give areaShadow or
+    // fieldAtlas, so this material does not declare them and nothing past
+    // here binds anything on it. What that costs a scene is said once in
+    // notes(), and per-light in applyLights when one actually asks to cast.
+    return;
+  }
 
   // The rectangle's depth map. Built here if it does not exist yet rather
   // than left unbound: Filament reports a declared sampler nobody bound on
@@ -1741,12 +1810,6 @@ void Renderer::setDefaultsOn(MaterialInstance *instance) {
   instance->setParameter("areaShadow", _areaShadow, shadowSampler);
 
   bindFieldTo(instance);
-
-  // Decals, and the layer the surface is on — layer nought until an object
-  // says otherwise, which is where every object that never mentions layers
-  // lives.
-  bindDecalsTo(instance);
-  instance->setParameter("decalLayer", int32_t{1});
 }
 
 /// How much of the field reaches surfaces, held below where it feeds itself.
@@ -2838,9 +2901,13 @@ void Renderer::buildLtcTables() {
            kSide * 4 * sizeof(float));
   }
 
+  // Taller on the slim surface: its decalData rows live in this texture's
+  // tail (from kSlimDecalRow) rather than in a sampler of their own. The
+  // standard surface's height is unchanged from before this existed.
   _lightData = Texture::Builder()
                    .width(kSide * 2)
-                   .height(kSide + kAreaLightBudget)
+                   .height(kSide + kAreaLightBudget +
+                           (_slimSurface ? orbis::kDecalBudget : 0))
                    .levels(1)
                    .format(Texture::InternalFormat::RGBA32F)
                    .sampler(Texture::Sampler::SAMPLER_2D)
@@ -4040,7 +4107,16 @@ void Renderer::applyLights(const int64_t *keys, const int32_t *kinds, const int3
         // would take its light away as well as its shadow.
         bool casting = false;
         if ((flags[i] & 1) != 0) {
-          if (!_areaShadowCasting) {
+          if (_slimSurface) {
+            // No depth map sampler to spare below feature level 3 — see
+            // lit_slim.mat. The rectangle still lights the surface, just
+            // without a shadow, the same as any rectangle that does not ask
+            // to cast.
+            notes["areaShadows"] =
+                "Rectangular lights are not shadowed on this device: the "
+                "slim surface, used because it is below Filament's third "
+                "feature level, has no sampler to spare for the depth map.";
+          } else if (!_areaShadowCasting) {
             buildAreaShadow();
             if (aimAreaShadowAt(p)) {
               _areaShadowCasting = true;
@@ -4186,16 +4262,40 @@ void Renderer::buildDecalData() {
           [](void *buffer, size_t, void *) {
             delete[] static_cast<uint8_t *>(buffer);
           }));
+
+  // The slim surface still gets this texture built — cheap, and simpler
+  // than teaching every caller two shapes for the CPU-side data — but reads
+  // its decals out of lightData's tail instead, because there was no
+  // sampler left to give this one of its own. Zeroed the same way, so a
+  // decal-less scene reads a count of nought there too.
+  if (_slimSurface) {
+    buildLtcTables();
+    float *slimBlank = static_cast<float *>(calloc(floats, sizeof(float)));
+    _lightData->setImage(
+        *_engine, 0, 0, orbis::kSlimDecalRow, orbis::kDecalTexels,
+        orbis::kDecalBudget,
+        Texture::PixelBufferDescriptor(
+            slimBlank, floats * sizeof(float),
+            Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+            Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+            [](void *buffer, size_t, void *) { free(buffer); }));
+  }
 }
 
 /// Gives one lit surface the decals to read.
 void Renderer::bindDecalsTo(MaterialInstance *instance) {
   buildDecalData();
-  // Read with texelFetch, which ignores filtering; nearest says so anyway.
-  const TextureSampler exact(TextureSampler::MinFilter::NEAREST,
-                             TextureSampler::MagFilter::NEAREST,
-                             TextureSampler::WrapMode::CLAMP_TO_EDGE);
-  instance->setParameter("decalData", _decalData, exact);
+  // The standard surface has a sampler to spare for this; the slim one
+  // spent its ninth on decalImages below and reads the same rows out of
+  // lightData's tail instead — bound already, in setDefaultsOn, and kept
+  // in step by buildDecalData and applyDecals writing both textures.
+  if (!_slimSurface) {
+    // Read with texelFetch, which ignores filtering; nearest says so anyway.
+    const TextureSampler exact(TextureSampler::MinFilter::NEAREST,
+                               TextureSampler::MagFilter::NEAREST,
+                               TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    instance->setParameter("decalData", _decalData, exact);
+  }
 
   // Clamped, so the picture's edge texels are not wrapped round to meet the
   // opposite edge where the box ends. Anisotropic, because a floor decal is
@@ -4336,6 +4436,24 @@ void Renderer::applyDecals(const float *params, const int32_t *images, const std
           Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
           Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
           [](void *buffer, size_t, void *) { free(buffer); }));
+
+  // The same rows again, into lightData's tail, for the slim surface's own
+  // decalTexel to read — see kSlimDecalRow and bindDecalsTo. A second small
+  // upload rather than a second code path: the packing above already did
+  // the only part that is not mechanical.
+  if (_slimSurface) {
+    buildLtcTables();
+    float *slimCopy = static_cast<float *>(malloc(floats * sizeof(float)));
+    memcpy(slimCopy, wanted.data(), floats * sizeof(float));
+    _lightData->setImage(
+        *_engine, 0, 0, orbis::kSlimDecalRow, orbis::kDecalTexels,
+        orbis::kDecalBudget,
+        Texture::PixelBufferDescriptor(
+            slimCopy, floats * sizeof(float),
+            Texture::PixelBufferDescriptor::PixelDataFormat::RGBA,
+            Texture::PixelBufferDescriptor::PixelDataType::FLOAT,
+            [](void *buffer, size_t, void *) { free(buffer); }));
+  }
 }
 
 /// Takes one probe's photograph of the scene and filters it into reflections.
@@ -4614,6 +4732,25 @@ void Renderer::applyField(const float *params, const std::string &from) {
       uint32_t(std::max(0.0f, params[7])) * uint32_t(std::max(0.0f, params[8])) *
           uint32_t(std::max(0.0f, params[9])),
       kFieldMaxProbes);
+
+  if (_slimSurface) {
+    // No fieldAtlas sampler to spare below feature level 3 — see
+    // lit_slim.mat's header. Neither atlas is built, so runField and
+    // bindFieldEverywhere stay the no-ops their own _fieldProbes == 0
+    // guards already make them; only a scene that actually turns a field on
+    // is told why it stays dark.
+    if (wanted > 0 && params[0] > 0.0f) {
+      _surfaceNotes["field"] =
+          "The irradiance field does not light this scene: the slim "
+          "surface, used because this device is below Filament's third "
+          "feature level, has no sampler to spare for its atlas.";
+    } else {
+      _surfaceNotes.erase("field");
+    }
+    _fieldProbes = 0;
+    return;
+  }
+
   if (wanted == _fieldProbes) return;
 
   releaseField();
@@ -5975,6 +6112,7 @@ Notes Renderer::notes() {
   for (const auto &entry : _decalNotes) all[entry.first] = entry.second;
   for (const auto &entry : _splatNotes) all[entry.first] = entry.second;
   for (const auto &entry : _videoNotes) all[entry.first] = entry.second;
+  for (const auto &entry : _surfaceNotes) all[entry.first] = entry.second;
   return all;
 }
 
