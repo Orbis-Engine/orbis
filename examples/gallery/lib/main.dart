@@ -49,6 +49,8 @@
 ///   ORBIS_SPLAT_PILLAR=0   take the solid pillar out of the ring
 ///   ORBIS_BATCHING=0/1     batching off or on, for any example, so the same
 ///                          frame can be drawn both ways and compared
+///   ORBIS_PREPASS=0/1      the depth prepass off or on, for any example, so
+///                          the same frame can be timed both ways
 ///   ORBIS_CRATES           how many crates the Batching example draws
 ///   ORBIS_PALETTE          its colours: One, Six or Every one
 ///   ORBIS_BATCH_MATERIAL=1 its crates made of one shared material
@@ -374,10 +376,18 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       drawn.pipeline.shadows.enabled = false;
     }
     if (_orbisEnv['ORBIS_POST'] == '0') drawn.post.enabled = false;
-    return switch (_orbisEnv['ORBIS_BATCHING']) {
+    final batched = switch (_orbisEnv['ORBIS_BATCHING']) {
       '1' => drawn.copyWith(batching: true),
       '0' => drawn.copyWith(batching: false),
       _ => drawn,
+    };
+    // The depth prepass forced the same way, and separately, so a frame can be
+    // timed with it and without it while everything else about the scene —
+    // batching included — stays exactly where the example put it.
+    return switch (_orbisEnv['ORBIS_PREPASS']) {
+      '1' => batched.copyWith(depthPrepass: true),
+      '0' => batched.copyWith(depthPrepass: false),
+      _ => batched,
     };
   }
 
