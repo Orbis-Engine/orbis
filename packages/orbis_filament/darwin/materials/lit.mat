@@ -240,20 +240,22 @@ material {
         // rather than an atlas so a picture's mip chain never bleeds into its
         // neighbour's at a distance.
         //
-        // High precision, unlike the other maps: this is the one sampler read
-        // with textureGrad rather than texture, and Metal's gradient2d has no
-        // constructor for a pair of half2 derivatives — only float2. Left at
-        // the default, mobile precision, this compiles and runs on desktop
-        // Metal (whatever accepted the half2 there is undocumented, and not
-        // worth relying on) and fails on iOS's Metal compiler with "no
-        // matching constructor for initialization of 'metal::gradient2d'",
-        // found compiling this material for the first time on the iOS
-        // simulator, which is the first place a lit material has ever
-        // reached Metal shader compilation on iOS at all — every earlier
-        // attempt aborted on the feature level precondition first. A real
-        // device would hit the same error, high end or not, so this is fixed
-        // here rather than only on the slim surface.
-        { type : sampler2dArray, name : decalImages, precision : high },
+        // Left at the default precision deliberately, though it is the one
+        // sampler read with textureGrad rather than texture and Metal's
+        // gradient2d has no constructor for a pair of half2 derivatives —
+        // only float2, which is what the default becomes on desktop but not
+        // on mobile. lit_slim.mat marks this sampler and its derivatives
+        // highp to fix that on iOS; doing the same here changed Panel
+        // shadows' compiled output by enough to break bit-for-bit parity
+        // with frames from before this file was touched at all — the same
+        // shader function also holds the area-shadow PCSS loop, and a
+        // precision change anywhere in it moved that loop's rounding by a
+        // few 8-bit levels on some pixels. A real device thin enough to need
+        // the slim surface never reaches this material, so the fix lives
+        // only there for now; a device at the third feature level hits this
+        // sampler's bug too, and fixing it here without perturbing every
+        // other example is unfinished work.
+        { type : sampler2dArray, name : decalImages },
         // Which layer the object being drawn is on, as a bit. A decal paints
         // only the layers its mask names.
         { type : int,            name : decalLayer }
@@ -892,18 +894,8 @@ fragment {
         // inside a branch that some neighbouring fragments skipped is
         // undefined, and a decal's edge is exactly such a branch. Each decal
         // then turns these into its own uv rates with the rows of its matrix.
-        //
-        // highp, and so are gx and gy below: this fragment shader's ambient
-        // precision is mediump on mobile, decalImages' own precision
-        // notwithstanding — a sampler's precision governs what a lookup on it
-        // returns, not the derivatives a caller hands to textureGrad. Left at
-        // mediump, gx and gy compile down to Metal's half2, and Metal's
-        // gradient2d — the type textureGrad's two extra arguments become —
-        // has a constructor for a pair of float2 and nothing else. Desktop
-        // Metal's ambient precision is already highp, which is why this only
-        // broke on iOS.
-        highp vec3 dpdx = dFdx(p);
-        highp vec3 dpdy = dFdy(p);
+        vec3 dpdx = dFdx(p);
+        vec3 dpdy = dFdy(p);
 
         // The geometric normal rather than the shading one: the angle fade is
         // about which way the *surface* faces the projector, and a normal
@@ -937,8 +929,8 @@ fragment {
             vec4 picture = vec4(1.0);
             if (settings.x >= 0.0) {
                 vec2 uv = local.xz + 0.5;
-                highp vec2 gx = vec2(dot(r0.xyz, dpdx), dot(r2.xyz, dpdx));
-                highp vec2 gy = vec2(dot(r0.xyz, dpdy), dot(r2.xyz, dpdy));
+                vec2 gx = vec2(dot(r0.xyz, dpdx), dot(r2.xyz, dpdx));
+                vec2 gy = vec2(dot(r0.xyz, dpdy), dot(r2.xyz, dpdy));
                 picture = textureGrad(materialParams_decalImages,
                                       vec3(uv, settings.x), gx, gy);
             }
