@@ -33,7 +33,10 @@ By hand, a hunk goes into the function of the same name in
 `OrbisRendererCore.cpp`, at the same place — the comments around it are the
 same, so search for them. `[self …]` becomes a call and Foundation types
 become the ones in the table above. A new ivar becomes a member in
-`OrbisRendererCore.h`; a new `#include` goes at the top of the header; a new
+`OrbisRendererCore.h`; a new `#include` goes at the top of the header, except
+a compiled material's `generated/…_material.h`, which goes in the anonymous
+namespace at the top of `OrbisRendererCore.cpp` so its arrays stay private to
+the renderer; a new
 method in `include/OrbisRenderer.h` becomes a public member of
 `orbis::Renderer` plus a one-line forwarder in `OrbisRenderer.mm`.
 

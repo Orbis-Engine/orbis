@@ -20,8 +20,10 @@
 # edited one of those lines is told so (EXPECTED ... FOUND 0) and that hunk is
 # ported by hand. Three things it cannot see, and which need doing by hand:
 #
-#   - a new #include among the generated material includes goes into
-#     OrbisRendererCore.h.in, beside the ScreenEffects and motion blur ones;
+#   - a new #include goes into OrbisRendererCore.h.in, beside the
+#     ScreenEffects and motion blur ones — except a compiled material's
+#     generated/…_material.h, which goes in the anonymous namespace at the
+#     top of core_prologue.cpp, so its arrays stay private to the renderer;
 #   - a new method in include/OrbisRenderer.h goes into the public section of
 #     OrbisRendererCore.h.in and API in header.py, and gets a one-line
 #     forwarder in OrbisRenderer.mm;
