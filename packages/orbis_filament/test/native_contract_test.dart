@@ -24,9 +24,17 @@ void main() {
   final swift = _read(
     'darwin/orbis_filament/Sources/orbis_filament/OrbisFilamentPlugin.swift',
   );
-  final native = _read(
-    'darwin/orbis_filament/Sources/orbis_filament_native/OrbisRenderer.mm',
-  );
+  // The renderer, and the plain C++ beside it that it calls into: a number
+  // that lives in either is the renderer's. The renderer's own constants are
+  // in its C++ core's header now that the Objective-C class only forwards to
+  // it — the same lines, moved, so this reads them there.
+  final native =
+      _read(
+        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisRendererCore.h',
+      ) +
+      _read(
+        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisDecals.h',
+      );
 
   group('the strides the three sides share', () {
     // Dart's number, what Swift calls it, and what the renderer calls it —
@@ -48,7 +56,28 @@ void main() {
       'fog': (OrbisFog.stride, 'fogStride', null),
       'precipitation': (OrbisPrecipitation.stride, 'precipitationStride', null),
       'the sky': (OrbisSky.stride, 'skyStride', null),
+      'a decal': (OrbisDecal.stride, 'decalStride', 'kDecalStride'),
+      // The renderer's side of this one is in the outline's own header,
+      // checked below, because the outline lives in plain C++ of its own.
+      'an outline': (OrbisOutline.stride, 'outlineStride', null),
     };
+
+    // The pipeline block is passed through by the plugin unchecked, and its
+    // offsets are named in the shadows code rather than the renderer — so it
+    // is compared there. A block one float short reads a zero where a dial
+    // should be, which for the contact distance is a shadow traced nowhere.
+    test('the pipeline is ${OrbisPipeline.stride} wide everywhere', () {
+      final shadows = _read(
+        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisShadows.h',
+      );
+      expect(
+        _nativeValue(shadows, 'kPipelineStride'),
+        OrbisPipeline.stride,
+        reason:
+            'Dart packs ${OrbisPipeline.stride} floats for the pipeline and '
+            'the renderer names a different number of offsets',
+      );
+    });
 
     contract.forEach((what, agreed) {
       final (dart, swiftName, nativeName) = agreed;
@@ -73,6 +102,142 @@ void main() {
       });
     });
   });
+
+  test('the decal budget Dart reports against is the one the renderer '
+      'paints', () {
+    final found = RegExp(
+      r'constexpr uint32_t kDecalBudget\s*=\s*(\d+)',
+    ).firstMatch(native);
+    expect(found, isNotNull, reason: 'OrbisDecals.h no longer says');
+    expect(int.parse(found!.group(1)!), OrbisDecal.budget);
+  });
+
+  group('the outline', () {
+    final header = _read(
+      'darwin/orbis_filament/Sources/orbis_filament_native/OrbisOutline.h',
+    );
+
+    test('reads as many settings as Dart packs', () {
+      expect(
+        _nativeValue(header, 'kOutlineParams'),
+        OrbisOutline.stride,
+        reason:
+            'Dart packs ${OrbisOutline.stride} floats for an outline and the '
+            'renderer reads a different number',
+      );
+    });
+
+    test('numbers the hidden styles as Dart does', () {
+      for (final style in OrbisOccluded.values) {
+        expect(
+          RegExp(
+            r'\b' + style.name + r'\s*=\s*' + '${style.index}' + r'\b',
+          ).hasMatch(header),
+          isTrue,
+          reason:
+              '${style.name} is ${style.index} in Dart and not in the '
+              "renderer's Occluded",
+        );
+      }
+    });
+
+    test('is compiled into the CocoaPods build as well as SwiftPM', () {
+      // SwiftPM compiles every file in the target's directory; CocoaPods only
+      // the extensions it is told. A .cpp it is not told about is a link
+      // error in one build system and a working app in the other.
+      final podspec = _read('darwin/orbis_filament.podspec');
+      expect(podspec, contains('cpp'));
+    });
+  });
+
+  // The splat numbers live in their own files on both native sides, because
+  // the feature does: its Swift decoding in OrbisSplatMessage.swift and its
+  // C++ in OrbisSplats.h.
+  group('the numbers Gaussian splats share', () {
+    final splatSwift = _read(
+      'darwin/orbis_filament/Sources/orbis_filament/OrbisSplatMessage.swift',
+    );
+    final splatNative = _read(
+      'darwin/orbis_filament/Sources/orbis_filament_native/OrbisSplats.h',
+    );
+    final material = _read('darwin/materials/splat.mat');
+
+    test('a cloud is ${OrbisSplats.stride} floats wide everywhere', () {
+      expect(_swiftValue(splatSwift, 'splatStride'), OrbisSplats.stride);
+      expect(_nativeValue(splatNative, 'kSplatParams'), OrbisSplats.stride);
+    });
+
+    test('a splat record is ${OrbisSplats.recordBytes} bytes everywhere', () {
+      expect(_swiftValue(splatSwift, 'recordBytes'), OrbisSplats.recordBytes);
+      expect(
+        _nativeValue(splatNative, 'kSplatRecordBytes'),
+        OrbisSplats.recordBytes,
+      );
+    });
+
+    test('the shader and the uploader agree on the texture width', () {
+      final width = RegExp(
+        r'constexpr uint32_t kSplatTextureWidth\s*=\s*(\d+)',
+      ).firstMatch(splatNative);
+      final shader = RegExp(r'#define kWidth (\d+)').firstMatch(material);
+      expect(width, isNotNull);
+      expect(shader, isNotNull);
+      expect(shader!.group(1), width!.group(1));
+    });
+  });
+  _screenEffects(swift);
+}
+
+/// God rays and distortion keep their numbers in their own plain C++ header
+/// rather than in the renderer, so they are checked against that.
+void _screenEffects(String swift) {
+  final screen = _read(
+    'darwin/orbis_filament/Sources/orbis_filament_native/ScreenEffects.h',
+  );
+
+  group('god rays and distortion', () {
+    test('agree on how wide a row is', () {
+      expect(_swiftValue(swift, 'godRayStride'), OrbisGodRays.stride);
+      expect(_swiftValue(swift, 'distortionStride'), OrbisDistortion.stride);
+      expect(_nativeValue(screen, 'kGodRayStride'), OrbisGodRays.stride);
+      expect(_nativeValue(screen, 'kDistortionStride'), OrbisDistortion.stride);
+      expect(
+        _nativeValue(screen, 'kDistortionCapacity'),
+        OrbisDistortion.capacity,
+      );
+    });
+
+    test('agree on what the numbers mean', () {
+      // An effect index out of step runs the wrong shader over the frame;
+      // a kind out of step bends it the wrong way.
+      expect(_nativeInt(screen, 'kEffectGodRays'), OrbisEffect.godRays.index);
+      expect(
+        _nativeInt(screen, 'kEffectDistortion'),
+        OrbisEffect.distortion.index,
+      );
+      expect(
+        _nativeInt(screen, 'kDistortionShockwave'),
+        OrbisDistortionKind.shockwave.index,
+      );
+      expect(
+        _nativeInt(screen, 'kDistortionHaze'),
+        OrbisDistortionKind.haze.index,
+      );
+      expect(
+        _nativeInt(screen, 'kDistortionLens'),
+        OrbisDistortionKind.lens.index,
+      );
+    });
+  });
+}
+
+/// `constexpr int kName = 6;`
+int _nativeInt(String source, String name) {
+  final found = RegExp(
+    r'constexpr int ' + name + r'\s*=\s*(\d+)',
+  ).firstMatch(source);
+  expect(found, isNotNull, reason: 'the renderer no longer declares $name');
+  return int.parse(found!.group(1)!);
 }
 
 /// `private static let name = 12`, whatever the access level.

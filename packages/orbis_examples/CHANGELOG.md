@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.22.0
+
+- **Panel shadows now shows a shadow.** The harness that proved the panel cast
+  nothing is the one that proves it does: a soft shadow under each occluder,
+  softer at the tall one's far end than at its foot.
+
+- **Ten new examples.** Shadows puts every shadow setting on a slider.
+  Environment volumes walks from a sunny courtyard into a dim, foggy hall.
+  Decals paints a poster, a scorch, a puddle, a stripe across the corner of a
+  room and a splash around a crate that the crate's own layer is spared.
+  Gaussian splats is a generated striped ring with a solid pillar standing in
+  it, or any capture named by `ORBIS_SPLAT`. Outline puts a selected box half
+  behind a wall. Batching draws thousands of crates in one, six or every
+  colour, and Overdraw crosses heavy surfaces through each other to measure
+  what a depth prepass could save. God rays stands a low sun behind a row of
+  pillars, and Distortion sends a shockwave across a striped floor, with a
+  heat haze rising over a vent and a lens warp on a slider. Motion blur spins
+  a fan and slides a plate past a still box and a striped wall, with the
+  shutter on a slider from 1/1000 s to 1/30 s.
+
 ## 0.21.0
 
 - **A new example, Panel shadows.** A rectangular light over a pale floor with

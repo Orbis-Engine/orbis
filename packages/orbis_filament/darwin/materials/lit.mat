@@ -19,10 +19,20 @@ material {
     name : orbisLit,
     shadingModel : lit,
     // The third, for one reason: a material may have nine samplers below it
-    // however capable the hardware is, and the standard surface needs ten.
-    // The engine asks for the highest the device supports and clamps, so a
-    // device that cannot manage this compiles the other surfaces and leaves
-    // this one out rather than failing to start.
+    // however capable the hardware is, and the standard surface now binds
+    // twelve. matc enforces that itself — asking for the second here fails
+    // the build with "has feature level 2 and is using more than 9 samplers"
+    // — so the only way down is a surface with fewer samplers, not a smaller
+    // number on this line.
+    //
+    // A device below the third level does not quietly go without this
+    // surface: Filament refuses the material and the renderer aborts on the
+    // first lit object, which is every scene including the placeholder. The
+    // iOS simulator is such a device — its virtual GPU reports
+    // MTLGPUFamilyApple2, and Filament's Metal backend gives the third level
+    // only to MTLGPUFamilyApple6 and newer, so A13 and later. Reaching the
+    // simulator, and any iPhone older than an 11, means a lit surface with
+    // nine samplers or fewer.
     featureLevel : 3,
     blending : opaque,
     // Both the area lights and the irradiance field are handed back this
@@ -209,7 +219,30 @@ material {
         { type : float4,    name : fieldCounts },
         // xy one texel of the atlas, z the normal bias as a fraction of a
         // cell, w spare.
-        { type : float4,    name : fieldAtlasStep }
+        { type : float4,    name : fieldAtlasStep },
+
+        // Projected decals: a poster, a scorch, a puddle, a road marking —
+        // a picture thrown along a box onto whatever is inside it.
+        //
+        // Painted here, into the base colour and roughness *before* the
+        // surface is lit, rather than over the finished frame. A decal
+        // composited afterwards is not lit: it glows the same in shadow as in
+        // sun, and a puddle painted over the picture cannot make the floor
+        // under it any shinier. Painted here, it is part of the surface and
+        // everything that lights a surface lights it.
+        //
+        // The boxes arrive as a texture for the same reason the rectangles
+        // do — the count changes per frame and a uniform array would be paid
+        // for by every draw whether it had decals or not. Seven texels a
+        // decal, one decal a row; the count rides in the first one.
+        { type : sampler2d,      name : decalData, precision : high },
+        // Every decal's picture, one per layer, all the same size. An array
+        // rather than an atlas so a picture's mip chain never bleeds into its
+        // neighbour's at a distance.
+        { type : sampler2dArray, name : decalImages },
+        // Which layer the object being drawn is on, as a bit. A decal paints
+        // only the layers its mask names.
+        { type : int,            name : decalLayer }
     ],
 }
 
@@ -391,7 +424,41 @@ fragment {
     // which reads as *more* wrong than no shadow at all — a shadow that
     // says the light is a point when everything else in the frame says it is
     // a window.
-    float rectangleShadow(vec3 p, vec4 settings, mat4 toLight) {
+    //
+    // How wide is worked out rather than fixed. The first version of this
+    // filtered a fixed nine taps a texel or two apart, which is a penumbra of
+    // a few centimetres under a two-metre panel whose real one is most of a
+    // metre. So this does what percentage-closer soft shadows do: look for
+    // whatever is in the way, take its average distance, and let similar
+    // triangles say how wide the half-lit band is at this distance —
+    //
+    //     penumbra = size * (receiver - blocker) / blocker
+    //
+    // which is sharp where a leg meets the floor, soft under a table, and
+    // twice as soft under a panel twice the size.
+    //
+    // Fernando, "Percentage-Closer Soft Shadows", SIGGRAPH 2005 sketch.
+
+    // The largest a filter may grow, as a fraction of the map. Past this the
+    // taps are too far apart to agree about anything and the edge breaks up
+    // into copies of itself.
+    #define kShadowMaxRadius 0.08
+    #define kShadowSearchTaps 16
+    #define kShadowFilterTaps 32
+
+    // The golden angle. Stepping round a disc by it and outwards by the
+    // square root of the index puts N taps as evenly as N points can be put
+    // (Vogel's spiral), with no table to carry and no licence to keep.
+    #define kGoldenCos -0.7373688
+    #define kGoldenSin 0.6754903
+
+    // Where the i-th of `count` taps falls in a unit disc, turned by `turn`.
+    vec2 spiralTap(int i, int count, vec2 turn) {
+        return turn * sqrt((float(i) + 0.5) / float(count));
+    }
+
+    float rectangleShadow(vec3 p, vec3 n, vec3 towardsPanel,
+                          vec4 settings, mat4 toLight) {
         vec4 clip = toLight * vec4(p, 1.0);
         // Behind the panel, or outside the frustum it drew: nothing was
         // recorded there, so nothing can be said to be in the way.
@@ -402,37 +469,100 @@ fragment {
         if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
             return 1.0;
         }
+        // A render target is stored upside down on Metal and Vulkan relative
+        // to where clip space put it, and the right way up on OpenGL. Without
+        // this every shadow was drawn mirrored through the panel's centre —
+        // soft, the right size, and on the wrong side of what cast it, which
+        // a flat floor cannot show and three boxes show at once.
+        uv = uvToRenderTargetUV(uv);
 
-        // Filament reverses depth and puts the far plane at infinity: one at
-        // the near plane falling towards nought, which spends the float's
-        // precision where the geometry is rather than where it is not. So a
-        // *larger* number is nearer, and nought is infinitely far — which is
-        // also what an untouched map holds, and therefore reads as nothing in
-        // the way rather than as everything.
+        // What the map holds is Filament's depth: reversed, with the far
+        // plane at infinity, which for this projection is exactly
+        // near / distance. The matrix this point was projected by already
+        // carries that conversion, so `ndc.z` is in the same units as the
+        // map. That was the fault in the first version: it compared the
+        // projection's own z, which runs the other way and sits near one,
+        // against a map that sits near nought, and every surface came out
+        // lit whatever stood over it.
+        //
+        // Nought is infinitely far, which is also what an untouched texel
+        // holds — so an empty map reads as nothing in the way.
         float depth = ndc.z;
         if (depth <= 0.0) return 1.0;
 
-        // Along the surface rather than towards the light: a bias that pushes
-        // towards the panel makes a surface facing it hover, and one that
-        // pushes along the depth makes a grazing surface stripe. The dial is
-        // in texels of the map, which is the unit the acne is actually in.
+        float tanHalf = settings.x;
         float bias = settings.y;
-        float spread = settings.z;
+        float size = settings.z;
+        float near = settings.w;
 
-        float lit = 0.0;
-        // Nine taps in a square. Not a ring or a disc: the map is square, the
-        // spread is uniform, and a rotated kernel costs a per-pixel sine to
-        // hide banding that a wider box does not have in the first place.
-        for (int y = -1; y <= 1; y++) {
-            for (int x = -1; x <= 1; x++) {
-                vec2 at = uv + vec2(float(x), float(y)) * spread;
-                float held = textureLod(materialParams_areaShadow, at, 0.0).r;
-                // Nearer or level with what the panel saw, so this is the
-                // thing it was looking at. Reversed depth, so the bias adds.
-                lit += (depth + bias) >= held ? 1.0 : 0.0;
+        // Compared as distances in metres rather than as depths, because the
+        // penumbra is a ratio of distances and a bias is a length. A fixed
+        // bias in reversed depth is a centimetre at one metre and a metre at
+        // ten.
+        float receiver = near / depth;
+        // How much of the map one metre spans at this distance.
+        float uvPerMetre = 1.0 / (2.0 * receiver * tanHalf);
+        vec2 texel = 1.0 / vec2(textureSize(materialParams_areaShadow, 0));
+
+        // A surface tilted away from the map's axis is at a different depth
+        // a tap away from where it is itself, and would shadow itself across
+        // a wide filter. The allowance grows with how far the tap is from the
+        // centre and how steeply the surface is tilted, which is the slope
+        // bias that a hardware shadow map gets from polygon offset.
+        float facing = clamp(dot(n, towardsPanel), 0.05, 1.0);
+        float slope = min(sqrt(1.0 - facing * facing) / facing, 4.0);
+
+        // Turned per pixel so the taps of neighbours fall in different
+        // places, which trades the banding of a fixed pattern for a fine
+        // grain the eye averages away. Interleaved gradient noise: Jimenez,
+        // "Next Generation Post Processing in Call of Duty: Advanced
+        // Warfare", SIGGRAPH 2014.
+        float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+                                                   vec2(0.06711056, 0.00583715))));
+        float angle = noise * 6.2831853;
+        mat2 golden = mat2(kGoldenCos, kGoldenSin, -kGoldenSin, kGoldenCos);
+
+        // Where to look for whatever is in the way. Wide enough to find a
+        // blocker a third of the way from the panel, which covers everything
+        // that throws a penumbra worth drawing.
+        float search = clamp(size * uvPerMetre, texel.x, kShadowMaxRadius);
+
+        float blockers = 0.0;
+        float blockerSum = 0.0;
+        vec2 turn = vec2(cos(angle), sin(angle));
+        for (int i = 0; i < kShadowSearchTaps; i++) {
+            vec2 offset = spiralTap(i, kShadowSearchTaps, turn) * search;
+            turn = golden * turn;
+            float held = textureLod(materialParams_areaShadow, uv + offset, 0.0).r;
+            if (held <= 0.0) continue;
+            float distance = near / held;
+            float allowed = receiver - bias - slope * length(offset) / uvPerMetre;
+            if (distance < allowed) {
+                blockers += 1.0;
+                blockerSum += distance;
             }
         }
-        return lit * (1.0 / 9.0);
+        // Nothing in the way anywhere the light could come from.
+        if (blockers <= 0.0) return 1.0;
+
+        float blocker = blockerSum / blockers;
+        float penumbra = size * max(receiver - blocker, 0.0) / blocker;
+        // Half the band either side of the edge, in map units. Never below a
+        // texel and a half, which is where a hard shadow stops stair-stepping.
+        float radius = clamp(0.5 * penumbra * uvPerMetre,
+                             1.5 * texel.x, kShadowMaxRadius);
+
+        float lit = 0.0;
+        turn = vec2(cos(angle), sin(angle));
+        for (int i = 0; i < kShadowFilterTaps; i++) {
+            vec2 offset = spiralTap(i, kShadowFilterTaps, turn) * radius;
+            turn = golden * turn;
+            float held = textureLod(materialParams_areaShadow, uv + offset, 0.0).r;
+            float distance = held > 0.0 ? near / held : 1e9;
+            float allowed = receiver - bias - slope * length(offset) / uvPerMetre;
+            lit += distance >= allowed ? 1.0 : 0.0;
+        }
+        return lit * (1.0 / float(kShadowFilterTaps));
     }
 
     // Everything the rectangles add at this fragment, in the same photometric
@@ -515,7 +645,12 @@ fragment {
                     texelFetch(materialParams_lightData, ivec2(6, int(kLtcRows) + i), 0),
                     texelFetch(materialParams_lightData, ivec2(7, int(kLtcRows) + i), 0),
                     texelFetch(materialParams_lightData, ivec2(8, int(kLtcRows) + i), 0));
-                reaches = rectangleShadow(p, shadowSettings, toLight);
+                // The panel's own facing, towards the light rather than away
+                // from it: cross(right, up) is how the rectangle was packed,
+                // and it points back at the panel from what the panel lights.
+                vec3 towardsPanel = normalize(cross(a2.xyz, a3.xyz));
+                reaches = rectangleShadow(p, n, towardsPanel,
+                                          shadowSettings, toLight);
             }
 
             total += radiance * window * reaches
@@ -712,6 +847,91 @@ fragment {
              * rough;
     }
 
+    // ---- Projected decals ----
+    //
+    // For each decal: take this point into the decal's box, where the box is
+    // the cube from -0.5 to 0.5, and if it is inside, look up the picture at
+    // the box's x and z and paint it over the surface. The box's own y is the
+    // projection axis, so a decal is thrown down its minus-y onto whatever
+    // stands in the way.
+    //
+    // Packed by OrbisDecals.cpp; the texel layout is written out there.
+
+    #define kDecalTexels 7
+
+    vec4 decalTexel(int decal, int texel) {
+        return texelFetch(materialParams_decalData, ivec2(texel, decal), 0);
+    }
+
+    void applyDecals(inout vec4 base, inout float metallic,
+                     inout float roughness) {
+        // One fetch to find out there is nothing to do, which is the usual
+        // answer. The same for every fragment in the draw, so the branch is
+        // uniform and the derivatives below are still taken by every lane.
+        int count = int(decalTexel(0, 6).w);
+        if (count <= 0) return;
+
+        vec3 p = getUserWorldPosition();
+
+        // The picture's mip level, worked out from how fast the position moves
+        // across the pixel — before the loop, because a derivative taken
+        // inside a branch that some neighbouring fragments skipped is
+        // undefined, and a decal's edge is exactly such a branch. Each decal
+        // then turns these into its own uv rates with the rows of its matrix.
+        vec3 dpdx = dFdx(p);
+        vec3 dpdy = dFdy(p);
+
+        // The geometric normal rather than the shading one: the angle fade is
+        // about which way the *surface* faces the projector, and a normal
+        // map's bumps would otherwise fade a decal in speckles.
+        vec3 facing = getWorldGeometricNormalVector();
+        int layer = materialParams.decalLayer;
+
+        for (int i = 0; i < count; i++) {
+            vec4 r0 = decalTexel(i, 0);
+            vec4 r1 = decalTexel(i, 1);
+            vec4 r2 = decalTexel(i, 2);
+            vec3 local = vec3(dot(r0.xyz, p) + r0.w,
+                              dot(r1.xyz, p) + r1.w,
+                              dot(r2.xyz, p) + r2.w);
+            if (any(greaterThan(abs(local), vec3(0.5)))) continue;
+
+            vec4 settings = decalTexel(i, 4);
+            if ((int(settings.w) & layer) == 0) continue;
+
+            // How square the surface is to the projector. A floor decal whose
+            // box reaches the foot of a wall would otherwise be dragged down
+            // that wall as a smear of its own edge pixels, because every
+            // point of the wall lands on the same row of the picture.
+            float square = dot(facing, decalTexel(i, 6).xyz);
+            float fade = settings.y - settings.z < 1e-4
+                ? step(settings.z, square)
+                : smoothstep(settings.z, settings.y, square);
+            if (fade <= 0.0) continue;
+
+            vec4 tint = decalTexel(i, 3);
+            vec4 picture = vec4(1.0);
+            if (settings.x >= 0.0) {
+                vec2 uv = local.xz + 0.5;
+                vec2 gx = vec2(dot(r0.xyz, dpdx), dot(r2.xyz, dpdx));
+                vec2 gy = vec2(dot(r0.xyz, dpdy), dot(r2.xyz, dpdy));
+                picture = textureGrad(materialParams_decalImages,
+                                      vec3(uv, settings.x), gx, gy);
+            }
+
+            // The pictures are stored premultiplied, which is what keeps a
+            // cut-out's edge from darkening as it is filtered down its mips:
+            // a transparent texel contributes nothing rather than its black.
+            float cover = picture.a * tint.a * fade;
+            base.rgb = base.rgb * (1.0 - cover)
+                     + picture.rgb * tint.rgb * (tint.a * fade);
+
+            vec4 surface = decalTexel(i, 5);
+            roughness = mix(roughness, surface.x, cover * surface.y);
+            metallic = mix(metallic, surface.z, cover * surface.w);
+        }
+    }
+
     void material(inout MaterialInputs material) {
         vec2 uv = getUV0() * materialParams.uvTransform.xy
                 + materialParams.uvTransform.zw;
@@ -793,6 +1013,11 @@ fragment {
             roughness *= packed.g;
             metallic  *= packed.b;
         }
+        // Decals, over the finished maps and before anything is lit — so the
+        // area lights and the field below, and Filament's own lights after
+        // this returns, all see the painted surface.
+        applyDecals(base, metallic, roughness);
+        material.baseColor = base;
         material.metallic    = metallic;
         material.roughness   = roughness;
         material.reflectance = materialParams.reflectance;

@@ -56,6 +56,20 @@ NS_ASSUME_NONNULL_BEGIN
                paths:(NSArray<NSString *> *)paths
                count:(uint32_t)count;
 
+/// Whether identical objects are drawn as one instanced draw.
+///
+/// Objects with the same mesh, the same material (and, for the placeholder
+/// cube, the same colour) and the same shadow and layer flags are made to
+/// share one material instance, and Filament's automatic instancing merges
+/// their draws. They stay separate objects: a transform written to one moves
+/// that one. Set before `applyObjects`, which is where the sharing is decided.
+- (void)setBatching:(BOOL)enabled;
+
+/// What the last `applyObjects` batched: objects in groups large enough to
+/// merge, and how many such groups there were. Nought while batching is off.
+@property(nonatomic, readonly) uint32_t batchedObjects;
+@property(nonatomic, readonly) uint32_t batchGroups;
+
 /// States what every material in the scene is made of.
 ///
 /// Published whole each frame like everything else, and keyed the same way:
@@ -111,6 +125,17 @@ NS_ASSUME_NONNULL_BEGIN
               kinds:(const int32_t *)kinds
               flags:(const int32_t *)flags
              params:(const float *)params
+              count:(uint32_t)count;
+
+/// States what is painted onto the scene's surfaces.
+///
+/// `params` is `count` decals of twenty-two floats each — the layout is
+/// written out in OrbisDecals.h. `images` is `count` indices into `paths`,
+/// -1 for a decal that is a tint with no picture. Past the budget of
+/// thirty-two, the rest are reported rather than painted.
+- (void)applyDecals:(const float *)params
+             images:(const int32_t *)images
+              paths:(NSArray<NSString *> *)paths
               count:(uint32_t)count;
 
 /// Sets the air the scene is seen through.
@@ -204,6 +229,15 @@ NS_ASSUME_NONNULL_BEGIN
            targetCount:(uint32_t)targetCount
                  names:(NSArray<NSString *> *)names;
 
+/// What the god-ray and distortion effect passes read: one row of god-ray
+/// settings and every distortion end to end, as OrbisGodRays and
+/// OrbisDistortion pack them. Kept until the next scene; a row that is not
+/// whole is taken as none.
+- (void)setGodRays:(const float *)godRays
+              count:(NSUInteger)count
+        distortions:(const float *)distortions
+    distortionCount:(NSUInteger)distortionCount;
+
 /// What each pass of the last frame cost, in milliseconds, and how many
 /// renderables it submitted — two numbers per pass, in the order they ran.
 ///
@@ -260,6 +294,29 @@ NS_ASSUME_NONNULL_BEGIN
               transforms:(const float *)transforms
                  colours:(const float *)colours
                    count:(uint32_t)count;
+
+/// Whether any Gaussian splat clouds are held, so a scene that has just
+/// dropped its last one still gets the call that clears them.
+@property(nonatomic, readonly) BOOL hasSplats;
+
+/// States the scene's Gaussian splat clouds.
+///
+/// Parallel arrays of `count`: the key each is kept against, its flags (bit
+/// one sorts it), its revision, eighteen floats of transform, opacity and
+/// brightness, and a path — empty for a cloud sent in memory. `changed`
+/// names the in-memory clouds whose records are in `data`, packed end to end
+/// in that order, `changedCounts` saying how many 32-byte records each has.
+- (void)applySplats:(const int32_t *)keys
+              flags:(const int32_t *)flags
+          revisions:(const int32_t *)revisions
+             params:(const float *)params
+              paths:(NSArray<NSString *> *)paths
+            changed:(const int32_t *)changed
+      changedCounts:(const int32_t *)changedCounts
+       changedCount:(uint32_t)changedCount
+               data:(const uint8_t *)data
+         dataLength:(size_t)dataLength
+              count:(uint32_t)count;
 
 /// Sets the sky: its gradient, the body in it, its cloud, and its lightning.
 ///
@@ -333,6 +390,18 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setExposure:(float)aperture
             shutter:(float)shutter
         sensitivity:(float)sensitivity;
+
+/// Says which objects to draw an outline round, and how.
+///
+/// `keys` are objects' keys, the active ones first; `params` is fourteen
+/// floats: the colour of the rest of the selection and of the active object,
+/// each as display RGBA from nought to one, the width in pixels, what to do
+/// with hidden parts (0 shown, 1 faint, 2 dashed, 3 not drawn), how opaque a
+/// hidden part is, the dash length in pixels, how many of `keys` are active,
+/// and one spare. A count of nought draws nothing and costs nothing.
+- (void)setOutlineKeys:(const int64_t *)keys
+                 count:(uint32_t)count
+                params:(const float *)params;
 
 /// Requests new dimensions. Safe from any thread — the work happens at the
 /// top of the next frame, on the thread that owns the engine.

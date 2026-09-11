@@ -30,3 +30,11 @@ packages/orbis_filament/darwin/orbis_filament/Sources/orbis_filament_native/gene
 
 # Fetched by tool/fetch_bistro.sh: a CC BY 4.0 test scene, not ours to ship.
 assets/bistro/
+
+# Built by packages/orbis_filament/native/web/build.sh: object files, and the
+# Emscripten module it links, served straight out of host/ alongside the
+# static index.html/main.js that stay committed.
+packages/orbis_filament/native/web/build/
+packages/orbis_filament/native/web/host/orbis_renderer.js
+packages/orbis_filament/native/web/host/orbis_renderer.wasm
+packages/orbis_filament/native/web/captures/

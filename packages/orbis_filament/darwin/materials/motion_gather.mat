@@ -1,0 +1,146 @@
+// Each pixel, gathered along the largest motion near it.
+//
+// McGuire, Hennessy, Bukowski and Osman, "A Reconstruction Filter for
+// Plausible Motion Blur" (I3D 2012), algorithm 1. A blurred picture is every
+// point smeared over the path it took while the shutter was open, which is a
+// scatter; this is the same thing done as a gather, one pixel reading its
+// neighbours. It reads along the neighbourhood's dominant motion — the largest
+// in the 3 × 3 tiles around it, which is the paper's neighbour-max pass folded
+// in here rather than paid for as a target of its own — and weights each tap
+// by whether that tap's streak could have reached this pixel:
+//
+//   - a tap in front whose own streak is long enough to reach here smears
+//     over this pixel (the cone on its velocity);
+//   - this pixel, if it is in front and moving, smears over what is behind
+//     it (the cone on its own velocity);
+//   - two taps moving together blur into each other (the two cylinders).
+//
+// That depth test is the whole difference from a plain directional blur: a
+// fast object streaks across a still background without dragging the
+// background along with it, and a still object in front of a pan stays sharp.
+//
+// The taps are offset by a per-pixel jitter so the few of them read as fine
+// noise rather than as a comb of ghost copies.
+material {
+    name : orbisMotionGather,
+    shadingModel : unlit,
+    vertexDomain : device,
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    requires : [ uv0 ],
+    parameters : [
+        // The lit picture.
+        { type : sampler2d, name : source },
+        // V, half the streak in pixels, and the distance, per pixel.
+        { type : sampler2d, name : velocity, precision : high },
+        // The largest V in each tile.
+        { type : sampler2d, name : tileMax, precision : high },
+        { type : float2, name : size },
+        // How many tiles there are across and down, and how wide one is.
+        { type : float2, name : grid },
+        { type : int, name : tile },
+        // How many taps, odd. The renderer holds it to 31.
+        { type : int, name : samples },
+        // Nought copies the picture through untouched.
+        { type : float, name : on }
+    ]
+}
+
+fragment {
+    // How far a surface may be behind another and still count as the same
+    // one, relative to its distance: a depth buffer's resolution falls off
+    // with distance, and so does how much anybody can see of the difference.
+    float softCompare(float a, float b) {
+        float extent = max(0.05, 0.02 * min(a, b));
+        return clamp(1.0 - (a - b) / extent, 0.0, 1.0);
+    }
+
+    float cone(float distance, float reach) {
+        return clamp(1.0 - distance / reach, 0.0, 1.0);
+    }
+
+    float cylinder(float distance, float reach) {
+        return 1.0 - smoothstep(0.95 * reach, 1.05 * reach, distance);
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        ivec2 last = ivec2(materialParams.size) - 1;
+        ivec2 x = clamp(ivec2(getUV0() * materialParams.size), ivec2(0), last);
+        vec4 centre = texelFetch(materialParams_source, x, 0);
+
+        if (materialParams.on < 0.5) {
+            material.baseColor = centre;
+            return;
+        }
+
+        // The neighbourhood's largest motion. A tile is as wide as the longest
+        // half-streak, so this tile and the eight round it hold every pixel
+        // whose streak could reach this one.
+        ivec2 here = x / max(materialParams.tile, 1);
+        ivec2 lastTile = ivec2(materialParams.grid) - 1;
+        vec2 largest = vec2(0.0);
+        float most = 0.0;
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                ivec2 at = clamp(here + ivec2(dx, dy), ivec2(0), lastTile);
+                vec2 v = texelFetch(materialParams_tileMax, at, 0).rg;
+                float m = dot(v, v);
+                if (m > most) {
+                    most = m;
+                    largest = v;
+                }
+            }
+        }
+
+        // Nothing near here moved as much as half a pixel: the picture is
+        // already what the shutter would have recorded.
+        if (most < 0.25) {
+            material.baseColor = centre;
+            return;
+        }
+
+        vec4 own = texelFetch(materialParams_velocity, x, 0);
+        float ownReach = max(length(own.rg), 0.5);
+        float ownDistance = own.b;
+
+        float weight = 1.0 / ownReach;
+        vec3 sum = centre.rgb * weight;
+
+        // Interleaved gradient noise (Jimenez 2014): cheap, and it spreads
+        // the error evenly rather than in the clumps plain hashing leaves.
+        vec2 p = vec2(x);
+        float jitter = fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))) - 0.5;
+
+        int count = materialParams.samples;
+        int middle = (count - 1) / 2;
+        for (int i = 0; i < 31; i++) {
+            if (i >= count) break;
+            if (i == middle) continue;
+            float t = mix(-1.0, 1.0, (float(i) + jitter + 1.0) / float(count + 1));
+            vec2 offset = largest * t;
+            ivec2 y = clamp(ivec2(floor(p + 0.5 + offset)), ivec2(0), last);
+
+            vec4 theirs = texelFetch(materialParams_velocity, y, 0);
+            float theirReach = max(length(theirs.rg), 0.5);
+            float theirDistance = theirs.b;
+            float apart = length(vec2(y - x));
+
+            // Whether the tap is in front of this pixel, and whether this
+            // pixel is in front of the tap.
+            float front = softCompare(theirDistance, ownDistance);
+            float back = softCompare(ownDistance, theirDistance);
+
+            float a = front * cone(apart, theirReach) +
+                      back * cone(apart, ownReach) +
+                      cylinder(apart, theirReach) * cylinder(apart, ownReach) * 2.0;
+
+            weight += a;
+            sum += a * texelFetch(materialParams_source, y, 0).rgb;
+        }
+
+        material.baseColor = vec4(sum / weight, 1.0);
+    }
+}

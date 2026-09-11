@@ -164,7 +164,50 @@ enum OrbisEffect {
   /// target rather than onto the screen — and then needs something to put
   /// that target on the screen. Without this the only way to present one is
   /// to run an effect that also changes it.
-  copy('Copy');
+  copy('Copy'),
+
+  /// Shafts of light through the gaps in whatever stands against the sky.
+  ///
+  /// Each pixel walks towards the light's place on the screen and adds up how
+  /// much of the way is open sky — Mitchell's screen-space light scattering.
+  /// Open sky is read from the depth buffer, so it reads the picture and the
+  /// depth of the same target, the way [bounce] does. Its settings are the
+  /// scene's [OrbisGodRays]; at a strength of nought it is a copy.
+  ///
+  /// A scene with no graph of its own does not need to name this: turning
+  /// god rays on puts it in. A graph that is its own puts it where it wants.
+  godRays('God rays'),
+
+  /// The picture read from a little way off, where air bends the light.
+  ///
+  /// Sums the scene's [OrbisDistortion]s — shockwaves, heat haze, a lens —
+  /// into one offset per pixel. Depth-aware, so it reads depth as well as
+  /// colour: from the first target it reads that kept depth, which lets it
+  /// take its colour from a pass that ran after the world was drawn.
+  distortion('Distortion'),
+
+  /// What moved while the shutter was open, smeared along the way it moved.
+  ///
+  /// Reads the colour and the depth of one target, like [bounce], and is
+  /// usually built by [OrbisMotionBlur.pass] rather than by hand — the plane
+  /// carries its four dials in the order that class writes them.
+  ///
+  /// Four steps inside the renderer, all of them its own business rather
+  /// than passes in the graph: the objects that moved since the scene was
+  /// last published are drawn again with a material that writes how far each
+  /// pixel travelled; that is added to the camera's own motion, rebuilt from
+  /// depth for every pixel; the largest motion in each tile of the screen is
+  /// found; and each pixel gathers along the largest motion near it, weighted
+  /// by depth so that a moving thing smears over what is behind it and not
+  /// the other way round. The last two are McGuire, Hennessy, Bukowski and
+  /// Osman, "A Reconstruction Filter for Plausible Motion Blur" (2012).
+  ///
+  /// Measured at 1600 by 1200 on a GPU shared with other work, against the
+  /// same graph running a pass that only copies: about **2 ms** more with a
+  /// fan and a plate moving under a still camera, and **4 to 5 ms** more
+  /// while the camera pans and every pixel gathers. A frame in which nothing
+  /// moved skips the three inner passes and copies.
+  motionBlur('Motion blur');
 
   const OrbisEffect(this.label);
 
@@ -466,18 +509,45 @@ class OrbisRenderGraph {
       // it. The renderer skips such a pass rather than sampling a buffer that
       // is not there — which draws a frame with the effect silently absent,
       // and that is indistinguishable from the effect not working.
-      if (pass.effect == OrbisEffect.bounce) {
+      if (pass.effect == OrbisEffect.bounce ||
+          pass.effect == OrbisEffect.motionBlur) {
         for (final read in pass.reads) {
           final target = targets.where((one) => one.name == read).firstOrNull;
           if (target != null && !target.depth) {
             found.add(
               OrbisGraphProblem(
                 pass.name,
-                'bounces light off $read, which keeps no depth — so there is '
-                'no telling what is in front of what',
+                pass.effect == OrbisEffect.bounce
+                    ? 'bounces light off $read, which keeps no depth — so '
+                          'there is no telling what is in front of what'
+                    : 'blurs $read, which keeps no depth — so the camera\'s '
+                          'motion cannot be rebuilt and nothing knows what '
+                          'is in front of what',
               ),
             );
           }
+        }
+      }
+      // God rays and distortion need depth too, but from any one of their
+      // reads rather than every one: the distortion takes its colour from the
+      // god rays' output, which is a picture with no depth, and its depth
+      // from the world that pass read.
+      if ((pass.effect == OrbisEffect.godRays ||
+              pass.effect == OrbisEffect.distortion) &&
+          pass.reads.isNotEmpty) {
+        final kept = pass.reads.any(
+          (read) =>
+              targets.where((one) => one.name == read).firstOrNull?.depth ??
+              false,
+        );
+        if (!kept) {
+          found.add(
+            OrbisGraphProblem(
+              pass.name,
+              'reads no target that keeps depth — so there is no telling '
+              'what stands in front of what',
+            ),
+          );
         }
       }
       if (pass.kind == OrbisPassKind.reflection && pass.plane == null) {
@@ -541,6 +611,77 @@ class OrbisRenderGraph {
 
   /// Whether every pass can run.
   bool get isRunnable => problems.isEmpty;
+
+  /// Whether this is the frame as the renderer draws it unasked: everything,
+  /// straight into the picture, with nothing after it.
+  bool get isStandard =>
+      passes.isEmpty ||
+      (passes.length == 1 &&
+          passes.first.kind == OrbisPassKind.scene &&
+          passes.first.into == null &&
+          passes.first.enabled);
+
+  /// What the world is drawn into when a scene's god rays or distortion need
+  /// a picture to work on, and what the god rays write when a distortion
+  /// comes after them.
+  static const String screenTarget = 'orbis.screen';
+  static const String raysTarget = 'orbis.rays';
+
+  /// This graph with god rays and distortion put into it.
+  ///
+  /// Only into the renderer's own graph. A scene that never built one should
+  /// get the shafts it asked for without learning what a pass is; a scene
+  /// that did build one has decided its own order, and an effect slotted in
+  /// by guesswork would land somewhere it did not mean — so it is returned
+  /// untouched and places an [OrbisEffect.godRays] or
+  /// [OrbisEffect.distortion] pass itself.
+  ///
+  /// Neither asked for is this graph, unchanged — which is what makes both
+  /// free when off: no texture, no extra pass, the same frame as before.
+  ///
+  /// God rays come before distortion, because hot air bends everything behind
+  /// it, the shafts included.
+  OrbisRenderGraph withScreenEffects({
+    bool godRays = false,
+    bool distortion = false,
+  }) {
+    if (!godRays && !distortion) return this;
+    if (!isStandard) return this;
+
+    final world = passes.isEmpty ? null : passes.first;
+    return OrbisRenderGraph(
+      targets: [
+        const OrbisTarget(name: screenTarget),
+        if (godRays && distortion)
+          const OrbisTarget(name: raysTarget, depth: false),
+      ],
+      passes: [
+        OrbisPass(
+          name: world?.name ?? 'scene',
+          into: screenTarget,
+          layers: world?.layers ?? 0xFF,
+        ),
+        if (godRays)
+          OrbisPass(
+            name: 'god rays',
+            kind: OrbisPassKind.effect,
+            effect: OrbisEffect.godRays,
+            reads: const [screenTarget],
+            into: distortion ? raysTarget : null,
+          ),
+        if (distortion)
+          OrbisPass(
+            name: 'distortion',
+            kind: OrbisPassKind.effect,
+            effect: OrbisEffect.distortion,
+            // The colour to bend first, and the depth to bend it by second.
+            reads: godRays
+                ? const [raysTarget, screenTarget]
+                : const [screenTarget],
+          ),
+      ],
+    );
+  }
 
   /// The targets nothing reads.
   ///
@@ -647,19 +788,44 @@ class OrbisPassTiming {
 /// the three a fixed pipeline cannot answer without being instrumented by
 /// hand every time somebody asks.
 class OrbisFrameCapture {
-  const OrbisFrameCapture({this.passes = const [], this.milliseconds = 0});
+  const OrbisFrameCapture({
+    this.passes = const [],
+    this.milliseconds = 0,
+    this.batchedObjects = 0,
+    this.batchGroups = 0,
+  });
 
   final List<OrbisPassTiming> passes;
 
   /// What the whole frame cost.
   final double milliseconds;
 
+  /// How many objects the last publish put into a group big enough to merge.
+  ///
+  /// Nought with [OrbisScene.batching] off, and nought with it on in a scene
+  /// where nothing is repeated.
+  final int batchedObjects;
+
+  /// How many manually-instanced renderables those objects came to once
+  /// built — a group of up to sixty-four members is one, so
+  /// [batchedObjects] minus this is exactly the number of draws saved, not
+  /// a ceiling on it: unlike Filament's own automatic instancing, which only
+  /// merges draws that happen to land next to each other once sorted, a
+  /// batched group is built as one renderable from the start and there is
+  /// nothing left for a sort order to get in the way of.
+  final int batchGroups;
+
   /// Reads a capture out of what the renderer sent back.
   ///
   /// Two floats per pass — what it cost and how many draws it made — in the
   /// order the passes were scheduled, so the names come from this side rather
   /// than crossing as strings sixty times a second.
-  factory OrbisFrameCapture.from(Float32List packed, List<String> names) {
+  factory OrbisFrameCapture.from(
+    Float32List packed,
+    List<String> names, {
+    int batchedObjects = 0,
+    int batchGroups = 0,
+  }) {
     final passes = <OrbisPassTiming>[];
     for (var i = 0; i < names.length && i * 2 + 1 < packed.length; i++) {
       passes.add(
@@ -673,6 +839,8 @@ class OrbisFrameCapture {
     return OrbisFrameCapture(
       passes: passes,
       milliseconds: passes.fold(0.0, (sum, pass) => sum + pass.milliseconds),
+      batchedObjects: batchedObjects,
+      batchGroups: batchGroups,
     );
   }
 

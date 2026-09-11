@@ -71,12 +71,24 @@ class OrbisView extends StatefulWidget {
     final timings = stats?['passTimings'];
     if (timings is! List) return const OrbisFrameCapture();
 
+    // Two numbers rather than one per pass, because batching is decided once
+    // per publish and every pass then draws whatever that decision left it.
+    // Absent from a renderer that has never heard of batching, which is why
+    // they are read defensively rather than indexed.
+    final batching = stats?['batching'];
+    final batched = batching is List && batching.isNotEmpty
+        ? batching.first
+        : null;
+    final groups = batching is List && batching.length > 1 ? batching[1] : null;
+
     return OrbisFrameCapture.from(
       Float32List.fromList([
         for (final value in timings)
           if (value is num) value.toDouble(),
       ]),
       passNames,
+      batchedObjects: batched is num ? batched.toInt() : 0,
+      batchGroups: groups is num ? groups.toInt() : 0,
     );
   }
 
@@ -106,6 +118,9 @@ class _OrbisViewState extends State<OrbisView> {
   /// renderer, not about the scene: two views of the same scene have had
   /// different things sent to them.
   final Map<int, int> _sentRevisions = {};
+
+  /// The same, for splat clouds held in memory.
+  final Map<int, int> _sentSplatRevisions = {};
 
   Duration _stamp = Duration.zero;
 
@@ -139,6 +154,7 @@ class _OrbisViewState extends State<OrbisView> {
         scene.toMessage(
           id,
           sentRevisions: _sentRevisions,
+          sentSplatRevisions: _sentSplatRevisions,
           // The frame's own timestamp, which is the clock everything in the
           // frame was worked out on — including wherever the camera decided
           // to be.
@@ -155,6 +171,12 @@ class _OrbisViewState extends State<OrbisView> {
       _sentRevisions.removeWhere(
         (key, _) => !scene.populations.any((p) => p.key == key),
       );
+      _sentSplatRevisions
+        ..clear()
+        ..addAll({
+          for (final cloud in scene.splats)
+            if (cloud.data != null) cloud.key: cloud.revision,
+        });
       if (notes != null && notes.isNotEmpty) {
         widget.onSceneNotes?.call(notes);
       }
@@ -225,9 +247,17 @@ class _OrbisViewState extends State<OrbisView> {
     // one implementation — the same Filament, the same Metal backend, the
     // same CVPixelBuffer handed to the texture registry — so this is a list
     // rather than a single platform, and the rest grows it as they land.
-    const drawable = {TargetPlatform.macOS, TargetPlatform.iOS};
+    // Android's implementation is the same renderer and the same channel
+    // protocol behind a Kotlin/JNI plugin instead of Swift's, presenting
+    // into a Flutter SurfaceProducer texture rather than a CVPixelBuffer —
+    // see packages/orbis_filament/android/.
+    const drawable = {
+      TargetPlatform.macOS,
+      TargetPlatform.iOS,
+      TargetPlatform.android,
+    };
     if (!drawable.contains(defaultTargetPlatform)) {
-      return const _Notice('Orbis renders on macOS and iOS so far.');
+      return const _Notice('Orbis renders on macOS, iOS and Android so far.');
     }
 
     return LayoutBuilder(

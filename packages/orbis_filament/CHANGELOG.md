@@ -1,5 +1,186 @@
 # Changelog
 
+## 0.22.0
+
+- **A rectangular light's shadow now actually falls.** The depth map it drew
+  was compared in the wrong units — Filament renders reversed-Z with the far
+  plane at infinity, and the projection a camera hands out is neither — and
+  the lookup read the map the wrong way up on Metal and Vulkan; either alone
+  gave a scene that rendered identically with the panel casting and not. The
+  lookup is now percentage-closer soft shadows, so the penumbra comes from the
+  panel's real size and the gap it bridges: 12 pixels wide under a one-metre
+  panel and 36 under a four-metre one. Filament's own shadow settings are
+  exposed alongside it — cascade splits placed by hand, PCSS penumbra scales,
+  contact-shadow trace length and steps, and the variance-map options — all
+  defaulting to Filament's own values, so no existing scene changes. Shadow
+  caching is not reachable through Filament's API and is not attempted.
+
+- **Environment volumes.** `OrbisScene.volumes` takes `OrbisEnvironmentVolume`s
+  — a turned box or a sphere, with a blend distance, a priority and a weight —
+  whose `OrbisEnvironmentOverrides` change the fog, exposure, sky ambient and
+  colour, image-based light intensity and rotation, bloom and colour grade
+  within a region, fading smoothly across the blend distance. An override left
+  null leaves that setting alone. They are resolved against the camera by a
+  pure Dart resolver (`OrbisScene.resolved()`) when the scene is sent, so the
+  renderer and the scene message are unchanged: lux blends in log space,
+  exposure in stops, rotation the short way round, colours in linear light.
+
+- **Projected decals.** `OrbisScene.decals` takes up to 32 `OrbisDecal`s, each
+  a box that throws a picture or a tint onto every lit surface inside it. They
+  are painted into base colour, and optionally roughness and metalness, before
+  the surface is lit, so they take shadows and highlights like what is under
+  them. Each has an angle fade that keeps it off surfaces edge-on to its
+  projector, a layer mask and a sort order; a decal past the budget, or a
+  picture that cannot be read, is reported rather than dropped.
+
+- **Gaussian splats.** `OrbisSplats` draws a 3D Gaussian splat capture from the
+  reference trainer's binary `.ply` or a compact `.splat`, or a cloud made in
+  Dart with `OrbisSplats.pack`. Each splat is projected with the EWA
+  approximation and drawn as a 3σ ellipse, blended back to front over the solid
+  scene and hidden by anything solid in front of it. The sort runs on its own
+  thread when the view turns — about 8 ms for a million splats in an optimised
+  build. Only a capture's degree-0 colour is used; higher spherical-harmonic
+  bands are reported and ignored.
+
+- **Selection outlines.** `OrbisScene.outline` takes an `OrbisOutline`: a set of
+  object keys, an active one drawn brighter, colours, a width in pixels, and how
+  to draw the parts other objects hide (`OrbisOccluded.shown`, `faint`,
+  `dashed` or `hidden`). It follows the silhouette and is drawn over the
+  finished frame after tone mapping and anti-aliasing, so its colour is exact
+  and it cannot shimmer under temporal anti-aliasing. It costs nothing while
+  nothing is outlined.
+
+- **Instance batching, off by default.** With `OrbisScene.batching` on,
+  objects sharing a mesh, a material and their shadow and layer flags are
+  drawn as instanced renderables Orbis builds itself — up to sixty-four
+  members each, sorted by position, every member's transform in the instance
+  buffer — while each object keeps its own key, so picking and selection are
+  unchanged and moving one rewrites only its slot. It no longer uses
+  Filament's engine-wide automatic instancing, so it works on stock Filament,
+  where that switch blacks out whole frames. Three thousand crates batched
+  take about a fifth of the CPU time and a third of the GPU time of the same
+  crates drawn one by one. It is off by default for one measured reason: where
+  nothing batched casts a shadow, batched and unbatched frames are
+  bit-identical, but a batched group that casts shadows changes how Filament
+  fits its shadow cascades, and 4.4% of pixels differ by an average of 2.5
+  levels in 255. A group's bounding box is the union of its members', so one
+  visible member draws its whole group. The frame's stats report how many
+  objects were batched and into how many groups. A depth prepass was measured
+  and not built: on Apple's tile-based GPUs there is no overdraw cost for it
+  to remove.
+
+- **God rays and screen distortion.** `OrbisScene.godRays` adds shafts of light
+  from the scene's own directional light, by Mitchell's screen-space light
+  scattering. Open sky is read from the depth buffer, so a sunlit wall blocks
+  light rather than sending it; the shafts fade as the sun leaves the frame,
+  vanish when it is behind the camera, and thin under cloud.
+  `OrbisScene.distortions` takes shockwaves, heat haze and a lens warp, summed
+  in one depth-aware pass with an optional chromatic split — measured, a
+  shockwave moves the floor by the 21.6 pixels its strength predicts. Both are
+  render-graph effects, `OrbisEffect.godRays` and `OrbisEffect.distortion`; a
+  scene with no graph of its own has the passes put in for it, and neither
+  costs anything while off.
+
+- **Motion blur, from a velocity buffer.** `OrbisMotionBlur().graph()` draws
+  the world into a target that keeps its depth and blurs it onto the screen
+  with the reconstruction filter of McGuire et al. (2012): the largest motion
+  in each tile, then a depth-aware gather, so a moving thing smears over what
+  is behind it and a still thing in front stays sharp. The camera's motion is
+  rebuilt from depth, and objects whose transform changed are drawn again to
+  record their own, so a spinning fan blurs while the wall behind it does not.
+  The renderer remembers both between frames, so a host that only resends its
+  scene gets it for free. The streak is photographic — speed times the
+  camera's shutter, measured on the clocks things actually moved on — and
+  lands within about six per cent of that: 1/1000 s barely blurs, 1/30 s
+  smears, and `maxPixels` caps a whipped camera. Off unless a graph asks for
+  it; a frame in which nothing moved costs a copy.
+
+- The plugin read a render graph of twelve or more passes out of step: it
+  divided the pass list by twelve floats where a pass is thirteen.
+
+- **The black frames that made batching experimental are a fault in Filament,
+  and it is traced.** `RenderPass::instanceify()` tested custom commands for
+  equivalence alongside draws, and a custom command carries no primitive
+  info — only its key is written — so it holds whatever the command arena last
+  contained. Where that stale copy matched the draw beside it, the custom
+  command was folded into that draw's instanced run and never executed. The
+  one this reaches is the colour-grading subpass, sorted last of all: without
+  it the tone-mapped attachment keeps its clear value and the whole frame, sky
+  included, comes back black — which is why it looked scene-dependent and
+  unrelated to what was actually merged. An eleven-line fix with a regression
+  test sits on Orbis's Filament fork, and against a Filament built with it
+  every scene that used to fail is bit-identical batched and unbatched, with
+  the saving unchanged (3000 crates: 6.08 ms down to 3.56 ms). It is in no
+  Filament release, so `batching` still defaults to off; the documentation now
+  says what the fault is and what would have to be true to change that.
+
+- **What a device below the standard surface's feature level really does**, now
+  said where three comments said otherwise. The lit surface declares Filament
+  feature level 3, because `matc` allows nine samplers below that and the
+  surface binds twelve. A device that cannot manage it does not quietly go
+  without: it refuses the material and the renderer aborts on the first lit
+  object, before any scene is chosen. Filament's Metal backend grants the third
+  level only to `MTLGPUFamilyApple6` and newer — A13, so iPhone 11 onwards —
+  and to every Apple silicon Mac; the iOS simulator's virtual GPU reports
+  `MTLGPUFamilyApple2`, so it sits below the bar and nothing draws there.
+  Lowering the declaration is not the fix: at level 2 the build fails with
+  "using more than 9 samplers" despite that level's sixteen texture units. The
+  gallery now has an iOS simulator runner and CI builds and runs it, with a
+  known feature-level refusal reported loudly rather than passed off as a pass.
+
+- **A slim lit surface for devices below the third feature level.** Chosen
+  automatically when the device cannot manage the standard surface — the iOS
+  simulator, iPhones before the A13, OpenGL ES 3.0, WebGL 2 — where the
+  renderer used to abort on its first lit object. It binds nine samplers
+  instead of twelve: every map, ground blending and textured decals are kept
+  (the decal rows now share the light data texture), and rectangular
+  area-light shadows and the irradiance field are given up, each reported
+  through the scene notes when a scene asks for it. The standard surface is
+  unchanged and still chosen wherever it was. On the iOS simulator this is the
+  difference between no frame at all and a frame drawn.
+
+- **Android.** The plugin has an Android implementation: Kotlin and JNI over
+  the same C ABI and the same `orbis_filament` channel protocol as the Swift
+  plugin, so the Dart API is unchanged, presenting into a Flutter
+  `SurfaceProducer` texture. Vulkan is the default and reaches feature level 3
+  on the emulator, where every worked example tried draws correctly; OpenGL ES
+  starts too, at feature level 1 with the slim surface. Video is Apple-only and
+  says so. Two calls join the C ABI, `orbis_renderer_attach_surface` and
+  `_detach_surface`, for a surface that comes and goes with the app; no
+  existing call changed. Scenes are applied on the main thread for now, so a
+  very large one stutters, and it has not yet been run on a device.
+
+- **The renderer core runs in a browser.** `native/web` compiles the same
+  portable C++ and C ABI to WebAssembly with Emscripten — no shared source
+  changed — against a Filament built for the web, and a small host page draws
+  the headless program's scene into a `<canvas>` through the ABI alone. WebGL 2
+  is feature level 1, so the slim surface is chosen and the renderer's notes
+  say so. Not yet wired into the Flutter plugin.
+
+- `OrbisScene.copyWith` keeps `probes` and `field`, which it used to drop
+  silently.
+
+- **The renderer is portable C++.** Everything it does is now `orbis::Renderer`
+  (`OrbisRendererCore.h`/`.cpp`), with no Objective-C and no Apple header in
+  it; the Objective-C `OrbisRenderer` is a thin wrapper, so the Swift plugin is
+  unchanged and macOS draws what it drew — fifteen of the examples
+  bit-for-bit, the rest within the difference between two runs of the same
+  code. Logging, the clock, files, decal pictures, video and a parallel loop
+  come from a small platform layer: the same Apple frameworks as before on
+  Apple, and the standard library, stb_image and Filament's resampler
+  elsewhere, where video is not yet supported and the notes say so. The
+  backend is chosen per platform — Metal on Apple, Vulkan then OpenGL on
+  Android, Linux and Windows, OpenGL on the web — and `ORBIS_BACKEND`
+  overrides it; a backend with no driver is skipped rather than crashing.
+  `include/orbis_renderer.h` is a C ABI for hosts with neither Objective-C nor
+  Flutter, every array length checked, and `native/headless` drives it with no
+  Flutter at all, drawing offscreen to a PNG. `setup.sh`'s
+  `ORBIS_MATC_BACKENDS` compiles the materials for other backends; every
+  material compiles for all of them. The standard lit surface binds twelve
+  samplers and so needs Filament's feature level 3, which OpenGL ES 3.0,
+  WebGL 2 and OpenGL below 4.3 do not reach — those need a slimmer surface
+  before the renderer can start on them.
+
 ## 0.21.0
 
 - **Specular anti-aliasing, and occlusion that stops darkening twice.**

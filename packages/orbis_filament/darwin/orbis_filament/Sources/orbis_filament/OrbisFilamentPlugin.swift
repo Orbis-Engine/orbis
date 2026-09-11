@@ -191,6 +191,11 @@ private final class Viewport {
   /// numbers per pass, in the order they ran.
   var passTimings: [NSNumber] { engine.sync { self.renderer.passTimings } }
 
+  /// What the last scene batched: objects merged, and into how many groups.
+  var batching: [UInt32] {
+    engine.sync { [self.renderer.batchedObjects, self.renderer.batchGroups] }
+  }
+
   func start() {
     clock.start { [weak self] in self?.tick() }
   }
@@ -285,10 +290,31 @@ private final class Viewport {
       graphTargets.withUnsafeBufferPointer { targetPointer in
         renderer.setRenderGraph(
           passPointer.baseAddress!,
-          count: UInt32(scene.graphPasses.count / 12),
+          // The stride, not a literal: this said twelve after a pass grew to
+          // thirteen floats, which reads the rows out of step from the
+          // twelfth pass on.
+          count: UInt32(scene.graphPasses.count / Scene.passStride),
           targets: targetPointer.baseAddress!,
-          targetCount: UInt32(scene.graphTargets.count / 6),
+          targetCount: UInt32(scene.graphTargets.count / Scene.targetStride),
           names: scene.graphTargetNames)
+      }
+    }
+
+    // Before the objects, because it is while they are reconciled that it is
+    // decided which of them share what they are made of.
+    renderer.setBatching(scene.batching)
+    // What the god-ray and distortion passes read. After the graph, which
+    // decides whether those passes exist at all.
+    let godRays = scene.godRayParams.isEmpty ? [Float(0)] : scene.godRayParams
+    let distortions =
+      scene.distortionParams.isEmpty ? [Float(0)] : scene.distortionParams
+    godRays.withUnsafeBufferPointer { rayPointer in
+      distortions.withUnsafeBufferPointer { bendPointer in
+        renderer.setGodRays(
+          rayPointer.baseAddress!,
+          count: UInt(scene.godRayParams.count),
+          distortions: bendPointer.baseAddress!,
+          distortionCount: UInt(scene.distortionParams.count))
       }
     }
 
@@ -420,6 +446,8 @@ private final class Viewport {
       }
     }
 
+    scene.splats.apply(to: renderer)
+
     let lightCount = scene.lightCount
     let lightKeys = lightCount == 0 ? [Int64(0)] : scene.lightKeys
     let lightKinds = lightCount == 0 ? [Int32(0)] : scene.lightKinds
@@ -437,6 +465,20 @@ private final class Viewport {
                                  count: UInt32(lightCount))
           }
         }
+      }
+    }
+
+    // Every publish, including one with none: an empty list is how a decal
+    // that has been removed stops being painted.
+    let decalCount = scene.decalImages.count
+    let decalParams = decalCount == 0 ? [Float(0)] : scene.decalParams
+    let decalImages = decalCount == 0 ? [Int32(-1)] : scene.decalImages
+    decalParams.withUnsafeBufferPointer { paramPointer in
+      decalImages.withUnsafeBufferPointer { imagePointer in
+        renderer.applyDecals(paramPointer.baseAddress!,
+                             images: imagePointer.baseAddress!,
+                             paths: scene.decalPaths,
+                             count: UInt32(decalCount))
       }
     }
 
@@ -478,6 +520,17 @@ private final class Viewport {
     renderer.setExposure(scene.aperture,
                          shutter: scene.shutterSpeed,
                          sensitivity: scene.sensitivity)
+
+    // After the objects, because the keys it names are theirs. An empty
+    // selection still goes, so that clearing one turns the outline off.
+    let outlineKeys = scene.outlineKeys.isEmpty ? [Int64(0)] : scene.outlineKeys
+    outlineKeys.withUnsafeBufferPointer { keyPointer in
+      scene.outlineParams.withUnsafeBufferPointer { paramPointer in
+        renderer.setOutlineKeys(keyPointer.baseAddress!,
+                                count: UInt32(scene.outlineKeys.count),
+                                params: paramPointer.baseAddress!)
+      }
+    }
   }
 
   /// What the scene asked for that could not be given, and why.
@@ -545,6 +598,10 @@ private struct Scene {
   let precipitationEnabled: Bool
   let precipitationParams: [Float]
   let skyEnabled: Bool
+  /// Whether identical objects are merged into instanced draws. Optional on
+  /// the wire and off when absent, so a host that has never heard of it
+  /// draws exactly as it did.
+  let batching: Bool
 
   /// Everything done to the image after the scene is drawn.
   ///
@@ -566,6 +623,15 @@ private struct Scene {
   let graphTargets: [Float]
   let graphTargetNames: [String]
 
+  /// The objects to outline, the active ones first, and how the outline
+  /// looks. Always a whole row of settings, even when nothing is outlined.
+  let outlineKeys: [Int64]
+  let outlineParams: [Float]
+  /// God rays and screen distortion: one row of settings, and every
+  /// distortion end to end. Both empty when the scene has none.
+  let godRayParams: [Float]
+  let distortionParams: [Float]
+
   /// The application's own clock, in seconds, when this scene was worked out.
   let at: Double
   let orthographic: Bool
@@ -584,7 +650,16 @@ private struct Scene {
   let populationChanged: [Int32]
   let populationTransforms: [Float]
   let populationColours: [Float]
+
+  /// Gaussian splat clouds, decoded and checked in OrbisSplatMessage.swift.
+  let splats: SplatMessage
   let skyParams: [Float]
+
+  /// Decals: a fixed stride of floats each, and an index per decal into the
+  /// paths of their pictures, -1 for none.
+  let decalParams: [Float]
+  let decalImages: [Int32]
+  let decalPaths: [String]
 
   /// How many floats one light occupies, and how many the fog does. Both
   /// match the packing on the Dart side; a mismatch is caught here as a
@@ -598,12 +673,22 @@ private struct Scene {
   fileprivate static let environmentStride = 4
   fileprivate static let passStride = 13
   fileprivate static let targetStride = 6
+  /// God rays and one distortion. Must match OrbisGodRays.stride and
+  /// OrbisDistortion.stride, and kGodRayStride and kDistortionStride in
+  /// ScreenEffects.h.
+  fileprivate static let godRayStride = 12
+  fileprivate static let distortionStride = 12
   private static let materialStride = 37
   private static let materialMaps = 7
   private static let videoStride = 4
   private static let fogStride = 16
   private static let precipitationStride = 12
   private static let skyStride = 34
+  /// Must match OrbisDecal.stride and kDecalStride in OrbisDecals.h.
+  private static let decalStride = 22
+  /// Must match OrbisOutline.stride in Dart and kOutlineParams in the
+  /// renderer's outline.
+  private static let outlineStride = 14
 
   init?(arguments: [String: Any]) {
     guard let keys = (arguments["objectKeys"] as? FlutterStandardTypedData)?.int64s,
@@ -681,6 +766,21 @@ private struct Scene {
       fieldParams.count == Scene.fieldStride ? fieldParams : []
     self.fieldFrom = arguments["fieldFrom"] as? String ?? ""
 
+    // Optional like the rest: a host that has never heard of outlines
+    // outlines nothing. A settings row of the wrong length is refused as a
+    // whole rather than read short, because C++ reads a fixed fourteen.
+    let outlineKeys =
+      (arguments["outlineKeys"] as? FlutterStandardTypedData)?.int64s ?? []
+    let outlineParams =
+      (arguments["outlineParams"] as? FlutterStandardTypedData)?.floats ?? []
+    if outlineParams.count == Scene.outlineStride {
+      self.outlineKeys = outlineKeys
+      self.outlineParams = outlineParams
+    } else {
+      self.outlineKeys = []
+      self.outlineParams = [Float](repeating: 0, count: Scene.outlineStride)
+    }
+
     // Not in the guard above: a scene without it is a scene with the
     // defaults, not a scene that fails to arrive.
     self.postParams =
@@ -729,6 +829,18 @@ private struct Scene {
       self.graphTargets = []
       self.graphTargetNames = []
     }
+
+    // Optional like the graph, and checked the same way: both are walked as
+    // pointers in C++. A row of god-ray settings that is not whole is no god
+    // rays; distortions are kept to whole rows.
+    let godRayParams =
+      (arguments["godRayParams"] as? FlutterStandardTypedData)?.floats ?? []
+    self.godRayParams =
+      godRayParams.count == Scene.godRayStride ? godRayParams : []
+    let distortionParams =
+      (arguments["distortionParams"] as? FlutterStandardTypedData)?.floats ?? []
+    self.distortionParams =
+      distortionParams.count % Scene.distortionStride == 0 ? distortionParams : []
 
     // Materials are optional the same way, so a host that never names one
     // sends nothing rather than an empty array of everything. What arrives
@@ -839,6 +951,7 @@ private struct Scene {
     self.orthographic = orthographic
     self.viewHeight = Float(viewHeight)
     self.skyParams = skyParams
+    self.batching = arguments["batching"] as? Bool ?? false
 
     // Absent when a scene has none, which is every scene that never uses
     // them — so this stays optional rather than being required of everybody.
@@ -895,6 +1008,23 @@ private struct Scene {
     self.populationChanged = populationChanged
     self.populationTransforms = populationTransforms
     self.populationColours = populationColours
+
+    // Optional like the populations: a scene that never paints anything
+    // sends nothing. What does arrive is walked by C++ against a count taken
+    // from the images, and every image index subscripts the paths.
+    let decalParams =
+      (arguments["decalParams"] as? FlutterStandardTypedData)?.floats ?? []
+    let decalImages =
+      (arguments["decalImages"] as? FlutterStandardTypedData)?.int32s ?? []
+    let decalPaths = arguments["decalPaths"] as? [String] ?? []
+    guard decalParams.count == decalImages.count * Scene.decalStride,
+          decalImages.allSatisfy({ $0 >= -1 && $0 < Int32(decalPaths.count) })
+    else { return nil }
+    self.decalParams = decalParams
+    self.decalImages = decalImages
+    self.decalPaths = decalPaths
+    guard let splats = SplatMessage(arguments: arguments) else { return nil }
+    self.splats = splats
   }
 }
 
@@ -1029,6 +1159,7 @@ public class OrbisFilamentPlugin: NSObject, FlutterPlugin {
       result([
         "gpuMilliseconds": viewport.gpuMilliseconds,
         "passTimings": viewport.passTimings,
+        "batching": viewport.batching,
       ])
 
     case "dispose":

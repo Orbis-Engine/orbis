@@ -1,16 +1,21 @@
 import 'dart:typed_data';
 
+import 'decal.dart';
 import 'material.dart';
+import 'outline.dart';
 import 'environment.dart';
 import 'field.dart';
 import 'graph.dart';
 import 'pipeline.dart';
 import 'video.dart';
 import 'post.dart';
+import 'screen.dart';
+import 'volumes.dart';
 
 import 'package:vector_math/vector_math_64.dart';
 
 import 'population.dart';
+import 'splats.dart';
 
 /// One thing to draw: where it is, what it is made of, and how it behaves
 /// towards light.
@@ -888,6 +893,7 @@ class OrbisScene {
     OrbisFog? fog,
     OrbisPrecipitation? precipitation,
     List<OrbisPopulation>? populations,
+    List<OrbisSplats>? splats,
     List<OrbisMaterial>? materials,
     List<OrbisVideo>? videos,
     OrbisPostProcess? post,
@@ -896,8 +902,19 @@ class OrbisScene {
     OrbisEnvironment? environment,
     List<OrbisProbe>? probes,
     OrbisField? field,
+    List<OrbisEnvironmentVolume>? volumes,
+    List<OrbisDecal>? decals,
+    OrbisOutline? outline,
+    this.batching = false,
+    OrbisGodRays? godRays,
+    List<OrbisDistortion>? distortions,
   }) : lights = lights ?? const [],
+       decals = decals ?? const [],
+       outline = outline ?? OrbisOutline.none,
+       godRays = godRays ?? OrbisGodRays.off,
+       distortions = distortions ?? const [],
        probes = probes ?? const [],
+       volumes = volumes ?? const [],
        field = field ?? OrbisField.none,
        environment = environment ?? OrbisEnvironment.none,
        pipeline = pipeline ?? OrbisPipeline(),
@@ -906,6 +923,7 @@ class OrbisScene {
        videos = videos ?? const [],
        post = post ?? OrbisPostProcess(),
        populations = populations ?? const [],
+       splats = splats ?? const [],
        sky = sky ?? OrbisSky(),
        fog = fog ?? OrbisFog.none,
        precipitation = precipitation ?? OrbisPrecipitation.none;
@@ -921,6 +939,7 @@ class OrbisScene {
   OrbisScene copyWith({
     List<OrbisObject>? objects,
     List<OrbisPopulation>? populations,
+    List<OrbisSplats>? splats,
     List<OrbisLight>? lights,
     List<OrbisMaterial>? materials,
     List<OrbisVideo>? videos,
@@ -932,9 +951,27 @@ class OrbisScene {
     OrbisPostProcess? post,
     OrbisRenderGraph? graph,
     OrbisEnvironment? environment,
+    List<OrbisProbe>? probes,
+    OrbisField? field,
+    List<OrbisEnvironmentVolume>? volumes,
+    List<OrbisDecal>? decals,
+    OrbisOutline? outline,
+    bool? batching,
+    OrbisGodRays? godRays,
+    List<OrbisDistortion>? distortions,
   }) => OrbisScene(
+    // The probes and the field used to be missing here, so any copy quietly
+    // dropped them. Resolving the volumes copies every scene that has any,
+    // which is how it was noticed.
+    probes: probes ?? this.probes,
+    godRays: godRays ?? this.godRays,
+    distortions: distortions ?? this.distortions,
+    field: field ?? this.field,
+    volumes: volumes ?? this.volumes,
+    batching: batching ?? this.batching,
     objects: objects ?? this.objects,
     populations: populations ?? this.populations,
+    splats: splats ?? this.splats,
     lights: lights ?? this.lights,
     materials: materials ?? this.materials,
     videos: videos ?? this.videos,
@@ -946,6 +983,8 @@ class OrbisScene {
     post: post ?? this.post,
     graph: graph ?? this.graph,
     environment: environment ?? this.environment,
+    decals: decals ?? this.decals,
+    outline: outline ?? this.outline,
   );
 
   final List<OrbisObject> objects;
@@ -957,6 +996,13 @@ class OrbisScene {
   /// them would mean either paying an object's price for every tree or losing
   /// an object's individuality for every one that needs it.
   final List<OrbisPopulation> populations;
+
+  /// Clouds of 3D Gaussians: captured places, or generated ones.
+  ///
+  /// Apart from [objects] and [populations] because they are not surfaces.
+  /// They are drawn after everything solid, sorted back to front among
+  /// themselves, and hidden by anything solid in front of them.
+  final List<OrbisSplats> splats;
 
   /// Every light in the scene. A scene with none is lit by its sky alone,
   /// which is dim and even and perfectly legitimate.
@@ -1029,6 +1075,165 @@ class OrbisScene {
   /// lit exactly as it was.
   final OrbisField field;
 
+  /// The regions of the world that look different from the rest of it — a
+  /// dim hall off a sunny courtyard, a foggy cave.
+  ///
+  /// Resolved against [camera] when the scene is sent: the fog, sky,
+  /// environment, exposure and grade that go over the channel are this
+  /// scene's own, moved towards whatever the volumes around the camera ask
+  /// for. The renderer never sees a volume, so none of this is native code.
+  /// See [resolved] for the scene that is actually drawn.
+  final List<OrbisEnvironmentVolume> volumes;
+
+  /// Shafts of light from the scene's directional light, through whatever
+  /// stands against the sky. Off by default, and free when off.
+  final OrbisGodRays godRays;
+
+  /// Air that bends the light through it: shockwaves, heat haze, a lens.
+  /// None by default, and free when none of them moves anything.
+  final List<OrbisDistortion> distortions;
+
+  /// The light god rays come from: the first directional one, which is the
+  /// one the renderer draws.
+  OrbisLight? get _sun => lights
+      .where((light) => light.kind == OrbisLightKind.directional)
+      .firstOrNull;
+
+  /// The graph the renderer is actually sent: [graph], with the passes for
+  /// [godRays] and [distortions] put in when the graph is the renderer's own
+  /// and something asks for them. See [OrbisRenderGraph.withScreenEffects].
+  OrbisRenderGraph get drawnGraph => graph.withScreenEffects(
+    godRays: godRays.isOn && _sun != null,
+    distortion: distortions.any((one) => one.isActive),
+  );
+
+  /// This scene as it looks from [at] — the camera's position unless said
+  /// otherwise — with every volume applied and none left in it.
+  ///
+  /// What [toMessage] sends. Public because a host wants to ask the same
+  /// question: what the fog is where the player is standing, to decide
+  /// whether to play the echoey footsteps.
+  OrbisScene resolved([Vector3? at]) {
+    if (volumes.isEmpty) return this;
+    return OrbisEnvironmentSettings.of(
+      this,
+    ).resolve(volumes, at ?? camera.position).applyTo(this);
+  }
+
+  /// What is painted onto the surfaces: posters, scorches, puddles, road
+  /// markings. Each one a box and a picture, projected onto whatever lit
+  /// surface is inside the box before it is lit.
+  ///
+  /// The first [OrbisDecal.budget] are painted; the renderer reports any past
+  /// that rather than dropping them without a word.
+  final List<OrbisDecal> decals;
+
+  /// Which objects have a line drawn round them, and how.
+  ///
+  /// On the scene rather than on the objects because it is about the view of
+  /// the world rather than the world: a game never sets it, and an editor
+  /// changes it on every click without touching a single object. Nothing is
+  /// outlined until somebody says otherwise, and nothing is paid for until
+  /// then either.
+  final OrbisOutline outline;
+
+  /// Whether objects that are the same thing are drawn together.
+  ///
+  /// A hundred crates with one mesh, one material and the same shadow and
+  /// layer settings are a hundred draws per pass without this, and one with
+  /// it: the renderer builds the group as a single renderable, manually
+  /// instanced — each copy's own transform in its own slot of a buffer built
+  /// for the purpose — rather than drawing each crate on its own. A group
+  /// past sixty-four members becomes more than one such renderable, because
+  /// that is as many copies as one can carry, but it is still a handful of
+  /// draws rather than one per crate. Nothing about the objects themselves
+  /// changes — each is still its own entry in [objects] with its own key,
+  /// moving one moves only that one, and picking still answers with the one
+  /// that was clicked, because picking never asks the renderer which entity
+  /// is at a pixel; it works from this list, same as ever.
+  ///
+  /// What batches is decided per publish, by counting. Four or more objects
+  /// with the same [OrbisObject.mesh], the same [OrbisObject.material] and the
+  /// same flags form a group; a placeholder cube on the default surface also
+  /// needs the same [OrbisObject.colour], because on that surface the colour
+  /// *is* the material. An object with [OrbisObject.morphWeights] never
+  /// batches, because its shape is its own, and neither does a model wearing
+  /// its own file's materials, because every copy of a model comes with its
+  /// own set of them — give such a model an [OrbisMaterial] and the census
+  /// counts it like anything else, though the renderer does not yet build a
+  /// merged draw for a named mesh, only for the placeholder cube; such a
+  /// model still draws correctly, just as its own renderable, unmerged.
+  ///
+  /// **What this costs.** A merged group shares everything in Filament that
+  /// is set per renderable rather than per instance: the shadow and layer
+  /// flags (already guaranteed identical within a group by what makes a
+  /// group) and, more visibly, culling. Filament culls a renderable by one
+  /// box, so a group's box is the union of its members' — up to sixty-four
+  /// of them — and a member outside the camera's view still draws if another
+  /// member of its own chunk of sixty-four is inside it. The same is true of
+  /// the shadow pass: a member outside the light's view can still cast if a
+  /// chunk-mate is inside it. Neither ever *hides* something that should be
+  /// visible or shadowing — the union box can only be a superset of what a
+  /// member-by-member account would cull — so the cost is some wasted
+  /// drawing at the edge of a chunk, not a wrong picture. Members are sorted
+  /// by where they are in the world before being split into chunks of
+  /// sixty-four, precisely so that a chunk is a compact patch rather than
+  /// members scattered across the whole group, which keeps this cost small
+  /// in practice: a scene with objects that are already laid out somewhat
+  /// together — a grid, a cluster, a tile — pays very little for it.
+  ///
+  /// **On, but only where proven.** Measured on three thousand crates: a
+  /// third of the CPU time and GPU time of drawing them unbatched, and the
+  /// draw count falls from thousands to dozens. Where nothing in a scene
+  /// batches — nothing repeats often enough, or every copy differs in colour
+  /// or material — turning this on changes nothing, measured to the pixel:
+  /// there is nothing to merge, so nothing is drawn differently.
+  ///
+  /// Where something *does* batch, and none of it casts shadows, the same is
+  /// true: measured bit-identical on three thousand crates grouped without a
+  /// caster among them, and on forty-eight overlapping slabs sharing one
+  /// material. Where a batched group also casts shadows — crates in a
+  /// pattern, one in five, is the case this was measured on — the frame is
+  /// close but not bit-identical: about four in a hundred pixels differ,
+  /// nearly all by one to three parts in two hundred and fifty-five, too
+  /// small to see, concentrated along the edges of shadows rather than
+  /// scattered across every silhouette or missing from a whole object.
+  /// Turning shadows off, or grouping the same crates without any of them
+  /// casting, both make the difference vanish, which places the cause in how
+  /// Filament's shadow pass fits itself to a *chunked* set of casters rather
+  /// than in anything this renderer decides — sorting a chunk's members to
+  /// tighten its box, and giving a chunk every per-renderable shadow setting
+  /// an individual object would have had, were both tried and neither moved
+  /// the result, which is what says so. So: proven bit-identical wherever
+  /// nothing casts a shadow onto or out of a batched group, not proven
+  /// otherwise — which is why this stays off by default rather than on,
+  /// even though most scenes that turn it on will never notice the
+  /// difference. Turning it on is safe in the sense that mattered most: it
+  /// no longer touches the Filament feature that used to blacken a frame
+  /// outright (see below), so the worst this can now do is a handful of
+  /// sub-visible pixels near a shadow's edge, never a black screen.
+  ///
+  /// **Not Filament's automatic instancing, and deliberately so.** An
+  /// earlier version of this switched on `Engine::setAutomaticInstancingEnabled`
+  /// and let Filament notice, after the fact, that several draws it had
+  /// already built could be merged. On stock Filament 1.76 that path is
+  /// broken: `RenderPass::instanceify()` compares a leftover custom command
+  /// as though it were a draw, and can fold the colour-grading subpass into
+  /// a neighbouring instanced run so it never executes — the whole frame
+  /// comes back entirely black, on some scenes and not others, with no way
+  /// to tell beforehand which a given scene is. Building the merged
+  /// renderable directly, with `RenderableManager::Builder::instances`,
+  /// never asks Filament to notice anything after the fact, so that bug is
+  /// never reached — which is what let three scenes that used to come back
+  /// black with instancing forced on render correctly once batching stopped
+  /// asking for it. A fix for the underlying Filament bug exists, on Orbis's
+  /// own Filament fork, in no release yet; it no longer matters to this
+  /// switch, because nothing here depends on it any more.
+  ///
+  /// Turned off with `batching: false`, which is also what leaving this
+  /// unset does.
+  final bool batching;
+
   /// The highest layer an object may be on.
   ///
   /// Seven of them, because the renderer's own mask is eight bits and the
@@ -1041,7 +1246,9 @@ class OrbisScene {
   /// What a capture's timings line up against: the renderer sends back two
   /// numbers per pass and this says which pass each pair belongs to, so the
   /// names never have to cross.
-  List<String> get passNames => [for (final pass in graph.schedule) pass.name];
+  List<String> get passNames => [
+    for (final pass in drawnGraph.schedule) pass.name,
+  ];
 
   /// Packs the scene into the flat arrays the channel carries.
   /// The whole scene, as the renderer takes it.
@@ -1052,8 +1259,20 @@ class OrbisScene {
   Map<String, Object> toMessage(
     int textureId, {
     Map<int, int>? sentRevisions,
+    Map<int, int>? sentSplatRevisions,
     double? at,
   }) {
+    // Volumes are resolved here, where the scene is packed, so that every
+    // host gets them without calling anything and the message stays the
+    // shape the renderer already reads.
+    if (volumes.isNotEmpty) {
+      return resolved().toMessage(
+        textureId,
+        sentRevisions: sentRevisions,
+        at: at,
+      );
+    }
+
     final count = objects.length;
     final keys = Int64List(count);
     final transforms = Float32List(count * 16);
@@ -1182,6 +1401,26 @@ class OrbisScene {
       videoParams[at + 3] = video.seekToken.toDouble();
     }
 
+    // Decals, with their pictures sent once and pointed at, the same trick
+    // as mesh paths and material maps.
+    final decalParams = Float32List(decals.length * OrbisDecal.stride);
+    final decalImages = Int32List(decals.length);
+    final decalPaths = <String>[];
+    final decalPathAt = <String, int>{};
+    for (var i = 0; i < decals.length; i++) {
+      final decal = decals[i];
+      decal.pack(decalParams, i * OrbisDecal.stride);
+      final texture = decal.texture;
+      decalImages[i] = texture == null
+          ? -1
+          : decalPathAt.putIfAbsent(texture.path, () {
+              decalPaths.add(texture.path);
+              return decalPaths.length - 1;
+            });
+    }
+    final drawn = drawnGraph;
+    final sun = _sun;
+
     final lightCount = lights.length;
     final lightKeys = Int64List(lightCount);
     final lightKinds = Int32List(lightCount);
@@ -1207,6 +1446,7 @@ class OrbisScene {
       'objectMorphWeights': morphWeights,
       'meshPaths': paths,
       'objectMaterials': objectMaterials,
+      'batching': batching,
       'materialKeys': materialKeys,
       'materialFlags': materialFlags,
       'materialParams': materialParams,
@@ -1241,6 +1481,9 @@ class OrbisScene {
       'skyEnabled': sky.drawn,
       'postParams': post.packed,
       'pipelineParams': pipeline.packed,
+      'decalParams': decalParams,
+      'decalImages': decalImages,
+      'decalPaths': decalPaths,
       'probeKeys': probeKeys,
       'probeParams': probeParams,
       'fieldParams': field.packed,
@@ -1248,9 +1491,20 @@ class OrbisScene {
       'environmentRadiance': environment.radiance ?? '',
       'environmentSkybox': environment.skybox ?? '',
       'environmentParams': environment.packed,
-      'graphPasses': graph.packedPasses,
-      'graphTargets': graph.packedTargets,
-      'graphTargetNames': [for (final target in graph.targets) target.name],
+      'graphPasses': drawn.packedPasses,
+      'graphTargets': drawn.packedTargets,
+      'graphTargetNames': [for (final target in drawn.targets) target.name],
+      'outlineKeys': outline.packedKeys,
+      'outlineParams': outline.packed,
+      // The shafts' settings, with the light they come from and the cloud in
+      // front of it worked out here, where the scene is whole. Cloud only
+      // counts when the sky that carries it is drawn.
+      'godRayParams': godRays.pack(
+        towardLight: sun == null ? null : -sun.direction,
+        lightColour: sun?.colour,
+        cloudCover: sky.drawn && sky.clouds.isVisible ? sky.clouds.cover : 0,
+      ),
+      'distortionParams': OrbisDistortion.packAll(distortions),
       // When the application reckons this is, in its own seconds.
       //
       // The renderer draws far more often than it is told anything, and works
@@ -1260,6 +1514,63 @@ class OrbisScene {
       // clock the camera was actually solved on.
       'at': at ?? 0.0,
       ...?_populationMessage(sentRevisions),
+      ...?_splatMessage(sentSplatRevisions),
+    };
+  }
+
+  /// What the renderer needs to know about the splat clouds.
+  ///
+  /// Absent altogether when there are none, so every scene that never uses
+  /// them sends exactly what it sent before. The records of an in-memory
+  /// cloud travel only when its revision is not the one the renderer holds —
+  /// [sent] — for the same reason a population's transforms do.
+  Map<String, Object>? _splatMessage(Map<int, int>? sent) {
+    if (splats.isEmpty) return null;
+
+    final count = splats.length;
+    final keys = Int32List(count);
+    final flags = Int32List(count);
+    final revisions = Int32List(count);
+    final params = Float32List(count * OrbisSplats.stride);
+    final paths = <String>[];
+    final changed = <OrbisSplats>[];
+    var bytes = 0;
+
+    for (var i = 0; i < count; i++) {
+      final cloud = splats[i];
+      keys[i] = cloud.key;
+      flags[i] = cloud.flags;
+      revisions[i] = cloud.revision;
+      cloud.packParams(params, i * OrbisSplats.stride);
+      paths.add(cloud.path ?? '');
+      final data = cloud.data;
+      if (data != null && (sent == null || sent[cloud.key] != cloud.revision)) {
+        changed.add(cloud);
+        bytes += data.length;
+      }
+    }
+
+    final data = Uint8List(bytes);
+    final changedKeys = Int32List(changed.length);
+    final changedCounts = Int32List(changed.length);
+    var at = 0;
+    for (var i = 0; i < changed.length; i++) {
+      final records = changed[i].data!;
+      changedKeys[i] = changed[i].key;
+      changedCounts[i] = changed[i].count;
+      data.setRange(at, at + records.length, records);
+      at += records.length;
+    }
+
+    return {
+      'splatKeys': keys,
+      'splatFlags': flags,
+      'splatRevisions': revisions,
+      'splatParams': params,
+      'splatPaths': paths,
+      'splatChanged': changedKeys,
+      'splatChangedCounts': changedCounts,
+      'splatData': data,
     };
   }
 

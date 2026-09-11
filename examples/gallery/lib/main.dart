@@ -28,8 +28,70 @@
 ///   ORBIS_BOUNCE_RADIUS    how far it looks, in metres
 ///   ORBIS_BOUNCE_THICKNESS how solid the depth buffer's surfaces are
 ///   ORBIS_BOUNCE_SLICES    how many directions each pixel fans along
+///   ORBIS_VOLUME_AT        where the Environment volumes walk stands, 0 in
+///                          the courtyard to 1 at the back of the hall; stops
+///                          the walk, and prints what the volumes resolved to
+///   ORBIS_VOLUMES_OFF=1    the same place with the volumes left out
+///   ORBIS_VOLUME_BLEND     how far outside the hall its look reaches, metres
+///   ORBIS_DECALS_OFF=1     paint none of the Decals example's decals
+///   ORBIS_DECAL_ONLY       paint only that one of them, counting from 0
+///   ORBIS_DECAL_FADE_OFF=1 turn their angle fade off
+///   ORBIS_DECAL_MASK_OFF=1 let the paint splash reach the crate's layer
+///   ORBIS_OUTLINE=0        the Outline example with nothing outlined
+///   ORBIS_OUTLINE_OTHERS=0 outline only the active object
+///   ORBIS_OUTLINE_WIDTH    how wide the outline is, in pixels
+///   ORBIS_OUTLINE_HIDDEN   shown, faint, dashed or hidden: the part a wall hides
+///   ORBIS_AA               off, fxaa or temporal, under the Outline example
+///   ORBIS_SPLAT            a .ply or .splat capture for the Gaussian splats
+///                          example to show instead of its generated ring
+///   ORBIS_SPLAT_COUNT      how many splats the generated ring has
+///   ORBIS_SPLAT_SORT=0     draw them unsorted, to measure what the sort does
+///   ORBIS_SPLAT_PILLAR=0   take the solid pillar out of the ring
+///   ORBIS_BATCHING=0/1     batching off or on, for any example, so the same
+///                          frame can be drawn both ways and compared
+///   ORBIS_CRATES           how many crates the Batching example draws
+///   ORBIS_PALETTE          its colours: One, Six or Every one
+///   ORBIS_BATCH_MATERIAL=1 its crates made of one shared material
+///   ORBIS_BATCH_MESH       a .glb for its crates, instead of the cube (which
+///                          only batches alongside ORBIS_BATCH_MATERIAL=1)
+///   ORBIS_MOVING=0         hold its turning crate still
+///   ORBIS_SLABS            how many slabs the Overdraw example crosses
+///   ORBIS_SHADOWS=0        no shadow pass, for any example
+///   ORBIS_POST=0           no post-processing, for any example
+///   ORBIS_PANEL_SHADOW=0   the Panel shadows example's panel casts nothing
+///   ORBIS_PANEL            its panel's edge in metres
+///   ORBIS_PANEL_HEIGHT     how high it hangs
+///   ORBIS_SHADOW_LIGHT     which light the Shadows example casts with: Sun,
+///                          Spot or Point
+///   ORBIS_SHADOW_KIND      its edge: Sharp, Soft, Area or Variance
+///   ORBIS_SHADOW_MAP       the map's size in pixels
+///   ORBIS_SHADOW_CASCADES  how many cascades a sun's map is split into
+///   ORBIS_SHADOW_SPLIT     place the splits by hand, the first at this
+///                          fraction of the shadow distance
+///   ORBIS_SHADOW_CONTACT=1 screen-space contact shadows
+///   ORBIS_SHADOW_CONTACT_DISTANCE  how far each pixel marches, in metres
+///   ORBIS_SHADOW_SIZE      the light's size in metres, for the Area edge
+///   ORBIS_VSM_BLUR         the Variance edge's blur, in texels
+///   ORBIS_GODRAYS          how strong the god rays are; over any example
+///                          but God rays itself, turns them on
+///   ORBIS_SUN_BEARING      the God rays sun's bearing in degrees, 180
+///                          behind the camera
+///   ORBIS_SUN_ALTITUDE     and its height above the horizon
+///   ORBIS_COVER            the God rays sky's cloud cover, 0 to 1
+///   ORBIS_GODRAY_SAMPLES / _DECAY / _DENSITY   the rest of its settings
+///   ORBIS_SHOCKWAVE=0      leave the Distortion example's wave out
+///   ORBIS_HAZE=0           and its heat haze
+///   ORBIS_LENS             its lens warp, negative for pincushion
+///   ORBIS_CHROMATIC        its chromatic split
+///   ORBIS_WAVE             its wave's strength
+///   ORBIS_MOTION=0         turn the Motion blur example's blur off
+///   ORBIS_MOTION_OBJECTS=0 blur by the camera's motion only
+///   ORBIS_PAN=1            pan the Motion blur example's camera
+///   ORBIS_SHUTTER          its shutter, in seconds
 library;
 
+import 'dart:convert';
+import 'dart:ffi' as ffi;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -40,8 +102,79 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 
 void main() => runApp(const Gallery());
 
-double? _number(String name) =>
-    double.tryParse(Platform.environment[name] ?? '');
+/// The process's real environment variables.
+///
+/// `Platform.environment` already reads them correctly on every desktop
+/// platform this gallery runs on — that is how every `ORBIS_*` switch above
+/// has driven it from a shell for as long as they have existed. On the iOS
+/// simulator it comes back an empty map regardless of what the process was
+/// actually launched with: dumping it to a file mid-run showed
+/// `Platform.environment.length == 0` while `SIMCTL_CHILD_`-prefixed
+/// variables from that same launch were visible to `getenv` on the native
+/// side of the very same process. Nothing is wrong with the variables —
+/// `dart:io` is simply not reading them on this platform, which is also why
+/// every example looked the same however `ORBIS_EXAMPLE` was set: `_chosen`
+/// below always fell back to the first one.
+///
+/// Read once through dart:ffi, straight from libc rather than through
+/// `dart:io`, and used as the base a real `Platform.environment` reading is
+/// then layered onto — so anywhere it already worked (every desktop
+/// platform), the result is exactly what it always was, and anywhere it did
+/// not (iOS), the native reading fills the gap.
+final Map<String, String> _orbisEnv = _readEnvironment();
+
+Map<String, String> _readEnvironment() {
+  final result = <String, String>{};
+  try {
+    result.addAll(_readNativeEnvironment());
+  } catch (error) {
+    // No native environment either — carries on with whatever dart:io
+    // provides below, which on a platform without _NSGetEnviron is the
+    // same answer this file always acted on.
+    stderr.writeln('[orbis] could not read the native environment: $error');
+  }
+  // Layered on top rather than checked first: wherever dart:io already has
+  // an answer, that answer wins, so this changes nothing anywhere it did not
+  // need to.
+  result.addAll(Platform.environment);
+  return result;
+}
+
+/// `environ`, read straight through libc via `_NSGetEnviron` — Darwin's way
+/// to reach the global from a position-independent image, present in
+/// libSystem on macOS and iOS alike. Not behind a platform check: on macOS
+/// it reads the same process environment `Platform.environment` already
+/// does, so layering that on top afterwards leaves this platform untouched;
+/// on iOS it is the one channel proven to still carry it.
+Map<String, String> _readNativeEnvironment() {
+  final nsGetEnviron = ffi.DynamicLibrary.process().lookupFunction<
+      ffi.Pointer<ffi.Pointer<ffi.Pointer<ffi.Uint8>>> Function(),
+      ffi.Pointer<ffi.Pointer<ffi.Pointer<ffi.Uint8>>> Function()>(
+    '_NSGetEnviron',
+  );
+  final environ = nsGetEnviron().value; // char **, i.e. environ itself
+  final result = <String, String>{};
+  for (var i = 0; environ[i].address != 0; i++) {
+    final entry = _readCString(environ[i]);
+    final equals = entry.indexOf('=');
+    // A name-less entry ('=' as the first character) has been seen on
+    // Apple platforms; dart:io's own parser discards it the same way.
+    if (equals > 0) {
+      result[entry.substring(0, equals)] = entry.substring(equals + 1);
+    }
+  }
+  return result;
+}
+
+String _readCString(ffi.Pointer<ffi.Uint8> chars) {
+  final bytes = <int>[];
+  for (var i = 0; chars[i] != 0; i++) {
+    bytes.add(chars[i]);
+  }
+  return utf8.decode(bytes, allowMalformed: true);
+}
+
+double? _number(String name) => double.tryParse(_orbisEnv[name] ?? '');
 
 class Gallery extends StatelessWidget {
   const Gallery({super.key});
@@ -82,7 +215,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     // The whole chain: the world into a texture, its edges into another, the
     // weights into a third, and the blend onto the screen reading the first
     // and the third.
-    final smaa = Platform.environment['ORBIS_SMAA'];
+    final smaa = _orbisEnv['ORBIS_SMAA'];
     if (smaa == 'edgetarget') {
       // Edges into a target, then blitted to the screen by a sharpen set to
       // nothing. Tells apart "the weights shader is wrong" from "a target
@@ -187,7 +320,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
 
   /// The one-effect graph the environment asks for, or null for none.
   OrbisRenderGraph? _effectGraph() {
-    final named = Platform.environment['ORBIS_EFFECT'];
+    final named = _orbisEnv['ORBIS_EFFECT'];
     final amount = _number('ORBIS_SHARPEN');
     final effect = named == null || named.isEmpty
         ? (amount == null ? null : OrbisEffect.sharpen)
@@ -223,8 +356,29 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
   /// The scene as the example built it, put through whatever effect the
   /// environment asked for.
   OrbisScene _underEffect(OrbisScene scene) {
+    // God rays over an example that never asked for any — the Day and night
+    // sky, the Weather's cloud. The God rays example takes the same switch
+    // as its own strength instead.
+    final rays = _number('ORBIS_GODRAYS');
+    final lit = rays != null && _example is! GodRaysExample
+        ? scene.copyWith(godRays: OrbisGodRays(strength: rays))
+        : scene;
     final graph = _effectGraph();
-    return graph == null ? scene : scene.copyWith(graph: graph);
+    final drawn = graph == null ? lit : lit.copyWith(graph: graph);
+    // Batching forced one way or the other, over whatever the example chose,
+    // so one frame can be drawn both ways and the two compared pixel by pixel.
+    // The pipeline and the post-processing are the example's own and are built
+    // afresh for every frame, so setting them here cannot leak into the next
+    // one.
+    if (_orbisEnv['ORBIS_SHADOWS'] == '0') {
+      drawn.pipeline.shadows.enabled = false;
+    }
+    if (_orbisEnv['ORBIS_POST'] == '0') drawn.post.enabled = false;
+    return switch (_orbisEnv['ORBIS_BATCHING']) {
+      '1' => drawn.copyWith(batching: true),
+      '0' => drawn.copyWith(batching: false),
+      _ => drawn,
+    };
   }
 
   /// One model, one light, and whatever graph was asked for.
@@ -238,7 +392,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
           mesh: path,
           transform: Matrix4.identity(),
           colour: Vector3(1, 1, 1),
-          morphWeights: switch (Platform.environment['ORBIS_MORPH']) {
+          morphWeights: switch (_orbisEnv['ORBIS_MORPH']) {
             final set? when set.isNotEmpty =>
               set.split(',').map((one) => double.parse(one.trim())).toList(),
             _ => null,
@@ -264,7 +418,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
   }
 
   Example _chosen() {
-    final wanted = Platform.environment['ORBIS_EXAMPLE'];
+    final wanted = _orbisEnv['ORBIS_EXAMPLE'];
     if (wanted == null || wanted.isEmpty) return _all.first;
     return _all.firstWhere(
       (one) => one.name.toLowerCase() == wanted.toLowerCase(),
@@ -287,37 +441,184 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     // it. This hands the camera back.
     final example = _example;
     if (example is VoxelExample) {
-      if (Platform.environment['ORBIS_WALK'] == '0') example.walking = false;
+      if (_orbisEnv['ORBIS_WALK'] == '0') example.walking = false;
       final far = _number('ORBIS_RANGE');
       if (far != null) example.range = far;
-      if (Platform.environment['ORBIS_TREES'] == '0') example.trees = false;
+      if (_orbisEnv['ORBIS_TREES'] == '0') example.trees = false;
     }
     if (example is ProbesExample) {
       example.intensity = _number('ORBIS_PROBE') ?? example.intensity;
       example.roughness = _number('ORBIS_ROUGHNESS') ?? example.roughness;
-      if (Platform.environment['ORBIS_PROBE_OFF'] == '1') example.on = false;
+      if (_orbisEnv['ORBIS_PROBE_OFF'] == '1') example.on = false;
     }
     if (example is LightsExample) {
-      final kind = Platform.environment['ORBIS_LIGHT'];
+      final kind = _orbisEnv['ORBIS_LIGHT'];
       if (kind != null) example.kind = kind;
       final lumens = _number('ORBIS_LUMENS');
       if (lumens != null) example.intensity = lumens;
       example.panelWidth = _number('ORBIS_PANEL_W') ?? example.panelWidth;
       example.panelHeight = _number('ORBIS_PANEL_H') ?? example.panelHeight;
       // Still, so two renders of the same angle are the same picture.
-      if (Platform.environment['ORBIS_CIRCLING'] == '0') {
+      if (_orbisEnv['ORBIS_CIRCLING'] == '0') {
         example.orbiting = false;
       }
+    }
+    if (example is PanelShadowExample) {
+      if (_orbisEnv['ORBIS_PANEL_SHADOW'] == '0') {
+        example.shadows = false;
+      }
+      example.panel = _number('ORBIS_PANEL') ?? example.panel;
+      example.height = _number('ORBIS_PANEL_HEIGHT') ?? example.height;
+    }
+    if (example is ShadowsExample) {
+      final light = _orbisEnv['ORBIS_SHADOW_LIGHT'];
+      if (light != null) {
+        example.light = ShadowLight.values.firstWhere(
+          (one) => one.label == light,
+          orElse: () => example.light,
+        );
+      }
+      final shadows = example.shadows;
+      final kind = _orbisEnv['ORBIS_SHADOW_KIND'];
+      if (kind != null) {
+        shadows.kind = OrbisShadowKind.values.firstWhere(
+          (one) => one.label == kind,
+          orElse: () => shadows.kind,
+        );
+      }
+      shadows.mapSize = _number('ORBIS_SHADOW_MAP')?.round() ?? shadows.mapSize;
+      shadows.cascades =
+          _number('ORBIS_SHADOW_CASCADES')?.round() ?? shadows.cascades;
+      final split = _number('ORBIS_SHADOW_SPLIT');
+      if (split != null) {
+        example.handSplits = true;
+        example.firstSplit = split;
+      }
+      if (_orbisEnv['ORBIS_SHADOW_CONTACT'] == '1') {
+        shadows.contact = true;
+      }
+      shadows.contactDistance =
+          _number('ORBIS_SHADOW_CONTACT_DISTANCE') ?? shadows.contactDistance;
+      example.lightSize = _number('ORBIS_SHADOW_SIZE') ?? example.lightSize;
+      shadows.variance.blur = _number('ORBIS_VSM_BLUR') ?? shadows.variance.blur;
     }
     if (example is FieldExample) {
       example.intensity = _number('ORBIS_FIELD') ?? example.intensity;
       example.retention = _number('ORBIS_RETENTION') ?? example.retention;
-      if (Platform.environment['ORBIS_FIELD_OFF'] == '1') example.on = false;
+      if (_orbisEnv['ORBIS_FIELD_OFF'] == '1') example.on = false;
+    }
+    if (example is BatchingExample) {
+      example.count = _number('ORBIS_CRATES') ?? example.count;
+      example.palette = _orbisEnv['ORBIS_PALETTE'] ?? example.palette;
+      if (_orbisEnv['ORBIS_BATCH_MATERIAL'] == '1') {
+        example.material = true;
+      }
+      final mesh = _orbisEnv['ORBIS_BATCH_MESH'];
+      if (mesh != null && mesh.isNotEmpty) example.mesh = mesh;
+      if (_orbisEnv['ORBIS_MOVING'] == '0') example.moving = false;
+    }
+    if (example is OverdrawExample) {
+      example.slabs = _number('ORBIS_SLABS') ?? example.slabs;
+    }
+    if (example is GodRaysExample) {
+      example.strength = _number('ORBIS_GODRAYS') ?? example.strength;
+      example.bearing = _number('ORBIS_SUN_BEARING') ?? example.bearing;
+      example.altitude = _number('ORBIS_SUN_ALTITUDE') ?? example.altitude;
+      example.cover = _number('ORBIS_COVER') ?? example.cover;
+      example.samples = _number('ORBIS_GODRAY_SAMPLES') ?? example.samples;
+      example.decay = _number('ORBIS_GODRAY_DECAY') ?? example.decay;
+      example.density = _number('ORBIS_GODRAY_DENSITY') ?? example.density;
+    }
+    if (example is DistortionExample) {
+      if (_orbisEnv['ORBIS_SHOCKWAVE'] == '0') {
+        example.shockwave = false;
+      }
+      if (_orbisEnv['ORBIS_HAZE'] == '0') example.haze = false;
+      example.lens = _number('ORBIS_LENS') ?? example.lens;
+      example.chromatic = _number('ORBIS_CHROMATIC') ?? example.chromatic;
+      example.strength = _number('ORBIS_WAVE') ?? example.strength;
     }
     if (example is BounceExample) {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;
       example.reach = _number('ORBIS_BOUNCE_RADIUS') ?? example.reach;
-      if (Platform.environment['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
+      if (_orbisEnv['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
+    }
+    if (example is DecalsExample) {
+      final environment = _orbisEnv;
+      if (environment['ORBIS_DECALS_OFF'] == '1') example.on = false;
+      if (environment['ORBIS_DECAL_FADE_OFF'] == '1') example.angleFade = false;
+      if (environment['ORBIS_DECAL_MASK_OFF'] == '1') {
+        example.spareTheCrate = false;
+      }
+      example.only = _number('ORBIS_DECAL_ONLY')?.round();
+    }
+
+    if (example is EnvironmentVolumesExample) {
+      final at = _number('ORBIS_VOLUME_AT');
+      if (at != null) {
+        example.walking = false;
+        example.along = at;
+      }
+      example.blend = _number('ORBIS_VOLUME_BLEND') ?? example.blend;
+      if (_orbisEnv['ORBIS_VOLUMES_OFF'] == '1') {
+        example.volumes = false;
+      }
+      // The numbers the frame was drawn with, beside the frame. A blend is
+      // checked for a step by reading these along a sweep, not by eye.
+      if (at != null) {
+        final scene = example.scene(_look.toRenderCamera(), 0);
+        final seen = scene.resolved();
+        String three(Vector3 v) => [
+          v.x,
+          v.y,
+          v.z,
+        ].map((c) => c.toStringAsFixed(4)).join(',');
+        stderr.writeln(
+          '[volumes] at=$at z=${scene.camera.position.z.toStringAsFixed(3)} '
+          'fogDensity=${seen.fog.density.toStringAsFixed(5)} '
+          'fogColour=${three(seen.fog.colour)} '
+          'ambient=${seen.sky.ambient.toStringAsFixed(1)} '
+          'skyColour=${three(seen.sky.colour)} '
+          'shutter=${seen.camera.shutterSpeed.toStringAsFixed(6)}',
+        );
+      }
+    }
+
+    if (example is OutlineExample) {
+      if (_orbisEnv['ORBIS_OUTLINE'] == '0') example.on = false;
+      if (_orbisEnv['ORBIS_OUTLINE_OTHERS'] == '0') {
+        example.others = false;
+      }
+      example.width = _number('ORBIS_OUTLINE_WIDTH') ?? example.width;
+      final hidden = _orbisEnv['ORBIS_OUTLINE_HIDDEN'];
+      if (hidden != null && hidden.isNotEmpty) {
+        example.occluded = OrbisOccluded.values.byName(hidden);
+      }
+      final aa = _orbisEnv['ORBIS_AA'];
+      if (aa != null && aa.isNotEmpty) {
+        example.antiAliasing = AntiAliasing.values.byName(aa);
+      }
+    }
+
+    if (example is SplatsExample) {
+      final capture = _orbisEnv['ORBIS_SPLAT'];
+      if (capture != null && capture.isNotEmpty) example.path = capture;
+      example.count = _number('ORBIS_SPLAT_COUNT')?.round() ?? example.count;
+      if (_orbisEnv['ORBIS_SPLAT_SORT'] == '0') {
+        example.sorted = false;
+      }
+      if (_orbisEnv['ORBIS_SPLAT_PILLAR'] == '0') {
+        example.pillar = false;
+      }
+    }
+
+    if (example is MotionBlurExample) {
+      if (_orbisEnv['ORBIS_MOTION'] == '0') example.on = false;
+      if (_orbisEnv['ORBIS_MOTION_OBJECTS'] == '0') {
+        example.objects = false;
+      }
+      if (_orbisEnv['ORBIS_PAN'] == '1') example.panning = true;
+      example.shutter = _number('ORBIS_SHUTTER') ?? example.shutter;
     }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;
@@ -348,7 +649,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     body: GestureDetector(
       onPanUpdate: (details) => setState(() => _look.orbit(details.delta)),
       child: OrbisView(
-        scene: switch (Platform.environment['ORBIS_MESH']) {
+        scene: switch (_orbisEnv['ORBIS_MESH']) {
           final path? when path.isNotEmpty => _justTheMesh(path),
           // An effect over a real scene rather than only over a lone model.
           // An effect that has only ever been seen against one mesh on a

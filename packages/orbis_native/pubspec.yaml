@@ -3,7 +3,7 @@ description: >-
   Compiling and loading C++ scripts. A script is a file the engine loads, not a
   file the engine has to have been linked into: it is handed a table of what it
   may call, and answers start, step and stop.
-version: 0.1.1
+version: 0.2.0
 publish_to: none
 
 environment:

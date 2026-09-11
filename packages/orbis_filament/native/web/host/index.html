@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orbis web core</title>
+<style>
+  /* Plain and legible rather than styled: this page is a proof that the
+     renderer draws, not a product. The status panel is deliberately part
+     of the page rather than only the console, so a screenshot is evidence
+     on its own -- what the renderer says about its own surface and feature
+     level should be visible in the picture, not just in a log nobody
+     screenshots. */
+  body {
+    margin: 0;
+    padding: 16px;
+    background: #1b1d22;
+    color: #e6e6e6;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+  #canvas {
+    display: block;
+    background: #000;
+    border: 1px solid #3a3d46;
+  }
+  #status {
+    margin-top: 12px;
+    max-width: 960px;
+    white-space: pre-wrap;
+    background: #14161a;
+    border: 1px solid #3a3d46;
+    padding: 10px 12px;
+    border-radius: 4px;
+  }
+  .ok { color: #7ee787; }
+  .warn { color: #f2cc60; }
+  .bad { color: #ff7b72; }
+</style>
+</head>
+<body>
+<h1>Orbis renderer core &mdash; web (WebAssembly, drawn through the C ABI)</h1>
+<canvas id="canvas" width="960" height="540" style="width:960px;height:540px"></canvas>
+<div id="status">loading&hellip;</div>
+<script src="orbis_renderer.js"></script>
+<script src="main.js"></script>
+</body>
+</html>

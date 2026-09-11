@@ -1,0 +1,147 @@
+// Light scattered towards the eye by the air between it and the sun.
+//
+// Mitchell, "Volumetric Light Scattering as a Post-Process", GPU Gems 3,
+// chapter 13. The shafts seen through a gap in the trees are light scattered
+// by the air along each ray the gap lets through, and a ray is lit only where
+// nothing stands between it and the sun. Seen from the eye, every such ray
+// runs towards the sun's place on the screen — so walking from a pixel
+// towards that place, and adding up how much of the way is open sky, is the
+// same sum done in screen space rather than through the volume.
+//
+// Two things make it this rather than a blur towards a point:
+//
+//  - The occlusion mask comes from the depth buffer, not the colour. Sky is
+//    whatever has no surface in front of it, so a white wall in sunlight is
+//    an occluder like any other, where a mask made from brightness would
+//    have it throwing shafts of its own.
+//  - Only sky near the sun sends light. The whole sky blurred outwards is a
+//    haze over the frame; the sun and the sky around it blurred outwards is
+//    shafts.
+material {
+    name : orbisGodRays,
+    shadingModel : unlit,
+    // One triangle over the screen, already in clip space. The same rails
+    // the sharpen, the SMAA passes and the bounce run on.
+    vertexDomain : device,
+    requires : [ uv0 ],
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    parameters : [
+        // The lit picture, which the shafts are added to and which says how
+        // bright the open sky is at each sample.
+        { type : sampler2d, name : source },
+        // The scene's depth, from the same target: what is sky and what is
+        // in front of it.
+        { type : sampler2d, name : depth, precision : high },
+
+        // Where the light is on the screen, as texture coordinates.
+        { type : float2, name : light },
+        // The colour and strength of the shafts, with every fade already
+        // applied: off screen, behind the camera, under cloud. Black means
+        // the pass is a copy.
+        { type : float3, name : tint },
+
+        // How much each step of the march counts for relative to the one
+        // before, and how far towards the light the march reaches, as a
+        // fraction of the way.
+        { type : float, name : decay },
+        { type : float, name : density },
+        { type : int, name : samples },
+
+        // Depth back to distance, as the bounce pass does it: the buffer is
+        // reversed with an infinite far plane, so it holds near/distance.
+        { type : float, name : near, precision : high },
+        { type : float2, name : tangents },
+        // Anything further than this, along its ray, is sky. The sky dome
+        // writes no depth at all, so this only matters for a scene with
+        // geometry out at the far plane.
+        { type : float, name : skyDistance },
+
+        // The frame's width over its height, so "near the sun" is a circle
+        // rather than an ellipse the shape of the window.
+        { type : float, name : aspect },
+        // How far from the sun the sky still sends light, as a fraction of
+        // the frame's height.
+        { type : float, name : glow }
+    ]
+}
+
+fragment {
+    // One for open sky and nought for anything in front of it.
+    float skyAt(vec2 uv) {
+        float d = textureLod(materialParams_depth, uv, 0.0).r;
+        // Reversed depth clears to nought, which is infinitely far away: the
+        // sky, a skybox, or nothing drawn at all.
+        if (d <= 0.0) return 1.0;
+        float z = materialParams.near / d;
+        // The distance along the ray rather than straight ahead, so a
+        // surface at the corner of the frame is judged by how far away it
+        // actually is.
+        vec2 ndc = vec2(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y);
+        vec2 slope = ndc * materialParams.tangents;
+        float along = z * sqrt(1.0 + dot(slope, slope));
+        return along >= materialParams.skyDistance ? 1.0 : 0.0;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 uv = getUV0();
+        vec4 here = textureLod(materialParams_source, uv, 0.0);
+
+        // Nothing to add: the light is off screen, behind the camera, or the
+        // strength is nought. Returning the pixel untouched is what makes a
+        // pass at nought indistinguishable from a copy.
+        if (max(materialParams.tint.r, max(materialParams.tint.g,
+                                            materialParams.tint.b)) <= 0.0) {
+            material.baseColor = here;
+            return;
+        }
+
+        int count = clamp(materialParams.samples, 1, 128);
+        vec2 toward = (materialParams.light - uv) * materialParams.density
+                    / float(count);
+
+        // Every pixel starts its march a different fraction of a step along.
+        // A march that starts in the same place everywhere quantises the
+        // shafts into rings; this turns the rings into a fine grain the eye
+        // does not follow.
+        float jitter = fract(52.9829189 *
+            fract(dot(floor(gl_FragCoord.xy), vec2(0.06711056, 0.00583715))));
+        vec2 at = uv + toward * jitter;
+
+        float glow = max(materialParams.glow, 1e-3);
+        float fall = 1.0;
+        float gathered = 0.0;
+        float weights = 0.0;
+
+        for (int i = 0; i < 128; i++) {
+            if (i >= count) break;
+            at += toward;
+
+            // Mitchell's weight, worked out rather than asked for: each step
+            // counts by `fall`, and the total is divided by the sum of them.
+            // So the sample count and the decay change the *shape* of the
+            // shafts and never how bright they are, which is what lets a
+            // host trade samples for speed without re-tuning everything.
+            weights += fall;
+
+            float sky = skyAt(at);
+            if (sky > 0.0) {
+                vec3 seen = textureLod(materialParams_source, at, 0.0).rgb;
+                // How bright the open sky is there, capped so the sun's disc
+                // does not outweigh everything else by a thousand times.
+                float bright = min(dot(seen, vec3(0.2126, 0.7152, 0.0722)), 8.0);
+                vec2 apart = (at - materialParams.light)
+                           * vec2(materialParams.aspect, 1.0);
+                float near = 1.0 / (1.0 + dot(apart, apart) / (glow * glow));
+                gathered += bright * near * fall;
+            }
+            fall *= materialParams.decay;
+        }
+
+        vec3 shafts = materialParams.tint * (gathered / max(weights, 1e-4));
+        material.baseColor = vec4(here.rgb + shafts, here.a);
+    }
+}

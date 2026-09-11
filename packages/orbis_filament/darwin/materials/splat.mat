@@ -1,0 +1,209 @@
+// A cloud of 3D Gaussians, each drawn as a small ellipse facing the camera.
+//
+// 3D Gaussian splatting: Kerbl, Kopanas, Leimkühler and Drettakis, "3D
+// Gaussian Splatting for Real-Time Radiance Field Rendering", ACM TOG
+// (Proc. SIGGRAPH) 42(4), 2023. The projection of a 3D Gaussian to a 2D one
+// is the EWA splatting approximation of Zwicker, Pfister, van Baar and Gross,
+// "EWA Splatting", IEEE TVCG 8(3), 2002 — the local affine approximation of
+// the perspective projection, equations 29 and 31 there. Written for Orbis
+// from those papers and checked line by line against the maths in the
+// authors' reference rasteriser (graphdeco-inria/diff-gaussian-rasterization,
+// forward.cu: computeCov2D, and the eigenvalue and cut-off in preprocess and
+// render); no code is taken from it.
+//
+// Every splat is four corners of its own. Nothing about a splat travels in a
+// vertex attribute: the corners carry only which corner they are, and the
+// vertex's own number says which splat. That number is looked up in the
+// order texture — the splats sorted back to front, rewritten when the camera
+// turns — and the answer is looked up in the splat texture, three texels a
+// splat. So re-sorting a million splats uploads four megabytes of indices and
+// touches nothing else.
+//
+// In the device domain because the corner is placed on screen, not in the
+// world. An ellipse three standard deviations across is a size in pixels, and
+// working it back out into a world position for Filament to project again
+// would be a matrix inverse per corner to arrive where we already were. The
+// clip-space transform is the stable way to say "put it here": the corner's
+// own ±1 picks out the two axes, and the fourth column is the centre.
+material {
+    name : orbisSplat,
+    shadingModel : unlit,
+    blending : transparent,
+    // Behind whatever is solid, but never in front of anything itself. A
+    // splat that wrote depth would hide the splats behind it that were drawn
+    // after it — which, sorted back to front, is none — and would hide the
+    // ones in front that are half transparent, which is most of them.
+    depthWrite : false,
+    depthCulling : true,
+    culling : none,
+    vertexDomain : device,
+    parameters : [
+        // Three texels a splat, as bits: centre and the first element of the
+        // covariance; four more elements; the last, and the colour as bytes.
+        // Unsigned so that nothing on the way filters, converts or quietly
+        // canonicalises a float that happens to spell a NaN.
+        { type : sampler2d, name : splats, format : uint, precision : high },
+        // Which splat is drawn in each slot, back to front.
+        { type : sampler2d, name : order, format : uint, precision : high },
+        { type : float, name : opacity },
+        { type : float, name : brightness }
+    ],
+    variables : [ splatAt, splatColour ]
+}
+
+vertex {
+    // Width of both textures. Matches kSplatTextureWidth in OrbisSplats.h.
+    #define kWidth 2048
+
+    uvec4 splatTexel(int index) {
+        return texelFetch(materialParams_splats,
+                          ivec2(index % kWidth, index / kWidth), 0);
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        int vertex = getVertexIndex();
+        int slot = vertex / 4;
+        vec2 corner = getPosition().xy;
+
+        int id = int(texelFetch(materialParams_order,
+                                ivec2(slot % kWidth, slot / kWidth), 0).x);
+
+        uvec4 t0 = splatTexel(id * 3);
+        uvec4 t1 = splatTexel(id * 3 + 1);
+        uvec4 t2 = splatTexel(id * 3 + 2);
+
+        vec3 centre = uintBitsToFloat(t0.xyz);
+        // Symmetric, so six numbers: 00 01 02 11 12 22.
+        float c00 = uintBitsToFloat(t0.w);
+        float c01 = uintBitsToFloat(t1.x);
+        float c02 = uintBitsToFloat(t1.y);
+        float c11 = uintBitsToFloat(t1.z);
+        float c12 = uintBitsToFloat(t1.w);
+        float c22 = uintBitsToFloat(t2.x);
+        mat3 sigma = mat3(c00, c01, c02,
+                          c01, c11, c12,
+                          c02, c12, c22);
+
+        // Model to view in one matrix, so the cloud's own transform — its
+        // scale included — reaches the covariance as well as the centre.
+        mat4 viewFromModel = getViewFromWorldMatrix() * getWorldFromModelMatrix();
+        vec4 view = viewFromModel * vec4(centre, 1.0);
+        vec4 clip = getClipFromViewMatrix() * view;
+
+        // Nothing drawn: every corner in one place, outside the frustum, so
+        // the quad has no area and costs no fragments.
+        material.clipSpaceTransform = mat4(vec4(0.0), vec4(0.0), vec4(0.0),
+                                           vec4(2.0, 2.0, 2.0, 1.0));
+        material.splatAt = vec4(0.0);
+        material.splatColour = vec4(0.0);
+
+        // Filament looks down -z. Depth is measured the positive way round,
+        // and behind the camera — or so near that the Jacobian blows up — is
+        // not drawn, as the reference culls at 0.2.
+        float depth = -view.z;
+        if (depth <= 0.2) return;
+        // A splat whose centre is well off screen still reaches onto it if it
+        // is large, which is why the reference allows 1.3 times the frustum
+        // rather than 1. Beyond that it is dropped.
+        float guard = 1.3 * clip.w;
+        if (abs(clip.x) > guard || abs(clip.y) > guard) return;
+
+        // Focal lengths in pixels, from the projection Filament is really
+        // using rather than from a field of view handed in beside it.
+        vec2 resolution = getResolution().xy;
+        mat4 projection = getClipFromViewMatrix();
+        vec2 focal = vec2(projection[0][0], projection[1][1]) * resolution * 0.5;
+
+        // The Jacobian of the perspective projection at the centre, in pixels
+        // per unit of view space. The reference clamps the angle it is taken
+        // at to 1.3 times the half field of view, so a splat at the edge of
+        // the screen is not stretched into a streak by the derivative there.
+        vec2 limit = 1.3 / vec2(projection[0][0], projection[1][1]);
+        vec2 t = clamp(view.xy / depth, -limit, limit) * depth;
+
+        // Rows of J, written as columns because that is what mat3 takes, so
+        // this constructs J transposed. Signs are for -z forward: x = fx·x/d
+        // with d = -z, so dx/dz = fx·x/d².
+        mat3 jacobianT = mat3(focal.x / depth, 0.0, focal.x * t.x / (depth * depth),
+                              0.0, focal.y / depth, focal.y * t.y / (depth * depth),
+                              0.0, 0.0, 0.0);
+        mat3 rotation = mat3(viewFromModel);
+        // Σ' = J W Σ Wᵀ Jᵀ, equation 31 of the EWA paper.
+        mat3 m = transpose(jacobianT) * rotation;
+        mat3 cov = m * sigma * transpose(m);
+
+        // The low-pass filter: every splat at least about a pixel across, so
+        // one smaller than a pixel is not sampled into flicker.
+        float a = cov[0][0] + 0.3;
+        float b = cov[0][1];
+        float c = cov[1][1] + 0.3;
+
+        // The ellipse's axes are the eigenvectors of the 2D covariance, and
+        // its radii the square roots of the eigenvalues. The reference's
+        // own clamp on the discriminant, so a circle does not divide by zero.
+        float mid = 0.5 * (a + c);
+        float det = a * c - b * b;
+        if (det <= 0.0) return;
+        float spread = sqrt(max(0.1, mid * mid - det));
+        float lambda1 = mid + spread;
+        float lambda2 = max(mid - spread, 0.1);
+
+        vec2 major = abs(b) > 1e-6 ? normalize(vec2(b, lambda1 - a))
+                                   : (a >= c ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+        vec2 minor = vec2(-major.y, major.x);
+
+        // Three standard deviations each way, as the reference sizes its
+        // tiles; the fragment stage cuts the corners off. Capped at a screen
+        // across, because a splat right in front of the lens can otherwise
+        // ask for a quad the size of a building and fill it.
+        float cap = max(resolution.x, resolution.y);
+        vec2 axis1 = major * min(3.0 * sqrt(lambda1), cap);
+        vec2 axis2 = minor * min(3.0 * sqrt(lambda2), cap);
+
+        // Pixels to clip space: two over the resolution to get to NDC, and
+        // times w because clip space is before the divide.
+        vec2 toClip = 2.0 / resolution * clip.w;
+        material.clipSpaceTransform = mat4(vec4(axis1 * toClip, 0.0, 0.0),
+                                           vec4(axis2 * toClip, 0.0, 0.0),
+                                           vec4(0.0),
+                                           clip);
+
+        // In units of the standard deviation along each axis, so the
+        // Gaussian in the fragment stage is exp(-½|p|²) with nothing else.
+        material.splatAt = vec4(corner * 3.0, 0.0, 0.0);
+
+        uint packed = t2.y;
+        vec4 colour = vec4(float(packed & 0xffu), float((packed >> 8u) & 0xffu),
+                           float((packed >> 16u) & 0xffu),
+                           float((packed >> 24u) & 0xffu)) / 255.0;
+        material.splatColour = colour;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 p = variable_splatAt.xy;
+        float power = -0.5 * dot(p, p);
+
+        // The reference's cut-offs: nothing past three standard deviations,
+        // nothing fainter than a step of eight-bit colour, and never quite
+        // opaque, so what is behind a splat is not lost entirely.
+        if (dot(p, p) > 9.0) discard;
+        vec4 colour = variable_splatColour;
+        float alpha = min(0.99, colour.a * materialParams.opacity * exp(power));
+        if (alpha < 1.0 / 255.0) discard;
+
+        // The colours a capture is trained to are display values, and
+        // Filament blends and grades in linear light. Decoded here so that the
+        // colour reaching the screen is the one the capture meant — the blend
+        // between splats is therefore in linear light rather than in the
+        // display space the reference blends in.
+        vec3 linear = pow(max(colour.rgb, vec3(0.0)), vec3(2.2)) *
+                      materialParams.brightness;
+
+        // Premultiplied, which is what `transparent` blending is.
+        material.baseColor = vec4(linear * alpha, alpha);
+    }
+}

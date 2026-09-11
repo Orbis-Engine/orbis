@@ -27,6 +27,7 @@ export 'src/example.dart'
         Setting,
         Toggle,
         ViewPoint;
+export 'src/examples/batching.dart' show BatchingExample;
 export 'src/examples/benchmark.dart' show BenchmarkExample;
 export 'src/examples/blend.dart' show BlendExample;
 export 'src/examples/bounce.dart' show BounceExample;
@@ -36,20 +37,31 @@ export 'src/examples/bistro.dart'
 export 'src/examples/cameras.dart' show CamerasExample;
 export 'src/examples/crowd.dart' show CrowdExample;
 export 'src/examples/day_and_night.dart' show DayAndNightExample;
+export 'src/examples/decals.dart' show DecalsExample;
+export 'src/examples/distortion.dart' show DistortionExample;
+export 'src/examples/god_rays.dart' show GodRaysExample;
 export 'src/examples/lights.dart' show LightsExample;
 export 'src/examples/many.dart' show ManyExample;
+export 'src/examples/overdraw.dart' show OverdrawExample;
 export 'src/examples/materials.dart' show MaterialsExample;
 export 'src/examples/meshes.dart' show MeshesExample;
+export 'src/examples/motion_blur.dart' show MotionBlurExample;
+export 'src/examples/outline.dart' show OutlineExample;
+export 'src/examples/panel_shadow.dart' show PanelShadowExample;
 export 'src/examples/pipeline.dart' show PipelineExample;
 export 'src/examples/probes.dart' show ProbesExample;
+export 'src/examples/shadows.dart' show ShadowLight, ShadowsExample;
 export 'src/examples/runner.dart' show RunnerExample;
+export 'src/examples/splats.dart' show SplatsExample;
 export 'src/examples/post.dart' show PostExample;
 export 'src/examples/video.dart' show VideoExample;
 export 'src/examples/voxels.dart' show VoxelExample;
 export 'src/examples/weather.dart' show WeatherExample;
+export 'src/examples/volumes.dart' show EnvironmentVolumesExample;
 export 'src/examples/surface.dart' show SurfaceExample, linearOf;
 
 import 'src/example.dart';
+import 'src/examples/batching.dart';
 import 'src/examples/benchmark.dart';
 import 'src/examples/blend.dart';
 import 'src/examples/bounce.dart';
@@ -58,19 +70,28 @@ import 'src/examples/bistro.dart';
 import 'src/examples/cameras.dart';
 import 'src/examples/crowd.dart';
 import 'src/examples/day_and_night.dart';
+import 'src/examples/decals.dart';
+import 'src/examples/distortion.dart';
+import 'src/examples/god_rays.dart';
 import 'src/examples/lights.dart';
 import 'src/examples/panel_shadow.dart';
+import 'src/examples/shadows.dart';
 import 'src/examples/many.dart';
+import 'src/examples/overdraw.dart';
 import 'src/examples/materials.dart';
 import 'src/examples/meshes.dart';
+import 'src/examples/motion_blur.dart';
+import 'src/examples/outline.dart';
 import 'src/examples/pipeline.dart';
 import 'src/examples/probes.dart';
 import 'src/examples/runner.dart';
 import 'src/examples/post.dart';
+import 'src/examples/splats.dart';
 import 'src/examples/surface.dart';
 import 'src/examples/video.dart';
 import 'src/examples/voxels.dart';
 import 'src/examples/weather.dart';
+import 'src/examples/volumes.dart';
 
 /// Every example that needs nothing but the engine, in the order to show them.
 ///
@@ -85,19 +106,29 @@ List<Example> engineExamples() => [
   SurfaceExample(),
   LightsExample(),
   PanelShadowExample(),
+  DecalsExample(),
+  ShadowsExample(),
   ProbesExample(),
   BounceExample(),
+  MotionBlurExample(),
   FieldExample(),
   DayAndNightExample(),
+  GodRaysExample(),
   WeatherExample(),
+  DistortionExample(),
+  EnvironmentVolumesExample(),
   ManyExample(),
+  BatchingExample(),
+  OverdrawExample(),
   CrowdExample(),
+  SplatsExample(),
   CamerasExample(),
   MeshesExample(),
   MaterialsExample(),
   BlendExample(),
   PipelineExample(),
   PostExample(),
+  OutlineExample(),
   VideoExample(),
   VoxelExample(),
   RunnerExample(),

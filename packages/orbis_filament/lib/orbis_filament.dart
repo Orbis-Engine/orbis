@@ -7,6 +7,7 @@ library;
 
 export 'src/orbis_view.dart' show OrbisView;
 export 'src/bvh.dart' show OrbisBounds, OrbisBvh, OrbisVolume;
+export 'src/decal.dart' show OrbisDecal;
 export 'src/detail.dart' show OrbisDetailState, OrbisLod, OrbisStep;
 export 'src/material.dart'
     show
@@ -21,6 +22,8 @@ export 'src/material.dart'
         OrbisWrap;
 export 'src/environment.dart' show OrbisEnvironment, OrbisProbe;
 export 'src/field.dart' show OrbisField;
+export 'src/motion_blur.dart' show OrbisMotionBlur;
+export 'src/outline.dart' show OrbisOccluded, OrbisOutline;
 export 'src/graph.dart'
     show
         OrbisFrameCapture,
@@ -38,9 +41,19 @@ export 'src/pipeline.dart'
         OrbisPipeline,
         OrbisResolution,
         OrbisShadowKind,
-        OrbisShadows;
+        OrbisShadows,
+        OrbisVarianceShadows;
 export 'src/population.dart' show OrbisFade, OrbisPopulation;
+export 'src/splats.dart' show OrbisSplats;
+export 'src/screen.dart'
+    show OrbisDistortion, OrbisDistortionKind, OrbisGodRays;
 export 'src/video.dart' show OrbisVideo;
+export 'src/volumes.dart'
+    show
+        OrbisEnvironmentOverrides,
+        OrbisEnvironmentSettings,
+        OrbisEnvironmentVolume,
+        OrbisVolumeShape;
 export 'src/post.dart'
     show
         AntiAliasing,

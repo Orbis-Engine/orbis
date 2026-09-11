@@ -1,0 +1,104 @@
+// The selection outline, pass one: how far along its row each pixel is from
+// something outlined.
+//
+// An outline is everything within so many pixels of a silhouette and not on
+// it, which is a distance question. Asking it directly — every pixel looking
+// at every pixel in a disc around it — costs the square of the width, and a
+// four-pixel outline is already eighty taps. Asking it in two halves costs
+// twice the width instead: this pass finds, for each pixel, the nearest
+// outlined pixel *in its own row*, and the second finds the nearest row. The
+// Euclidean distance falls out of the two exactly, because the nearest point
+// in a disc is the nearest over each row of (along the row)² + (across)².
+//
+// Four answers per pixel rather than one, because there are four kinds of
+// outlined pixel and they are drawn differently: the active object and the
+// rest of the selection, each either visible or hidden behind something. One
+// channel each, so the second pass can put a bright edge over a faint one
+// rather than having to pick between them.
+material {
+    name : orbisOutlineRows,
+    shadingModel : unlit,
+    vertexDomain : device,
+    requires : [ uv0 ],
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    parameters : [
+        // Depth of the active object alone, of the rest of the selection
+        // alone, and of the whole scene — each drawn by the renderer into a
+        // target of its own this frame.
+        { type : sampler2d, name : primary, precision : high },
+        { type : sampler2d, name : others, precision : high },
+        { type : sampler2d, name : world, precision : high },
+        // Which of those three were actually drawn this frame, as 0 or 1. A
+        // target nobody drew into still holds whatever it held last, and
+        // reading that would outline an object that was deselected a second
+        // ago.
+        { type : float3, name : drawn },
+        // How far along the row to look, in pixels.
+        { type : int, name : reach }
+    ]
+}
+
+fragment {
+    // Past this nothing is looked at, whatever reach says. A constant bound
+    // keeps the loop one the compiler can see the end of.
+    #define ORBIS_MOST_REACH 18
+
+    // Further than any reach, and small enough for a half float to hold and
+    // square without overflowing.
+    #define ORBIS_NOWHERE 200.0
+
+    // One-hot: which of the four kinds this pixel is, or none. In order —
+    // visible active, visible other, hidden active, hidden other.
+    vec4 kindAt(ivec2 at) {
+        // Depth is reversed in Filament: the cleared value, nought, is the far
+        // plane, so anything above it is something drawn there.
+        float p = materialParams.drawn.x > 0.5
+            ? texelFetch(materialParams_primary, at, 0).r : 0.0;
+        float o = materialParams.drawn.y > 0.5
+            ? texelFetch(materialParams_others, at, 0).r : 0.0;
+        if (p <= 0.0 && o <= 0.0) return vec4(0.0);
+
+        // Where the active object and another selected one overlap, the one
+        // in front is the one being looked at.
+        bool front = p >= o;
+        float mine = front ? p : o;
+
+        // Visible if nothing in the whole scene is nearer. Both depths come
+        // from the same camera and the same triangles, so where the object is
+        // in front they agree to the bit; the tolerance only has to absorb a
+        // rounding, not a difference in geometry. With no scene depth drawn,
+        // everything counts as visible — which is what the shown style asks.
+        bool seen = true;
+        if (materialParams.drawn.z > 0.5) {
+            float scene = texelFetch(materialParams_world, at, 0).r;
+            seen = mine >= scene * (1.0 - 1e-4);
+        }
+
+        if (seen) return front ? vec4(1.0, 0.0, 0.0, 0.0) : vec4(0.0, 1.0, 0.0, 0.0);
+        return front ? vec4(0.0, 0.0, 1.0, 0.0) : vec4(0.0, 0.0, 0.0, 1.0);
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        ivec2 size = textureSize(materialParams_primary, 0);
+        ivec2 here = clamp(ivec2(getUV0() * vec2(size)), ivec2(0), size - 1);
+        int reach = min(materialParams.reach, ORBIS_MOST_REACH);
+
+        vec4 nearest = vec4(ORBIS_NOWHERE);
+        for (int dx = -ORBIS_MOST_REACH; dx <= ORBIS_MOST_REACH; dx++) {
+            if (abs(dx) > reach) continue;
+            int x = here.x + dx;
+            if (x < 0 || x >= size.x) continue;
+            vec4 kind = kindAt(ivec2(x, here.y));
+            // A channel that is not this kind stays where it was; one that is
+            // takes the distance if it is nearer.
+            vec4 away = mix(vec4(ORBIS_NOWHERE), vec4(float(abs(dx))), kind);
+            nearest = min(nearest, away);
+        }
+
+        material.baseColor = nearest;
+    }
+}
