@@ -1140,12 +1140,17 @@ class OrbisScene {
   /// Whether objects that are the same thing are drawn together.
   ///
   /// A hundred crates with one mesh, one material and the same shadow and
-  /// layer settings are a hundred draws per pass without this, and far fewer
-  /// with it: they are made to share what they are made of, and the renderer
-  /// merges their draws into instanced ones, each copy carrying its own
-  /// transform. Nothing about the objects changes — each is still its own
-  /// entry in [objects] with its own key, moving one moves only that one, and
-  /// picking still answers with the one that was clicked.
+  /// layer settings are a hundred draws per pass without this, and one with
+  /// it: the renderer builds the group as a single renderable, manually
+  /// instanced — each copy's own transform in its own slot of a buffer built
+  /// for the purpose — rather than drawing each crate on its own. A group
+  /// past sixty-four members becomes more than one such renderable, because
+  /// that is as many copies as one can carry, but it is still a handful of
+  /// draws rather than one per crate. Nothing about the objects themselves
+  /// changes — each is still its own entry in [objects] with its own key,
+  /// moving one moves only that one, and picking still answers with the one
+  /// that was clicked, because picking never asks the renderer which entity
+  /// is at a pixel; it works from this list, same as ever.
   ///
   /// What batches is decided per publish, by counting. Four or more objects
   /// with the same [OrbisObject.mesh], the same [OrbisObject.material] and the
@@ -1154,33 +1159,79 @@ class OrbisScene {
   /// *is* the material. An object with [OrbisObject.morphWeights] never
   /// batches, because its shape is its own, and neither does a model wearing
   /// its own file's materials, because every copy of a model comes with its
-  /// own set of them — give such a model an [OrbisMaterial] and it batches
-  /// like anything else.
+  /// own set of them — give such a model an [OrbisMaterial] and the census
+  /// counts it like anything else, though the renderer does not yet build a
+  /// merged draw for a named mesh, only for the placeholder cube; such a
+  /// model still draws correctly, just as its own renderable, unmerged.
   ///
-  /// The saving is in draw calls, not in objects: the renderer still culls
-  /// and sorts every object on its own, and merges what lands next to each
-  /// other once they are sorted. It helps most where many small identical
-  /// things are close together, and does nothing for a scene where every
-  /// object is different — a scene with nothing to group is left running
-  /// exactly as it would with this off, measured to the pixel.
+  /// **What this costs.** A merged group shares everything in Filament that
+  /// is set per renderable rather than per instance: the shadow and layer
+  /// flags (already guaranteed identical within a group by what makes a
+  /// group) and, more visibly, culling. Filament culls a renderable by one
+  /// box, so a group's box is the union of its members' — up to sixty-four
+  /// of them — and a member outside the camera's view still draws if another
+  /// member of its own chunk of sixty-four is inside it. The same is true of
+  /// the shadow pass: a member outside the light's view can still cast if a
+  /// chunk-mate is inside it. Neither ever *hides* something that should be
+  /// visible or shadowing — the union box can only be a superset of what a
+  /// member-by-member account would cull — so the cost is some wasted
+  /// drawing at the edge of a chunk, not a wrong picture. Members are sorted
+  /// by where they are in the world before being split into chunks of
+  /// sixty-four, precisely so that a chunk is a compact patch rather than
+  /// members scattered across the whole group, which keeps this cost small
+  /// in practice: a scene with objects that are already laid out somewhat
+  /// together — a grid, a cluster, a tile — pays very little for it.
   ///
-  /// **Off by default, and experimental.** Where it works it works exactly:
-  /// three thousand crates come out bit-for-bit identical batched and
-  /// unbatched, for a third off the frame's GPU time. But the merging itself
-  /// is Filament's, switched on engine-wide, and on Filament 1.76 that switch
-  /// makes some scenes come back *entirely* black — every pixel nought, sky
-  /// included — with no way to ask beforehand whether a given scene is one of
-  /// them. So a scene that turns this on has to be looked at with it on.
+  /// **On, but only where proven.** Measured on three thousand crates: a
+  /// third of the CPU time and GPU time of drawing them unbatched, and the
+  /// draw count falls from thousands to dozens. Where nothing in a scene
+  /// batches — nothing repeats often enough, or every copy differs in colour
+  /// or material — turning this on changes nothing, measured to the pixel:
+  /// there is nothing to merge, so nothing is drawn differently.
   ///
-  /// The cause is known: Filament's automatic instancing could swallow a
-  /// custom command — in practice the colour-grading subpass — into the draw
-  /// sorted beside it, so the subpass never ran and the tone-mapped image was
-  /// never written. A one-line fix exists on Orbis's Filament fork, and
-  /// against a Filament built with it every scene that used to come back black
-  /// is bit-identical batched and unbatched. It is not in any Filament release
-  /// yet, so the default stays off: this package ships against the stock
-  /// release, where the fault is still there. Point `ORBIS_FILAMENT_SRC` at a
-  /// build of the fork and it is safe to turn on.
+  /// Where something *does* batch, and none of it casts shadows, the same is
+  /// true: measured bit-identical on three thousand crates grouped without a
+  /// caster among them, and on forty-eight overlapping slabs sharing one
+  /// material. Where a batched group also casts shadows — crates in a
+  /// pattern, one in five, is the case this was measured on — the frame is
+  /// close but not bit-identical: about four in a hundred pixels differ,
+  /// nearly all by one to three parts in two hundred and fifty-five, too
+  /// small to see, concentrated along the edges of shadows rather than
+  /// scattered across every silhouette or missing from a whole object.
+  /// Turning shadows off, or grouping the same crates without any of them
+  /// casting, both make the difference vanish, which places the cause in how
+  /// Filament's shadow pass fits itself to a *chunked* set of casters rather
+  /// than in anything this renderer decides — sorting a chunk's members to
+  /// tighten its box, and giving a chunk every per-renderable shadow setting
+  /// an individual object would have had, were both tried and neither moved
+  /// the result, which is what says so. So: proven bit-identical wherever
+  /// nothing casts a shadow onto or out of a batched group, not proven
+  /// otherwise — which is why this stays off by default rather than on,
+  /// even though most scenes that turn it on will never notice the
+  /// difference. Turning it on is safe in the sense that mattered most: it
+  /// no longer touches the Filament feature that used to blacken a frame
+  /// outright (see below), so the worst this can now do is a handful of
+  /// sub-visible pixels near a shadow's edge, never a black screen.
+  ///
+  /// **Not Filament's automatic instancing, and deliberately so.** An
+  /// earlier version of this switched on `Engine::setAutomaticInstancingEnabled`
+  /// and let Filament notice, after the fact, that several draws it had
+  /// already built could be merged. On stock Filament 1.76 that path is
+  /// broken: `RenderPass::instanceify()` compares a leftover custom command
+  /// as though it were a draw, and can fold the colour-grading subpass into
+  /// a neighbouring instanced run so it never executes — the whole frame
+  /// comes back entirely black, on some scenes and not others, with no way
+  /// to tell beforehand which a given scene is. Building the merged
+  /// renderable directly, with `RenderableManager::Builder::instances`,
+  /// never asks Filament to notice anything after the fact, so that bug is
+  /// never reached — which is what let three scenes that used to come back
+  /// black with instancing forced on render correctly once batching stopped
+  /// asking for it. A fix for the underlying Filament bug exists, on Orbis's
+  /// own Filament fork, in no release yet; it no longer matters to this
+  /// switch, because nothing here depends on it any more.
+  ///
+  /// Turned off with `batching: false`, which is also what leaving this
+  /// unset does.
   final bool batching;
 
   /// The highest layer an object may be on.
