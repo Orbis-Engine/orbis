@@ -88,6 +88,48 @@ void main() {
       expect(found, isNotNull);
       expect(int.parse(found!.group(1)!), OrbisEffect.motionBlur.index);
     });
+
+    test('the blur binds its samplers before it can give up on a frame', () {
+      // The resolve and tile passes keep a material instance each for as long
+      // as the effect is wanted, and those instances name textures neither of
+      // them owns for long: the graph's depth, which the renderer destroys
+      // the moment the graph changes, and the blur's own targets, which go
+      // whenever the picture changes size. A frame with nothing moving leaves
+      // prepare() early — which is exactly the state just after a host
+      // switches scenes — so samplers bound only beside their draws are left
+      // naming a texture Filament has already destroyed, and the next frame
+      // that does draw them binds a freed handle. Filament ends the process
+      // for that, and the gallery went down on it.
+      final native = _read(
+        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisMotionBlur.cpp',
+      );
+      final at = native.indexOf('void MotionBlur::prepare(');
+      expect(at, greaterThan(0), reason: 'prepare is still where it was');
+      final prepare = native.substring(at);
+
+      // Where it decides there is nothing to blur and returns.
+      final givesUp = prepare.indexOf('if (cameraScale <= 0.0 && !drewObjects)');
+      expect(givesUp, greaterThan(0), reason: 'prepare still returns early');
+
+      for (final binding in const [
+        'resolve.setParameter("objects"',
+        'tiles.setParameter("velocity"',
+      ]) {
+        final bound = prepare.indexOf(binding);
+        expect(
+          bound,
+          greaterThan(0),
+          reason: '$binding) has to be there at all',
+        );
+        expect(
+          bound,
+          lessThan(givesUp),
+          reason:
+              '$binding) has to be bound before prepare can return, or the '
+              'instance is left holding a destroyed texture',
+        );
+      }
+    });
   });
 }
 
