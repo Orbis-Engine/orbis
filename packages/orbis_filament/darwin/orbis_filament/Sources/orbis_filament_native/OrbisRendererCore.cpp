@@ -3069,6 +3069,11 @@ bool Renderer::buildEffect(GraphPass &pass) {
   // whole landscape behind a triangle covering the screen.
   pass.effectScene = _engine->createScene();
   pass.effectScene->addEntity(pass.effectEntity);
+
+  // Held on to, because building a renderable out of them does not hand them
+  // over: they stay the pass's to give back, exactly like the scene above.
+  pass.effectVertices = vertices;
+  pass.effectIndices = indices;
   return true;
 }
 
@@ -3359,7 +3364,20 @@ void Renderer::sweepRetiredTextures() {
   }
 }
 
-/// Gives back every view, camera and target the graph was holding.
+/// Gives back everything the graph was holding.
+///
+/// Per pass that is the view and camera it drew through, and the triangle an
+/// effect pass drew — its own scene, entity, material instance and buffers.
+/// All of it is built on first use and all of it belongs to the pass, so all
+/// of it goes when the pass does: _passes.clear() below is the last reference
+/// to any of it, and whatever is not given back here can never be given back
+/// at all. That leak stayed invisible until the engine went down, and then
+/// arrived as Filament refusing to destroy a material with instances still
+/// alive — one instance for every graph the renderer had been given.
+///
+/// The compiled Material an effect runs is deliberately not here: that is
+/// shared between passes, cached in _effectMaterials across graph changes, and
+/// given back in dispose.
 void Renderer::releaseGraph() {
   if (_engine == nullptr) {
     _passes.clear();
@@ -3377,6 +3395,30 @@ void Renderer::releaseGraph() {
       utils::EntityManager::get().destroy(pass.cameraEntity);
       pass.cameraEntity = utils::Entity();
       pass.camera = nullptr;
+    }
+    // The renderable before anything it was drawn with: Filament refuses to
+    // destroy a material instance or a buffer that something still points at.
+    if (!pass.effectEntity.isNull()) {
+      _engine->destroy(pass.effectEntity);
+      utils::EntityManager::get().destroy(pass.effectEntity);
+      pass.effectEntity = utils::Entity();
+    }
+    if (pass.effectMaterial != nullptr) {
+      _engine->destroy(pass.effectMaterial);
+      pass.effectMaterial = nullptr;
+    }
+    if (pass.effectVertices != nullptr) {
+      _engine->destroy(pass.effectVertices);
+      pass.effectVertices = nullptr;
+    }
+    if (pass.effectIndices != nullptr) {
+      _engine->destroy(pass.effectIndices);
+      pass.effectIndices = nullptr;
+    }
+    // Last, because it is what held the entity above.
+    if (pass.effectScene != nullptr) {
+      _engine->destroy(pass.effectScene);
+      pass.effectScene = nullptr;
     }
   }
   for (GraphTarget &target : _targets) releaseTarget(target);

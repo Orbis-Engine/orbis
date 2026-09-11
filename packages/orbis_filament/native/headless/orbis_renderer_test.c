@@ -19,6 +19,77 @@ static void expect(int holds, const char *what) {
   }
 }
 
+/* How many times the graph below is replaced. Any number above one would
+ * catch the fault; several make it plain that what leaked scaled with the
+ * changes rather than being a single stray object. */
+enum { kGraphChanges = 8 };
+
+/* Sets a graph, changes it, and destroys the renderer.
+ *
+ * An effect pass builds the triangle it draws — a material instance, an
+ * entity and a scene of its own — the first time it runs, and keeps them,
+ * because the pass runs on every frame. They belong to the pass, so a graph
+ * that replaces the pass has to give them back. While it did not, each change
+ * orphaned one instance of the effect's material, and nothing said so until
+ * the renderer went down: Filament will not destroy a material with an
+ * instance of it still alive, and ends the process rather than the frame.
+ *
+ * So this is a test that has to *reach the end*, not one that reads a value
+ * back. It is also the reason to write it here rather than beside it: while
+ * teardown aborted, no runtime test could set a graph at all — whatever it
+ * was really checking, it died on the way out. */
+static void graph_changes_and_goes_down(void) {
+  orbis_surface_desc headless = {ORBIS_SURFACE_HEADLESS, NULL};
+  orbis_renderer *renderer =
+      orbis_renderer_create(ORBIS_BACKEND_DEFAULT, &headless, 64, 48);
+  /* Said once already by the caller; a host with no device is not a failure. */
+  if (renderer == NULL) return;
+
+  /* One target that follows the view — which is what a width and height of
+   * nought mean — keeping colour, so that an effect can sample it. */
+  const float target[6] = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f};
+  const char *const names[1] = {"scene"};
+
+  for (int change = 0; change < kGraphChanges; change++) {
+    /* Two passes: the scene into that target, then a sharpen reading it onto
+     * the frame. */
+    float passes[2 * 13] = {0};
+    passes[0] = 0;    /* a scene pass */
+    passes[1] = 0;    /* into target nought */
+    passes[2] = 127;  /* every layer */
+    passes[3] = 1;    /* clearing */
+    passes[4] = passes[5] = passes[6] = passes[7] = -1; /* reading nothing */
+    passes[12] = -1;  /* no effect */
+
+    passes[13 + 0] = 2;    /* an effect pass */
+    passes[13 + 1] = -1;   /* onto the frame */
+    passes[13 + 2] = 127;
+    passes[13 + 3] = 1;
+    passes[13 + 4] = 0;    /* reading target nought */
+    passes[13 + 5] = passes[13 + 6] = passes[13 + 7] = -1;
+    /* The effect's one dial, moved every time round. A graph identical to the
+     * one already set is ignored — deliberately, since a host sends one every
+     * frame — so a loop that did not move something would set one graph and
+     * test nothing. */
+    passes[13 + 8] = 0.2f + 0.05f * (float)change;
+    passes[13 + 12] = 0;   /* sharpen */
+
+    expect(orbis_renderer_set_render_graph(renderer, 2, passes, 2 * 13, 1,
+                                           target, 6, names, 1) == ORBIS_OK,
+           "a scene pass and an effect are taken as a graph");
+    /* Drawn, and not only set: a pass that never runs never builds the
+     * triangle whose ownership this is about. */
+    expect(orbis_renderer_draw(renderer, change / 60.0) == ORBIS_OK,
+           "a frame of that graph draws");
+  }
+
+  /* The whole of the test. Filament ends the process inside here if anything
+   * the graph built outlived the graph. */
+  orbis_renderer_destroy(renderer);
+  printf("a graph changed %d times and the renderer went down cleanly\n",
+         kGraphChanges);
+}
+
 int main(void) {
   /* Nothing is a handle, and nothing crashes on being given nothing. */
   expect(orbis_renderer_draw(NULL, 0.0) == ORBIS_ERROR_NULL,
@@ -95,6 +166,10 @@ int main(void) {
   }
 
   orbis_renderer_destroy(renderer);
+
+  /* Its own renderer, because what it checks is the teardown. */
+  graph_changes_and_goes_down();
+
   if (failures == 0) printf("the C ABI refuses what it should and draws\n");
   return failures == 0 ? 0 : 1;
 }

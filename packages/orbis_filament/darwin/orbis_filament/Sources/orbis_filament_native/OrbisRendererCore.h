@@ -857,9 +857,15 @@ struct GraphPass {
 
   /// The one triangle an effect pass draws, and what it is dressed in. Built
   /// on first use and kept, because a pass runs every frame.
+  ///
+  /// Every piece of it belongs to the pass and is given back with the pass, in
+  /// releaseGraph. The compiled Material behind the instance is the exception:
+  /// that one is shared between passes and outlives any graph.
   filament::Scene *effectScene = nullptr;
   utils::Entity effectEntity;
   filament::MaterialInstance *effectMaterial = nullptr;
+  filament::VertexBuffer *effectVertices = nullptr;
+  filament::IndexBuffer *effectIndices = nullptr;
 
   /// The view this pass renders through, for a pass that draws into a target.
   /// The frame pass uses the renderer's own view.
