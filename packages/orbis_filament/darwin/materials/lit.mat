@@ -892,8 +892,18 @@ fragment {
         // inside a branch that some neighbouring fragments skipped is
         // undefined, and a decal's edge is exactly such a branch. Each decal
         // then turns these into its own uv rates with the rows of its matrix.
-        vec3 dpdx = dFdx(p);
-        vec3 dpdy = dFdy(p);
+        //
+        // highp, and so are gx and gy below: this fragment shader's ambient
+        // precision is mediump on mobile, decalImages' own precision
+        // notwithstanding — a sampler's precision governs what a lookup on it
+        // returns, not the derivatives a caller hands to textureGrad. Left at
+        // mediump, gx and gy compile down to Metal's half2, and Metal's
+        // gradient2d — the type textureGrad's two extra arguments become —
+        // has a constructor for a pair of float2 and nothing else. Desktop
+        // Metal's ambient precision is already highp, which is why this only
+        // broke on iOS.
+        highp vec3 dpdx = dFdx(p);
+        highp vec3 dpdy = dFdy(p);
 
         // The geometric normal rather than the shading one: the angle fade is
         // about which way the *surface* faces the projector, and a normal
@@ -927,8 +937,8 @@ fragment {
             vec4 picture = vec4(1.0);
             if (settings.x >= 0.0) {
                 vec2 uv = local.xz + 0.5;
-                vec2 gx = vec2(dot(r0.xyz, dpdx), dot(r2.xyz, dpdx));
-                vec2 gy = vec2(dot(r0.xyz, dpdy), dot(r2.xyz, dpdy));
+                highp vec2 gx = vec2(dot(r0.xyz, dpdx), dot(r2.xyz, dpdx));
+                highp vec2 gy = vec2(dot(r0.xyz, dpdy), dot(r2.xyz, dpdy));
                 picture = textureGrad(materialParams_decalImages,
                                       vec3(uv, settings.x), gx, gy);
             }

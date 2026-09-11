@@ -313,8 +313,12 @@ fragment {
 
         vec3 p = getUserWorldPosition();
 
-        vec3 dpdx = dFdx(p);
-        vec3 dpdy = dFdy(p);
+        // highp, and so are gx and gy below — see lit.mat's applyDecals for
+        // why: a sampler's own precision governs what a lookup on it
+        // returns, not the derivatives handed to textureGrad, and this
+        // shader's ambient precision is mediump on mobile.
+        highp vec3 dpdx = dFdx(p);
+        highp vec3 dpdy = dFdy(p);
 
         vec3 facing = getWorldGeometricNormalVector();
         int layer = materialParams.decalLayer;
@@ -341,8 +345,8 @@ fragment {
             vec4 picture = vec4(1.0);
             if (settings.x >= 0.0) {
                 vec2 uv = local.xz + 0.5;
-                vec2 gx = vec2(dot(r0.xyz, dpdx), dot(r2.xyz, dpdx));
-                vec2 gy = vec2(dot(r0.xyz, dpdy), dot(r2.xyz, dpdy));
+                highp vec2 gx = vec2(dot(r0.xyz, dpdx), dot(r2.xyz, dpdx));
+                highp vec2 gy = vec2(dot(r0.xyz, dpdy), dot(r2.xyz, dpdy));
                 picture = textureGrad(materialParams_decalImages,
                                       vec3(uv, settings.x), gx, gy);
             }
