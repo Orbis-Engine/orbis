@@ -137,11 +137,18 @@
 
       this.buildCube();
 
-      // Read once, for the stats Dart shows: which GL actually drew.
-      const gl = engine.context;
-      const info = gl.getExtension('WEBGL_debug_renderer_info');
-      this.glVersion = String(gl.getParameter(gl.VERSION));
-      this.glRenderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+      // Read once, for the stats Dart shows: which GL actually drew. Filament
+      // does not hand its context back, but Engine.create already made a
+      // WebGL2 one on this canvas, and getContext returns that same context
+      // rather than a second one, so this is the context Filament is drawing
+      // with. If Filament ever fell back to WebGL1 this would be null, which
+      // is itself worth showing.
+      const gl = this.canvas.getContext('webgl2');
+      const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+      this.glVersion = gl ? String(gl.getParameter(gl.VERSION)) : 'no webgl2';
+      this.glRenderer = gl
+        ? String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER))
+        : 'none';
 
       this.width = 0;
       this.height = 0;
@@ -168,8 +175,10 @@
       orientationBuilder.normals(normals, 0);
       const orientation = orientationBuilder.build();
       const tangents = orientation.getQuats(24);
+      // Only the SurfaceOrientation is ours to delete: build() consumes the
+      // builder, and deleting it afterwards throws
+      // "BindingError: SurfaceOrientation$Builder instance already deleted".
       orientation.delete();
-      orientationBuilder.delete();
 
       const VA = Filament.VertexAttribute;
       const AT = Filament.VertexBuffer$AttributeType;
