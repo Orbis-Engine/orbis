@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.22.1
+
+- Changing a render graph no longer leaks what an effect pass draws with, and a
+  renderer that has been given one can be disposed of. An effect pass builds
+  the single triangle it draws the first time it runs — a material instance, an
+  entity, a scene of its own and the two buffers the geometry is made of — and
+  keeps them, because the pass runs on every frame. Releasing the graph gave
+  back that pass's view and camera and left the rest with nothing pointing at
+  it.
+
+  Measured: exactly one material instance orphaned per graph change, at **4, 8
+  and 40 changes**. Nothing reported it until the renderer went down, because
+  that is where the compiled materials are destroyed and Filament refuses to
+  destroy one that still has instances alive — ending the process rather than
+  the frame. An effect that reads a target failed earlier and looked unrelated:
+  the orphaned instance still sampled the target texture the graph change had
+  destroyed, so teardown hit a use-after-free first.
+
+  The compiled material behind the instance is deliberately unchanged. That one
+  is shared between passes, still cached across graph changes, and still given
+  back when the renderer is disposed.
+
 ## 0.22.0
 
 - **A rectangular light's shadow now actually falls.** The depth map it drew
