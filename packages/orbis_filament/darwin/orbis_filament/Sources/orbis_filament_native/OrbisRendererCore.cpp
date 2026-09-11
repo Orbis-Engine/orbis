@@ -3977,25 +3977,64 @@ static inline void expandBoxByTransform(const mat4f &m, float3 &least,
   most = max(most, centre + half);
 }
 
+/// Orders `indices` so that members near each other in the world are near
+/// each other in the list, and therefore end up sharing a chunk — the same
+/// technique sortPopulation uses, for the same reason (see mortonOf).
+///
+/// Skipping this made a chunk whatever objects happened to be adjacent in
+/// the publish, which is not "nearby": the Batching example's shadow casters
+/// are every fifth object in a grid, so sixty-four consecutive *casters*
+/// span nearly the whole grid rather than a corner of it. A chunk's bounding
+/// box is the union of its members', so a box that loose is not just an
+/// overdraw risk — it visibly moved where the shadow pass fit its cascades,
+/// which is what turned up as a scene-wide, if subtle, pixel difference
+/// between batched and unbatched before this was added.
+void Renderer::sortBatchIndices(std::vector<uint32_t> &indices,
+                                const float *transforms) {
+  if (indices.size() < 2) return;
+
+  float3 least{std::numeric_limits<float>::max()};
+  float3 most{std::numeric_limits<float>::lowest()};
+  for (uint32_t index : indices) {
+    const float *m = transforms + size_t(index) * 16;
+    least = min(least, float3{m[12], m[13], m[14]});
+    most = max(most, float3{m[12], m[13], m[14]});
+  }
+  const float3 span = max(most - least, float3{1e-4f});
+
+  std::vector<std::pair<uint64_t, uint32_t>> keyed(indices.size());
+  for (size_t i = 0; i < indices.size(); i++) {
+    const float *m = transforms + size_t(indices[i]) * 16;
+    const float3 at = (float3{m[12], m[13], m[14]} - least) / span;
+    keyed[i] = {mortonOf(uint32_t(std::clamp(at.x, 0.0f, 1.0f) * 1023.0f),
+                        uint32_t(std::clamp(at.y, 0.0f, 1.0f) * 1023.0f),
+                        uint32_t(std::clamp(at.z, 0.0f, 1.0f) * 1023.0f)),
+                indices[i]};
+  }
+  std::sort(keyed.begin(), keyed.end());
+  for (size_t i = 0; i < indices.size(); i++) indices[i] = keyed[i].second;
+}
+
 /// Makes every batch group's Filament state agree with what this publish's
 /// census found, and writes this publish's batching stats.
 ///
 /// `groups` is this publish's membership, one list of object indices per key
-/// that reached the threshold, in the order the objects arrived. Reconciling
-/// a group against it is one of three things, cheapest first:
+/// that reached the threshold, in the order the objects arrived — an order
+/// this function does not rely on; see sortBatchIndices and BatchGroup's own
+/// comment. Reconciling a group against it is one of three things, cheapest
+/// first:
 ///
-///  * Nothing to do with its chunks at all, if the exact members in the
-///    exact order are what it was already built from — checked by comparing
-///    `indices` against the group's own memberKeys, which is what "nothing
-///    changed" is judged against. The colour pool still has to be asked for
-///    the group's material, though, whether or not anything else moved: an
-///    instance not claimed this publish is swept below as if nobody wanted
-///    it.
+///  * Nothing to do with its chunks at all, if the exact same set of object
+///    keys is what it was already built from — checked against the group's
+///    own slotOf, which is what "nothing changed" is judged against. The
+///    colour pool still has to be asked for the group's material, though,
+///    whether or not anything else moved: an instance not claimed this
+///    publish is swept below as if nobody wanted it.
 ///  * A write into chunks that already exist, if the membership matches but
 ///    a transform or the material has: updateBatchGroup.
 ///  * A rebuild, if the membership does not match: one joined, one left, or
-///    two swapped places. rebuildBatchGroup sizes new chunks to fit and
-///    writes every slot once.
+///    one swapped for another. rebuildBatchGroup sorts, sizes new chunks to
+///    fit and writes every slot once.
 ///
 /// A group nobody asks for this time — every member left the scene, moved
 /// out of eligibility, or changed key — is torn down once every live group
@@ -4041,15 +4080,18 @@ void Renderer::reconcileBatchGroups(
         return made;
       });
 
-    const bool sameMembers =
-        !group.chunks.empty() && indices.size() == group.memberKeys.size() &&
-        std::equal(indices.begin(), indices.end(), group.memberKeys.begin(),
-                  [&](uint32_t index, int64_t was) {
-                    return keys[index] == was;
-                  });
+    // Same set of keys as last time, regardless of what order this publish
+    // named them in — a host reordering its own object list is not a
+    // membership change.
+    bool sameMembers = !group.chunks.empty() && indices.size() == group.slotOf.size();
+    for (size_t i = 0; sameMembers && i < indices.size(); i++) {
+      if (group.slotOf.find(keys[indices[i]]) == group.slotOf.end()) {
+        sameMembers = false;
+      }
+    }
 
     if (sameMembers) {
-      updateBatchGroup(group, indices, transforms, material);
+      updateBatchGroup(group, indices, keys, transforms, material);
     } else {
       rebuildBatchGroup(group, key, indices, keys, transforms, material);
     }
@@ -4069,21 +4111,33 @@ void Renderer::reconcileBatchGroups(
   _batchGroups = chunkCount;
 }
 
-/// Rebuilds one group's chunks from nothing: new InstanceBuffers, sized to
-/// fit `indices`, and every slot written once. Called whenever the group did
-/// not already hold this publish's exact members in this publish's exact
-/// order — a new group, or an old one that gained, lost or reordered a
-/// member.
+/// Rebuilds one group's chunks from nothing: `indices` sorted into spatial
+/// order (sortBatchIndices), new InstanceBuffers sized to fit, and every
+/// slot written once. Called whenever the group did not already hold this
+/// publish's exact set of members — a new group, or an old one that gained,
+/// lost, or swapped one member for another.
 void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
-                                 const std::vector<uint32_t> &indices,
+                                 std::vector<uint32_t> indices,
                                  const int64_t *keys, const float *transforms,
                                  MaterialInstance *material) {
   destroyBatchGroup(group);
   group.material = material;
-  group.memberKeys.resize(indices.size());
+  sortBatchIndices(indices, transforms);
 
+  // Matches applyFlags exactly — every setting a chunk's members would have
+  // been given individually, decided once here because the census already
+  // guarantees every member of a group carries the same flags. Missing any
+  // of these is not a drawing error, only a quieter one: the object is still
+  // there and still shaded, just not quite the way it would have been drawn
+  // alone. screenSpaceContactShadows in particular is off by default in
+  // Filament and on by default in applyFlags, so a chunk that skipped it
+  // would still look right at a glance and only show up as a faint,
+  // widespread shift in the fine contact shadows between close objects —
+  // which is exactly what turned up, and why this list is deliberately
+  // exhaustive rather than "whatever seemed to matter".
   const bool castShadows = (key.flags & kCastsShadows) != 0;
   const bool receiveShadows = (key.flags & kReceivesShadows) != 0;
+  const uint8_t layer = layerBitOf(key.flags);
 
   for (size_t at = 0; at < indices.size(); at += kInstancesPerDraw) {
     const uint32_t members =
@@ -4096,7 +4150,7 @@ void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
     float3 most{std::numeric_limits<float>::lowest()};
     for (uint32_t slot = 0; slot < members; slot++) {
       const uint32_t index = indices[at + slot];
-      group.memberKeys[at + slot] = keys[index];
+      group.slotOf[keys[index]] = uint32_t(at) + slot;
       std::memcpy(&chunk.transforms[slot], transforms + size_t(index) * 16,
                  sizeof(mat4f));
       expandBoxByTransform(chunk.transforms[slot], least, most);
@@ -4115,6 +4169,8 @@ void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
         .instances(members, chunk.buffer)
         .receiveShadows(receiveShadows)
         .castShadows(castShadows)
+        .screenSpaceContactShadows(receiveShadows)
+        .layerMask(0xFF, layer)
         .build(*_engine, chunk.entity);
     _scene->addEntity(chunk.entity);
 
@@ -4123,12 +4179,12 @@ void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
 }
 
 /// Writes into a group's existing chunks without touching their layout:
-/// every member named in `indices` is still exactly the member the chunk at
-/// its position holds, in the same order, so only what actually changed — a
-/// transform, or the material every chunk wears — is written.
+/// every member named in `indices` already holds the slot group.slotOf says
+/// it does, so only what actually changed — a transform, or the material
+/// every chunk wears — is written.
 void Renderer::updateBatchGroup(BatchGroup &group,
                                 const std::vector<uint32_t> &indices,
-                                const float *transforms,
+                                const int64_t *keys, const float *transforms,
                                 MaterialInstance *material) {
   auto &renderables = _engine->getRenderableManager();
 
@@ -4140,23 +4196,30 @@ void Renderer::updateBatchGroup(BatchGroup &group,
     }
   }
 
-  for (size_t at = 0; at < indices.size(); at += kInstancesPerDraw) {
-    BatchChunk &chunk = group.chunks[at / kInstancesPerDraw];
-    bool moved = false;
+  // Which chunks had a member move, so a box is only rebuilt for one that
+  // did — the usual case is one crate turning inside a group of thousands,
+  // and the other chunks' boxes have no reason to be touched.
+  std::vector<bool> dirty(group.chunks.size(), false);
 
-    for (uint32_t slot = 0; slot < chunk.count; slot++) {
-      const uint32_t index = indices[at + slot];
-      mat4f placement;
-      std::memcpy(&placement, transforms + size_t(index) * 16, sizeof(mat4f));
-      if (std::memcmp(&placement, &chunk.transforms[slot], sizeof(mat4f)) == 0) {
-        continue;
-      }
-      chunk.transforms[slot] = placement;
-      chunk.buffer->setLocalTransforms(&placement, 1, slot);
-      moved = true;
+  for (uint32_t index : indices) {
+    const uint32_t slot = group.slotOf[keys[index]];
+    const uint32_t chunkAt = slot / kInstancesPerDraw;
+    const uint32_t offset = slot % kInstancesPerDraw;
+    BatchChunk &chunk = group.chunks[chunkAt];
+
+    mat4f placement;
+    std::memcpy(&placement, transforms + size_t(index) * 16, sizeof(mat4f));
+    if (std::memcmp(&placement, &chunk.transforms[offset], sizeof(mat4f)) == 0) {
+      continue;
     }
+    chunk.transforms[offset] = placement;
+    chunk.buffer->setLocalTransforms(&placement, 1, offset);
+    dirty[chunkAt] = true;
+  }
 
-    if (!moved) continue;
+  for (size_t c = 0; c < group.chunks.size(); c++) {
+    if (!dirty[c]) continue;
+    BatchChunk &chunk = group.chunks[c];
 
     float3 least{std::numeric_limits<float>::max()};
     float3 most{std::numeric_limits<float>::lowest()};
@@ -4187,7 +4250,7 @@ void Renderer::destroyBatchGroup(BatchGroup &group) {
     if (chunk.buffer != nullptr) _engine->destroy(chunk.buffer);
   }
   group.chunks.clear();
-  group.memberKeys.clear();
+  group.slotOf.clear();
   group.material = nullptr;
 }
 

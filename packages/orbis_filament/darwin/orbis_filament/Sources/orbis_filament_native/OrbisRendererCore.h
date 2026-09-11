@@ -235,11 +235,25 @@ struct BatchChunk {
 /// Kept between publishes, keyed by the same BatchKey the census groups
 /// objects by, so that a publish where nothing about a group's *membership*
 /// changed costs a compare-and-write per member rather than a rebuild — see
-/// reconcileBatchGroups. `memberKeys` is what "nothing changed" is judged
-/// against: the exact object keys the group was built from last time, in the
-/// order they arrived. Same keys, same order, is the only case cheap enough
-/// to be worth detecting; anything else — one joined, one left, two swapped
-/// places — rebuilds the group's chunks from nothing.
+/// reconcileBatchGroups. `slotOf` is what "nothing changed" is judged
+/// against: which slot each object key held last time, regardless of what
+/// order this publish names them in — a set comparison, not a positional
+/// one, because the slots themselves are not in publish order (see below)
+/// and a host reordering its own object list should not by itself cost a
+/// rebuild. Any actual change of membership — one joined, one left, one
+/// swapped for another — does rebuild the group's chunks from nothing.
+///
+/// A rebuild sorts members by where they are in the world before chunking
+/// them, the same way OrbisPopulation sorts a population (sortPopulation,
+/// mortonOf) — so `slotOf`'s slots are in that spatial order, not the
+/// order objects arrived in. Skipping this made a chunk whatever objects
+/// happened to be adjacent in the publish: castShadows crates in the
+/// Batching example are every fifth object in a grid, so an unsorted chunk
+/// of them spans nearly the whole grid, and a chunk's bounding box is the
+/// union of its members' — see below — so a box that loose visibly moved
+/// where the shadow pass fit its cascades. Sorted, a chunk is a compact
+/// patch of the world and its box is close to what the same members would
+/// have covered unbatched.
 ///
 /// Everything that is per-renderable in Filament is therefore shared by the
 /// whole group rather than decided per member: the material instance, the
@@ -250,7 +264,10 @@ struct BatchChunk {
 /// for why that is an acceptable trade rather than a silent one.
 struct BatchGroup {
   std::vector<BatchChunk> chunks;
-  std::vector<int64_t> memberKeys;
+
+  /// Which absolute slot (chunk = slot / kInstancesPerDraw, offset = slot %
+  /// kInstancesPerDraw) each member key currently holds.
+  std::unordered_map<int64_t, uint32_t> slotOf;
 
   /// Borrowed — from _materialOrder for a named material, from the colour
   /// pool for the placeholder cube — and never destroyed by this group.
@@ -1069,12 +1086,13 @@ class Renderer {
       const int64_t *keys, const float *transforms, const float *colours,
       uint64_t generation);
   void rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
-                         const std::vector<uint32_t> &indices,
-                         const int64_t *keys, const float *transforms,
-                         MaterialInstance *material);
+                         std::vector<uint32_t> indices, const int64_t *keys,
+                         const float *transforms, MaterialInstance *material);
   void updateBatchGroup(BatchGroup &group, const std::vector<uint32_t> &indices,
-                        const float *transforms, MaterialInstance *material);
+                        const int64_t *keys, const float *transforms,
+                        MaterialInstance *material);
   void destroyBatchGroup(BatchGroup &group);
+  void sortBatchIndices(std::vector<uint32_t> &indices, const float *transforms);
   void sweepUnnamedMeshes();
   void writeLight(const Lit &lit);
   void buildDecalData();
