@@ -153,7 +153,10 @@ if [ "$(cat "$MATC_STAMP" 2>/dev/null || true)" != "$MATC_WANT" ]; then
 fi
 
 BLENDS="opaque transparent fade masked add"
-VARIANTS="lit unlit video"
+# lit_slim is the nine-sampler surface orbis::Renderer chooses instead of lit
+# below Filament's third feature level (see PORTING.md) -- its own five
+# packages, not a variant of lit's, mirroring darwin/setup.sh exactly.
+VARIANTS="lit lit_slim unlit video"
 
 compile() {
   local source="$1" name="$2" blend="${3:-}"
