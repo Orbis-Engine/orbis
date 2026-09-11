@@ -107,15 +107,14 @@ final class _WindowsLoader {
         Pointer<Void> Function(Pointer<Void>, Pointer<Char>)
       >('GetProcAddress');
 
-  static final int Function(Pointer<Void>) close = _kernel32.lookupFunction<
-    Int32 Function(Pointer<Void>),
-    int Function(Pointer<Void>)
-  >('FreeLibrary');
+  static final int Function(Pointer<Void>) close = _kernel32
+      .lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('FreeLibrary');
 
-  static final int Function() lastError = _kernel32.lookupFunction<
-    Uint32 Function(),
-    int Function()
-  >('GetLastError');
+  static final int Function() lastError = _kernel32
+      .lookupFunction<Uint32 Function(), int Function()>('GetLastError');
 }
 
 /// A compiled script, loaded and running.
