@@ -251,7 +251,11 @@ class _OrbisViewState extends State<OrbisView> {
     // protocol behind a Kotlin/JNI plugin instead of Swift's, presenting
     // into a Flutter SurfaceProducer texture rather than a CVPixelBuffer —
     // see packages/orbis_filament/android/.
-    const drawable = {TargetPlatform.macOS, TargetPlatform.iOS, TargetPlatform.android};
+    const drawable = {
+      TargetPlatform.macOS,
+      TargetPlatform.iOS,
+      TargetPlatform.android,
+    };
     if (!drawable.contains(defaultTargetPlatform)) {
       return const _Notice('Orbis renders on macOS, iOS and Android so far.');
     }

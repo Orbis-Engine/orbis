@@ -58,9 +58,42 @@ SDK_DIR="third_party"
 FILAMENT="$SDK_DIR/filament"
 DARWIN_NATIVE="../darwin/orbis_filament/Sources/orbis_filament_native"
 GENERATED="$DARWIN_NATIVE/generated"
-MATC="../darwin/third_party/filament-mac/filament/bin/matc"
 
 fail() { echo "orbis_filament/android/setup.sh: $*" >&2; exit 1; }
+
+# matc is a host tool -- it compiles materials on whatever machine runs this
+# script, not on the target (Android) -- so which one is right depends on
+# the host, not on anything Android-specific. On macOS this is the same
+# binary darwin/setup.sh already fetches for its own build, reused rather
+# than fetched twice. Elsewhere (a Linux CI runner, chiefly, which is the
+# only other host this has been exercised on) there is no darwin checkout to
+# borrow it from, so a Linux Filament release is fetched for its matc alone;
+# everything else in that release (the libraries) is unused here.
+case "$(uname -s)" in
+  Darwin)
+    MATC="../darwin/third_party/filament-mac/filament/bin/matc"
+    [ -x "$MATC" ] || fail "no matc at $MATC (run ../darwin/setup.sh first --" \
+      "it is a host tool, built once for whichever Mac runs this, and every" \
+      "platform's materials are compiled with the same binary)"
+    ;;
+  Linux)
+    MATC_DIR="${ORBIS_FILAMENT_MATC_DIR:-$project_root/.cache/filament-1.76.0/linux}"
+    if [ ! -x "$MATC_DIR/filament/bin/matc" ]; then
+      echo "orbis_filament/android: fetching Filament $FILAMENT_VERSION (linux, for its matc)"
+      mkdir -p "$SDK_DIR/linux-matc"
+      curl -fsSL -o "$SDK_DIR/linux-matc/filament.tgz" \
+        "https://github.com/google/filament/releases/download/$FILAMENT_VERSION/filament-$FILAMENT_VERSION-linux.tgz"
+      tar xzf "$SDK_DIR/linux-matc/filament.tgz" -C "$SDK_DIR/linux-matc"
+      rm -f "$SDK_DIR/linux-matc/filament.tgz"
+      MATC_DIR="$SDK_DIR/linux-matc"
+    fi
+    MATC="$MATC_DIR/filament/bin/matc"
+    [ -x "$MATC" ] || fail "no matc at $MATC even after fetching"
+    ;;
+  *)
+    fail "no matc for host $(uname -s); add a case for it above"
+    ;;
+esac
 
 # 1. The Android release. Symlinked from the local cache if it is there
 #    (true on this dev machine and every worktree beside it); otherwise
@@ -85,10 +118,7 @@ else
   ln -sfn "android-fetched/filament" "$FILAMENT"
 fi
 [ -d "$FILAMENT/lib/arm64-v8a" ] || fail "no arm64-v8a libs at $FILAMENT/lib"
-[ -x "$MATC" ] || fail "no matc at $MATC (run ../darwin/setup.sh first, or " \
-  "point it somewhere matc already is -- it is a host tool, built once for " \
-  "whichever Mac runs this, and every platform's materials are compiled " \
-  "with the same binary)"
+# matc itself was already resolved and checked above, per host.
 
 # 2. The SMAA and LTC tables. Not backend-specific -- precomputed constant
 #    data, the same bytes on every platform -- so they are safe to share
