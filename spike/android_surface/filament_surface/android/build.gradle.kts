@@ -84,14 +84,13 @@ android {
         }
     }
 
-    // Filament's static libs are huge and the linker is the long pole; keeping
-    // debug symbols out of the packaged .so takes it from ~90 MB to ~9 MB with
-    // no effect on what the spike proves.
-    packaging {
-        jniLibs {
-            keepDebugSymbols += "**/liborbis_spike.so"
-        }
-    }
+    // Filament's static libs are huge; AGP strips debug symbols from packaged
+    // .so files by default, and that default is what takes liborbis_spike.so
+    // from ~90 MB to ~9 MB. (This block used to add the library to
+    // packaging.jniLibs.keepDebugSymbols -- which lists libraries to leave
+    // *unstripped* -- so it was shipping the 90 MB copy while its own comment
+    // claimed the opposite. Fixed by deleting it: the default already does
+    // what the spike wants, with nothing to configure.)
 }
 
 kotlin {

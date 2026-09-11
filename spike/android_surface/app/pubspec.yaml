@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  filament_surface:
+    path: ../filament_surface
 
 dev_dependencies:
   flutter_test:

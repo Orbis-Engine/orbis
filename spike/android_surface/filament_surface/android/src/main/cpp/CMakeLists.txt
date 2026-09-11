@@ -80,8 +80,16 @@ target_link_libraries(orbis_spike
 # System.loadLibrary time into a failure at build time. Worth it: a missing
 # Filament archive otherwise links cleanly and then kills the app on launch with
 # a dlopen error that names one symbol and not the library it came from.
-target_link_options(orbis_spike PRIVATE
-    -Wl,--no-undefined
-    -Wl,--gc-sections)
-
-target_compile_options(orbis_spike PRIVATE -ffunction-sections -fdata-sections)
+#
+# Deliberately *not* -ffunction-sections/-fdata-sections plus -Wl,--gc-sections,
+# which an earlier version of this file carried. That pair buys a smaller .so,
+# and a spike proving a pipeline works is never shipped or measured for size --
+# there is no gain here to buy. What it risks is real: dead-code stripping
+# across a --start-group/--end-group set of huge prebuilt archives, linked for
+# Android for the first time in this codebase, is exactly the kind of change
+# that can silently drop a section reached only indirectly (a vtable, a JNI
+# export, bluevk's dlsym'd table) and turn into a crash with no visible
+# connection back to the flag that caused it. Risk for little gain, so it
+# stays off; the real plugin can measure and decide with a size budget that
+# actually matters.
+target_link_options(orbis_spike PRIVATE -Wl,--no-undefined)

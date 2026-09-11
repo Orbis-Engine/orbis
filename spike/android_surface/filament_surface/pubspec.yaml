@@ -10,7 +10,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  plugin_platform_interface: ^2.0.2
+  # No plugin_platform_interface: this is a single-platform (Android) spike,
+  # so the federated-plugin indirection has nothing on the other side of it.
+  # See the class comment in lib/filament_surface.dart.
 
 dev_dependencies:
   flutter_test:
