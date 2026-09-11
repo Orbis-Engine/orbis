@@ -1,0 +1,255 @@
+#pragma once
+
+// The renderer, in plain C++.
+//
+// Everything Orbis draws is decided here: the scene and its reconciliation,
+// the materials, lights, sky and weather, the render graph and its passes,
+// probes, the irradiance field, post-processing, decals, splats, the outline
+// and batching. No Objective-C and no Apple header, so the same class runs
+// behind the Swift plugin on macOS and iOS, behind the C ABI in
+// include/orbis_renderer.h anywhere else, and behind a host with no Flutter
+// at all.
+//
+// It was the Objective-C class in OrbisRenderer.mm, and it is laid out as
+// that class was, so that a change made to the old file can be found in this
+// one: every method is a member function named for the first part of its
+// selector, in OrbisRendererCore.cpp in the same order with the same
+// comments, and every ivar is a member of the same name. The structs and
+// constants from the top of the old file are below, in the same order. What
+// the operating system provides — logging, the clock, files, pictures,
+// video — is asked of OrbisPlatform.h, and where a frame is presented is
+// OrbisSurface's business, as it was before.
+
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <filament-iblprefilter/IBLPrefilterContext.h>
+#include <filament/Camera.h>
+#include <filament/ColorGrading.h>
+#include <filament/Engine.h>
+#include <filament/IndexBuffer.h>
+#include <filament/IndirectLight.h>
+#include <filament/InstanceBuffer.h>
+#include <filament/Material.h>
+#include <filament/MaterialInstance.h>
+#include <filament/RenderTarget.h>
+#include <filament/Renderer.h>
+#include <filament/Scene.h>
+#include <filament/Skybox.h>
+#include <filament/SwapChain.h>
+#include <filament/Texture.h>
+#include <filament/TextureSampler.h>
+#include <filament/VertexBuffer.h>
+#include <filament/View.h>
+#include <gltfio/AssetLoader.h>
+#include <gltfio/FilamentAsset.h>
+#include <gltfio/FilamentInstance.h>
+#include <gltfio/MaterialProvider.h>
+#include <gltfio/ResourceLoader.h>
+#include <gltfio/TextureProvider.h>
+#include <math/mat4.h>
+#include <math/quat.h>
+#include <math/vec2.h>
+#include <math/vec3.h>
+#include <math/vec4.h>
+#include <utils/Entity.h>
+
+#include "OrbisBatching.h"
+#include "OrbisOutline.h"
+#include "OrbisPlatform.h"
+#include "OrbisShadows.h"
+#include "OrbisSplatSet.h"
+#include "OrbisSurface.h"
+#include "orbis_renderer.h"
+// Hook (screen effects): god rays and distortion live in plain C++, beside
+// this file, so the port to the renderer's C++ class carries them unchanged.
+#include "ScreenEffects.h"
+// Motion blur hook: the velocity pass, the tiles and the gather live in plain
+// C++ beside this file; the renderer holds one and tells it what moved.
+#include "OrbisMotionBlur.h"
+
+namespace orbis {
+
+// Filament's names, which the old file had from `using namespace filament`.
+// Named one at a time rather than the whole namespace, because a header that
+// pulls a namespace in pulls it into every file that includes it — and
+// because filament::Renderer is the one name that must stay out: inside
+// orbis, Renderer is this class, and Filament's is always spelled in full.
+using filament::Camera;
+using filament::ColorGrading;
+using filament::Engine;
+using filament::IndexBuffer;
+using filament::IndirectLight;
+using filament::Material;
+using filament::MaterialInstance;
+using filament::Scene;
+using filament::Skybox;
+using filament::SwapChain;
+using filament::Texture;
+using filament::TextureSampler;
+using filament::VertexBuffer;
+using filament::View;
+namespace gltfio = filament::gltfio;
+using filament::math::float2;
+using filament::math::float3;
+using filament::math::float4;
+using filament::math::mat4f;
+using filament::math::quatf;
+
+/// What a scene asked for that could not be given, and why, keyed by what it
+/// is about. An NSDictionary of strings before; a map of them now, and the
+/// Objective-C wrapper turns it back into the dictionary Swift reads.
+using Notes = std::map<std::string, std::string>;
+
+@@PRELUDE@@
+
+/// How many post-processing numbers the renderer will read.
+///
+/// Larger than the description needs, so a host built against a newer version
+/// sending more of them is ignored from here on rather than reading past the
+/// end of the array.
+constexpr size_t kMaxPostParams = 128;
+
+/// What one pass of the last frame cost, in milliseconds, and how many
+/// renderables it submitted.
+struct PassTiming {
+  double milliseconds = 0;
+  int drawn = 0;
+};
+
+class Renderer {
+ public:
+  /// Takes ownership of `surface`, which is where frames are presented, and
+  /// remembers which backend to ask for. Nothing starts until initWithWidth.
+  Renderer(OrbisSurface *surface, OrbisBackend backend);
+  ~Renderer();
+  Renderer(const Renderer &) = delete;
+  Renderer &operator=(const Renderer &) = delete;
+
+  /// Starts Filament and allocates buffers. False if the backend would not
+  /// start or Filament refused, with the reason logged.
+  bool initWithWidth(uint32_t width, uint32_t height);
+
+  // OrbisRenderer.h's interface in C++ types, in the order it declares them.
+  // The documentation there is the documentation of these.
+  void renderAtTime(double time);
+  void applyObjects(const int64_t *keys, const float *transforms,
+                    const float *colours, const int32_t *meshes,
+                    const int32_t *flags, const int32_t *materials,
+                    const int32_t *morphCounts, const float *morphWeights,
+                    const std::vector<std::string> &paths, uint32_t count);
+  void setBatching(bool enabled);
+  uint32_t batchedObjects();
+  uint32_t batchGroups();
+  void applyMaterials(const int64_t *keys, const int32_t *flags,
+                      const float *params, const int32_t *maps,
+                      const std::vector<std::string> &texturePaths,
+                      const int32_t *textureSrgb, const int32_t *videos,
+                      uint32_t count);
+  void setPipeline(const float *params, size_t count);
+  void applyVideos(const int64_t *keys, const int32_t *flags,
+                   const float *params, const std::vector<std::string> &paths,
+                   uint32_t count);
+  void applyLights(const int64_t *keys, const int32_t *kinds,
+                   const int32_t *flags, const float *params, uint32_t count);
+  void applyDecals(const float *params, const int32_t *images,
+                   const std::vector<std::string> &paths, uint32_t count);
+  void setFogEnabled(bool enabled, const float *params);
+  void setPostProcess(const float *params, size_t count);
+  void applyProbes(const int64_t *keys, const float *params, uint32_t count);
+  void applyField(const float *params, const std::string &from);
+  void setEnvironmentRadiance(const std::string &radiance,
+                              const std::string &skybox, const float *params);
+  void setRenderGraph(const float *passes, uint32_t count,
+                      const float *targets, uint32_t targetCount,
+                      const std::vector<std::string> &names);
+  // Hook (screen effects): the host's god-ray and distortion settings.
+  void setGodRays(const float *godRays, size_t count,
+                  const float *distortions, size_t distortionCount);
+  std::vector<PassTiming> passTimings();
+  double gpuMilliseconds();
+  double cpuMilliseconds();
+  bool hasPopulations();
+  void applyPopulations(const int32_t *keys, const int32_t *counts,
+                        const int32_t *meshes, const int32_t *flags,
+                        const int32_t *revisions, const float *ranges,
+                        const float *bounds,
+                        const std::vector<std::string> &paths,
+                        const int32_t *changed, uint32_t changedCount,
+                        const float *transforms, const float *colours,
+                        uint32_t count);
+  bool hasSplats();
+  void applySplats(const int32_t *keys, const int32_t *flags,
+                   const int32_t *revisions, const float *params,
+                   const std::vector<std::string> &paths,
+                   const int32_t *changed, const int32_t *changedCounts,
+                   uint32_t changedCount, const uint8_t *data,
+                   size_t dataLength, uint32_t count);
+  void setSkyEnabled(bool enabled, const float *params);
+  void setPrecipitationEnabled(bool enabled, const float *params);
+  Notes notes();
+  void setSkyColour(const float *colour, float ambient, bool showBody);
+  void setCameraPosition(const float *position, const float *target,
+                         float fieldOfView, bool orthographic,
+                         float viewHeight, double at);
+  void setExposure(float aperture, float shutter, float sensitivity);
+  void setOutlineKeys(const int64_t *keys, uint32_t count,
+                      const float *params);
+  void resizeToWidth(uint32_t width, uint32_t height);
+
+  /// The most recently presented frame with a reference the caller owns, or
+  /// null before the first one. Opaque: on Apple it is a CVPixelBufferRef.
+  void *copyPresentedBuffer();
+
+  /// Tears down Filament. Idempotent; the renderer is inert afterwards.
+  void dispose();
+
+  /// Which backend the engine was built with, once it has been.
+  OrbisBackend backend() const { return _backend; }
+
+  /// Asks for the next frame drawn to be read back into memory as well as
+  /// presented. For a host with nowhere to present to — a test, a server, a
+  /// console tool — this is the picture.
+  void requestCapture();
+
+  /// The last frame read back, as RGBA8 with the top row first. False until
+  /// one has arrived, which is a frame or two after it was asked for.
+  bool capturedFrame(std::vector<uint8_t> &rgba, uint32_t &width,
+                     uint32_t &height);
+
+ private:
+@@PRIVATE@@
+
+  /// Reads the frame being drawn back into memory, if one was asked for.
+  /// Between the passes and endFrame, which is the only place Filament will
+  /// read a swap chain.
+  void readBackIfAsked();
+
+  /// Which backend a host asked for, and which one the engine was built with.
+  OrbisBackend _backendAsked = ORBIS_BACKEND_DEFAULT;
+  OrbisBackend _backend = ORBIS_BACKEND_DEFAULT;
+
+  /// Videos this platform could not open. Replaced on every publish.
+  Notes _videoNotes;
+
+  /// A frame read back for requestCapture, and whether one is wanted, in
+  /// flight, or ready. Written by Filament's callback, read by the host.
+  std::mutex _captureLock;
+  bool _captureWanted = false;
+  bool _captureInFlight = false;
+  bool _captureReady = false;
+  std::vector<uint8_t> _captured;
+  uint32_t _capturedWidth = 0;
+  uint32_t _capturedHeight = 0;
+
+  // ---- What was the ivar block of @implementation OrbisRenderer ----
+@@MEMBERS@@
+};
+
+}  // namespace orbis
