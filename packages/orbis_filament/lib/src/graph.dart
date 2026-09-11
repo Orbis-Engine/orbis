@@ -184,7 +184,30 @@ enum OrbisEffect {
   /// into one offset per pixel. Depth-aware, so it reads depth as well as
   /// colour: from the first target it reads that kept depth, which lets it
   /// take its colour from a pass that ran after the world was drawn.
-  distortion('Distortion');
+  distortion('Distortion'),
+
+  /// What moved while the shutter was open, smeared along the way it moved.
+  ///
+  /// Reads the colour and the depth of one target, like [bounce], and is
+  /// usually built by [OrbisMotionBlur.pass] rather than by hand — the plane
+  /// carries its four dials in the order that class writes them.
+  ///
+  /// Four steps inside the renderer, all of them its own business rather
+  /// than passes in the graph: the objects that moved since the scene was
+  /// last published are drawn again with a material that writes how far each
+  /// pixel travelled; that is added to the camera's own motion, rebuilt from
+  /// depth for every pixel; the largest motion in each tile of the screen is
+  /// found; and each pixel gathers along the largest motion near it, weighted
+  /// by depth so that a moving thing smears over what is behind it and not
+  /// the other way round. The last two are McGuire, Hennessy, Bukowski and
+  /// Osman, "A Reconstruction Filter for Plausible Motion Blur" (2012).
+  ///
+  /// Measured at 1600 by 1200 on a GPU shared with other work, against the
+  /// same graph running a pass that only copies: about **2 ms** more with a
+  /// fan and a plate moving under a still camera, and **4 to 5 ms** more
+  /// while the camera pans and every pixel gathers. A frame in which nothing
+  /// moved skips the three inner passes and copies.
+  motionBlur('Motion blur');
 
   const OrbisEffect(this.label);
 
@@ -486,15 +509,20 @@ class OrbisRenderGraph {
       // it. The renderer skips such a pass rather than sampling a buffer that
       // is not there — which draws a frame with the effect silently absent,
       // and that is indistinguishable from the effect not working.
-      if (pass.effect == OrbisEffect.bounce) {
+      if (pass.effect == OrbisEffect.bounce ||
+          pass.effect == OrbisEffect.motionBlur) {
         for (final read in pass.reads) {
           final target = targets.where((one) => one.name == read).firstOrNull;
           if (target != null && !target.depth) {
             found.add(
               OrbisGraphProblem(
                 pass.name,
-                'bounces light off $read, which keeps no depth — so there is '
-                'no telling what is in front of what',
+                pass.effect == OrbisEffect.bounce
+                    ? 'bounces light off $read, which keeps no depth — so '
+                          'there is no telling what is in front of what'
+                    : 'blurs $read, which keeps no depth — so the camera\'s '
+                          'motion cannot be rebuilt and nothing knows what '
+                          'is in front of what',
               ),
             );
           }

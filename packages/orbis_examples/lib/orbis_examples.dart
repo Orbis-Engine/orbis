@@ -45,6 +45,7 @@ export 'src/examples/many.dart' show ManyExample;
 export 'src/examples/overdraw.dart' show OverdrawExample;
 export 'src/examples/materials.dart' show MaterialsExample;
 export 'src/examples/meshes.dart' show MeshesExample;
+export 'src/examples/motion_blur.dart' show MotionBlurExample;
 export 'src/examples/outline.dart' show OutlineExample;
 export 'src/examples/panel_shadow.dart' show PanelShadowExample;
 export 'src/examples/pipeline.dart' show PipelineExample;
@@ -79,6 +80,7 @@ import 'src/examples/many.dart';
 import 'src/examples/overdraw.dart';
 import 'src/examples/materials.dart';
 import 'src/examples/meshes.dart';
+import 'src/examples/motion_blur.dart';
 import 'src/examples/outline.dart';
 import 'src/examples/pipeline.dart';
 import 'src/examples/probes.dart';
@@ -108,6 +110,7 @@ List<Example> engineExamples() => [
   ShadowsExample(),
   ProbesExample(),
   BounceExample(),
+  MotionBlurExample(),
   FieldExample(),
   DayAndNightExample(),
   GodRaysExample(),

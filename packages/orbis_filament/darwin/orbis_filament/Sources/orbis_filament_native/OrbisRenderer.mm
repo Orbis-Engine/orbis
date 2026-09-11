@@ -74,6 +74,9 @@
 #include "ScreenEffects.h"
 #include "generated/irradiance_material.h"
 #include "generated/copy_material.h"
+// Motion blur hook: it lives in plain C++ beside this file, materials and all.
+#include "OrbisMotionBlur.h"
+#include <memory>
 // SMAA's precomputed tables, fetched by setup.sh from the reference
 // implementation. MIT, Jorge Jimenez et al. — see LICENSES/SMAA.txt.
 #include "generated/AreaTex.h"
@@ -656,6 +659,10 @@ constexpr int kEffectSmaaWeights = 2;
 constexpr int kEffectSmaaBlend = 3;
 constexpr int kEffectBounce = 4;
 constexpr int kEffectCopy = 5;
+// Motion blur hook. Appended rather than inserted, so every effect before it
+// keeps its number: the effect crosses as its index, and an index that drifts
+// runs a different shader rather than failing. motion_blur_test checks it.
+constexpr int kEffectMotionBlur = 8;  // god rays are 6 and distortion 7, in ScreenEffects.h
 
 /// Where a material's texture says it comes from a pass rather than a file.
 static const char *const kTargetScheme = "orbis:target/";
@@ -1090,6 +1097,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// Hook (screen effects): what the host said about god rays and
   /// distortion, turned into material parameters when their pass runs.
   orbis::ScreenEffects _screenEffects;
+  /// Motion blur hook: what motion blur remembers between frames and the
+  /// passes it runs. Made the first time a graph asks for the effect, so a
+  /// renderer that never blurs allocates none of it.
+  std::unique_ptr<orbis::MotionBlur> _motionBlur;
 
   /// SMAA's two precomputed tables, uploaded once.
   /// The world-space irradiance field: two atlases, written in turn.
@@ -3731,6 +3742,23 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
     pass.effect = static_cast<int>(row[12]);
   }
 
+  // Motion blur hook: whether this graph blurs, and whether any of its blurs
+  // follow objects' own motion. What motion blur remembers and allocates all
+  // waits on this, which is what keeps it free for a graph that never asks.
+  {
+    bool blurs = false;
+    bool objects = false;
+    for (const GraphPass &pass : _passes) {
+      if (pass.kind != kPassEffect || pass.effect != kEffectMotionBlur) continue;
+      blurs = true;
+      objects = objects || pass.plane[2] >= 0.0f;
+    }
+    if (blurs && !_motionBlur) {
+      _motionBlur = std::make_unique<orbis::MotionBlur>(*_engine);
+    }
+    if (_motionBlur) _motionBlur->setWanted(blurs, objects);
+  }
+
   // Built here rather than only at the top of the frame, because materials
   // are bound straight after this and a material sampling a target that does
   // not exist yet gets the blank white texture instead. That is not a
@@ -4196,6 +4224,12 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       package = ksmaa_blendMaterial;
       length = ksmaa_blendMaterial_len;
       break;
+    case kEffectMotionBlur:
+      // Motion blur hook: the gather is this pass's own material, and its
+      // bytes live with the rest of motion blur.
+      package = orbis::MotionBlur::gatherPackage();
+      length = orbis::MotionBlur::gatherPackageSize();
+      break;
     default:
       // Hook (screen effects): god rays and distortion keep their compiled
       // materials in ScreenEffects.cpp.
@@ -4430,6 +4464,16 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       }
       break;
     }
+    case kEffectMotionBlur:
+      // Motion blur hook: the velocity, resolve and tile passes run here,
+      // and the gather — this pass's own material — is dressed for the draw
+      // below, which is what keeps the frame's tone mapping on it.
+      if (_motionBlur) {
+        _motionBlur->prepare(*_renderer, _view->getCamera(), from->colour,
+                             from->depth, from->builtWidth, from->builtHeight,
+                             pass.plane, *pass.effectMaterial);
+      }
+      break;
     default:
       break;
   }
@@ -4935,6 +4979,10 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
 
   const uint64_t generation = ++_objectGeneration;
   auto &transformManager = _engine->getTransformManager();
+
+  // Motion blur hook: a publish begins. Nothing is remembered unless a graph
+  // blurs objects by their own motion.
+  if (_motionBlur) _motionBlur->beginPublish();
   NSMutableDictionary<NSString *, NSString *> *notes =
       [NSMutableDictionary dictionary];
 
@@ -5018,6 +5066,18 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
           drawn.instance != nullptr ? drawn.instance->getRoot() : drawn.entity;
       transformManager.setTransform(transformManager.getInstance(root),
                                     placement);
+    }
+
+    // Motion blur hook: where this object stands in this publish and what it
+    // draws with, so its motion can be measured against the last publish.
+    if (_motionBlur && _motionBlur->wanted()) {
+      if (drawn.instance != nullptr) {
+        _motionBlur->place(keys[i], placement, drawn.instance->getRoot(),
+                           drawn.instance->getEntities(),
+                           drawn.instance->getEntityCount());
+      } else {
+        _motionBlur->place(keys[i], placement, drawn.entity, &drawn.entity, 1);
+      }
     }
 
     // A mesh brings its own materials out of the file, so the object's colour
@@ -6498,6 +6558,11 @@ static std::vector<uint8_t> OrbisReadDecalPicture(NSString *path,
   _aimedNow = aimed;
   [_aimLock unlock];
 
+  // Motion blur hook: the moment this publish describes, on the host's own
+  // clock. It commits the objects the publish placed, and is what turns
+  // their two positions into a speed.
+  if (_motionBlur) _motionBlur->stamp(at);
+
   // What the application itself is producing, before anything here touches
   // it. If its own motion is uneven then no amount of sampling will be even,
   // and the fault is on the other side of the message.
@@ -6883,6 +6948,9 @@ static std::vector<uint8_t> OrbisReadDecalPicture(NSString *path,
   }
 
   [self placeCamera];
+  // Motion blur hook: the camera this frame is drawn from, remembered
+  // against the last frame's.
+  if (_motionBlur) _motionBlur->frameBegan(*_camera);
   [self rangePopulations];
   // After the camera is placed, because the order depends on which way it
   // faces. The sort itself is on the sorter's own thread; this only asks for
@@ -7106,6 +7174,11 @@ static std::vector<uint8_t> OrbisReadDecalPicture(NSString *path,
   // so it goes before either of them.
   _outline.reset();
   _outlineKeys.clear();
+  // Motion blur hook: its passes, targets and materials, before the engine.
+  if (_motionBlur) {
+    _motionBlur->release();
+    _motionBlur.reset();
+  }
 
   for (auto &pair : _meshes) {
     if (pair.second.asset) _assetLoader->destroyAsset(pair.second.asset);

@@ -85,6 +85,10 @@
 ///   ORBIS_LENS             its lens warp, negative for pincushion
 ///   ORBIS_CHROMATIC        its chromatic split
 ///   ORBIS_WAVE             its wave's strength
+///   ORBIS_MOTION=0         turn the Motion blur example's blur off
+///   ORBIS_MOTION_OBJECTS=0 blur by the camera's motion only
+///   ORBIS_PAN=1            pan the Motion blur example's camera
+///   ORBIS_SHUTTER          its shutter, in seconds
 library;
 
 import 'dart:io';
@@ -537,6 +541,15 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       if (Platform.environment['ORBIS_SPLAT_PILLAR'] == '0') {
         example.pillar = false;
       }
+    }
+
+    if (example is MotionBlurExample) {
+      if (Platform.environment['ORBIS_MOTION'] == '0') example.on = false;
+      if (Platform.environment['ORBIS_MOTION_OBJECTS'] == '0') {
+        example.objects = false;
+      }
+      if (Platform.environment['ORBIS_PAN'] == '1') example.panning = true;
+      example.shutter = _number('ORBIS_SHUTTER') ?? example.shutter;
     }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;
