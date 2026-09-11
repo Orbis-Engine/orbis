@@ -325,6 +325,89 @@ A Flutter web implementation of the `orbis_filament` plugin:
    `-O3`, `wasm-opt`, and Closure Compiler on `orbis_renderer.js` (currently
    plain `-O2`, no `--closure`) are all unexplored.
 
+## Stage two, as built
+
+The five items above, answered. The plugin is `lib/src/web/` in this
+package; the gallery runs it at `examples/gallery` with
+`tool/capture_web.sh` for a screenshot.
+
+1. **`dart:ffi` splits — done where they actually blocked, and narrower
+   than expected.** `orbis_filament/lib` turned out to import neither
+   `dart:ffi` nor `dart:io` and to depend on no other Orbis package, and
+   `orbis_core`/`orbis_native` are not reachable from the gallery at all
+   (`orbis_examples` depends on `orbis_filament`, `orbis_camera`,
+   `orbis_weather`, `orbis_noise`; the gallery's `pubspec.lock` has no
+   `orbis_core` entry). So those two packages were left alone: splitting
+   them is still worth doing for their own sake, but nothing on the way to
+   a drawing web app needs it. What did block, and is done: `Int64List`
+   (`lib/src/key_list.dart`), the seven examples that read a file
+   (`orbis_examples/lib/src/platform/io.dart`) and the gallery's
+   environment reading (`examples/gallery/lib/orbis_env.dart`).
+2. **`HtmlElementView` over a real `<canvas>` — done**, with both gotchas
+   the spike predicted: `OrbisWebViewport._whenLaidOut` polls with
+   `requestAnimationFrame` until the element is attached and measured
+   before creating anything, and `_fitBackingStore` matches the canvas's
+   `width`/`height` to `clientWidth/Height * devicePixelRatio` every frame.
+   The viewport is found through the view's creation params, because a
+   platform view's own id is minted by Flutter and never reaches a plugin.
+3. **The scene crossing by `dart:js_interop` — done.**
+   `orbis_scene_web.dart` makes all twenty-two scene calls in the order
+   `Viewport.write(scene:)` and `OrbisScene.applyTo` use; `OrbisHeap`
+   copies each array into the module's heap, int64 keys as little-endian
+   low/high pairs. No web-specific entry point was added to the core: the
+   only non-`orbis_renderer.h` call is stage one's own
+   `orbis_web_create_on_canvas`.
+4. **Loading from Flutter web's build output — done, and it is just
+   `web/`.** `orbis_renderer.js` and `.wasm` copied beside `index.html` are
+   copied verbatim into `build/web`, with a plain synchronous `<script>`
+   tag so the global exists before any Dart runs. Both are gitignored,
+   like every other build artefact here. No bundler interaction, no MIME
+   or CORS trouble from `python3 -m http.server`. **Untested:** more than
+   one renderer on a page. The plugin loads one module instance per
+   canvas, which is what `Module.canvas` requires, but two at once has
+   never been run.
+5. **Trimming — partly, and not by tuning.** 7.79 MiB (8,164,872 bytes)
+   against stage one's 14.7, purely because these materials carry only the
+   `opengl` backend rather than `metal` and `opengl` both. `-O3`,
+   `wasm-opt` and Closure are still unexplored.
+
+### The one thing that does not look right
+
+Lit surfaces draw black. Geometry, camera, sky, and the whole message
+arrive correctly — every one of the twenty-two calls returns `ORBIS_OK`,
+and the values were read back at the boundary and checked against the
+scene that produced them (the floor's colour arrives as its exact
+linearised `0xFF3B424C`, its flags as receive|visible, the sun as 82000 lux
+in the right direction, exposure as 16 / 1/125 / 100). Skipping the render
+graph, pipeline, post, environment, field or sky changes nothing about it,
+and raising a light to 200000 lumens changes nothing either.
+
+So this is not the Dart side mis-marshalling anything, and it is not this
+plugin at all: it reproduces in stage one's own JavaScript host, which has
+no Flutter and no Dart anywhere in it.
+
+**Direct lights contribute nothing on this build. Only ambient does.**
+Measured by serving `host/main.js` unchanged but for its ambient, against
+this same `orbis_renderer.wasm`:
+
+| `host/main.js` ambient | centre pixel |
+|---|---|
+| 24000, as committed | (210, 213, 171) |
+| 0 | (0, 0, 0) |
+
+That scene's sun is 100000 lux and did not move between the two runs, so if
+analytic lighting reached a surface at all the second row could not be
+black. The frame this directory's README calls proof of stage one is lit
+entirely by its ambient — which is why it looked right and the gallery does
+not: 24000 against bright albedos, where the Surface example has 9000
+against a 0.05 floor, about a thirtieth of correct exposure.
+
+The gap is therefore in the renderer or in the slim surface at feature
+level 1, upstream of everything here; nothing in this directory or in
+`lib/src/web/` can close it. What it wants next is the same scene on
+Android's OpenGL ES — the other feature-level-1 host, and the one place the
+same question can be asked without a browser in the way.
+
 ## What this proves, in one line
 
 The same `OrbisRendererCore.cpp` that draws on macOS and the iOS simulator
