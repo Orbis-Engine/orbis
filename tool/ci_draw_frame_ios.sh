@@ -81,7 +81,16 @@ fi
 xcrun simctl install "$udid" "$APP" || { echo "the app would not install"; exit 1; }
 
 : "${ORBIS_DUMP_FRAME:=30}"
-export SIMCTL_CHILD_ORBIS_DUMP_FRAME="$ORBIS_DUMP_FRAME"
+export ORBIS_DUMP_FRAME
+# Every ORBIS_ switch, not only the frame to dump. simctl hands an app only the
+# variables prefixed SIMCTL_CHILD_, so a switch left unprefixed does nothing at
+# all — ORBIS_EXAMPLE=Decals would quietly draw the first example instead, which
+# is what made the simulator look as if it could only draw a placeholder.
+while IFS='=' read -r name value; do
+  case "$name" in
+    ORBIS_*) export "SIMCTL_CHILD_$name=$value" ;;
+  esac
+done < <(env)
 
 log=$(mktemp -t orbis_ci_frame_ios)
 # --console-pty rather than --console: without a pty the app's stdout is fully
