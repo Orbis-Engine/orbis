@@ -37,13 +37,31 @@ the result is a screenshot, not a claim.
 `tool/capture.sh` serves `build/web` on localhost and takes three shots with
 headless Chrome (`--headless=new --use-angle=swiftshader
 --enable-unsafe-swiftshader`, SwiftShader's software WebGL2 so the result
-depends on nobody's GPU):
+depends on nobody's GPU). The three below were taken with its exact
+commands (same server, same flags, same three virtual-time/query
+combinations) run one at a time by hand rather than by the unattended
+script: this machine was, at the time, under heavy memory pressure from an
+unrelated Android emulator and iOS build running concurrently in sibling
+worktrees, which made a multi-minute per-shot wait indistinguishable from a
+genuine hang until checked (see "Gotchas"); running one shot at a time made
+that distinction checkable. Under ordinary load `tool/capture.sh` runs these
+same three shots unattended.
 
 | File | Virtual time | Query string | Shows |
 |---|---|---|---|
-| `captures/1_default_3s.png` | 3 s | — | Default state (14°, 0.80 rad/s): the cube rendered and lit, the "Flutter widget, over the Filament canvas" label composited top-left, the stats panel top-right. |
-| `captures/2_default_6s.png` | 6 s | — | Same parameters, twice the virtual time: the cube has visibly rotated further round than in the first shot — proof the `requestAnimationFrame` loop is actually animating, not that the first shot is a static frame. |
-| `captures/3_dart_hue200.png` | 5 s | `?hue=200&spin=2.5` | `main.dart`'s `initState` reads the query string and sends it the moment the canvas mounts (`_drivenFromQuery`), with no slider touched. The cube is now the cyan-blue of hue 200 rather than the default orange — the Dart → JavaScript crossing changed what is actually on screen. |
+| `captures/1_default_3s.png` | 3 s | — | Default state (sliders at 14°, 0.80 rad/s): the lit cube, the "Flutter widget, over the Filament canvas" label composited top-left. |
+| `captures/2_default_6s.png` | 6 s | — | Same parameters, twice the virtual time: the cube is at a visibly different rotation than in the first shot (compare the two — the silhouette and which edge sits nearest the camera both change) — the `requestAnimationFrame` loop is actually animating, not redrawing a static frame. |
+| `captures/3_dart_hue200.png` | 5 s | `?hue=200&spin=2.5` | `main.dart`'s `initState` reads the query string and sends it the moment the canvas mounts (`_drivenFromQuery`), with no slider touched. The cube is now the cyan-blue of hue 200 rather than the default orange, the sliders themselves sit at 200°/2.50 rad/s, and "Driven from Dart" reads "1 sent" — the Dart → JavaScript crossing changed what is actually on screen, not just the widgets around it. |
+
+All three shots' stats panels (top-right) read "waiting for Filament…"
+rather than the numbers `FilamentStats` carries — a capture-method quirk,
+not a renderer one: `_poll`'s 250 ms `Timer.periodic` never visibly ticks
+within a single `--virtual-time-budget` screenshot, in any of the three
+shots, regardless of budget (3 s, 6 s and 5 s all show it). The canvas
+itself is proof enough that frames are drawn — the rotation between shots 1
+and 2, and the colour in shot 3 — so this was not chased further; the
+authoritative numbers are each shot's own console line instead (below),
+which does update correctly.
 
 Console log for the first shot (`captures/1_default_3s.log`) has the
 JavaScript renderer's own report of what it mounted on:
@@ -55,6 +73,10 @@ orbisWeb: mounted orbis-filament-0: {"frames":0,"messages":0,"backend":"OPENGL",
 "glRenderer":"ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0)
 (0x0000C0DE)), SwiftShader driver)","width":0,"height":0}
 ```
+
+(All three logs report the same backend/feature-level/GL numbers — mounting
+is independent of which query string or virtual-time budget the shot uses,
+as it should be.)
 
 ## Route to the real renderer
 
@@ -261,6 +283,24 @@ Two changes, independent of each other and of which route wins:
   `engine.getBackend().value`, not `engine.getBackend()`. Easy to miss,
   since `filament.d.ts` types the return as the enum itself, and a raw
   comparison against it silently never matches rather than throwing.
+- **A Dart `Timer.periodic` doesn't reliably tick inside one
+  `--virtual-time-budget` screenshot.** The stats panel's 250 ms poll never
+  visibly fired in any of the three captures, at three different budgets
+  (3 s, 5 s, 6 s) — the panel painted its "waiting for Filament…" state in
+  all three, even though the canvas underneath demonstrably kept animating
+  and responding to Dart. Not chased to a root cause; worth knowing before
+  trusting an on-screen readout in a single virtual-time capture rather than
+  the console log, which did update correctly every time.
+- **This machine's own load made "hung" and "slow" hard to tell apart.**
+  Headless Chrome's `--screenshot` not exiting (above) produces the same
+  symptom — a Chrome process that outlives its work — as a shot merely
+  taking a long time under CPU/memory contention from unrelated concurrent
+  builds (an Android emulator, an iOS Xcode build, both in sibling
+  worktrees, pushed this machine into heavy swapping while this spike was
+  captured). Distinguishing them needed checking the process's actual CPU
+  state (`ps -o state,pcpu`), not just how long it had been running; a
+  ceiling that only counts wall-clock time risks killing a shot that was
+  about to finish.
 
 ## What's still unknown
 
