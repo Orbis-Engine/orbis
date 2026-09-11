@@ -120,6 +120,17 @@
   gallery now has an iOS simulator runner and CI builds and runs it, with a
   known feature-level refusal reported loudly rather than passed off as a pass.
 
+- **A slim lit surface for devices below the third feature level.** Chosen
+  automatically when the device cannot manage the standard surface — the iOS
+  simulator, iPhones before the A13, OpenGL ES 3.0, WebGL 2 — where the
+  renderer used to abort on its first lit object. It binds nine samplers
+  instead of twelve: every map, ground blending and textured decals are kept
+  (the decal rows now share the light data texture), and rectangular
+  area-light shadows and the irradiance field are given up, each reported
+  through the scene notes when a scene asks for it. The standard surface is
+  unchanged and still chosen wherever it was. On the iOS simulator this is the
+  difference between no frame at all and a frame drawn.
+
 - `OrbisScene.copyWith` keeps `probes` and `field`, which it used to drop
   silently.
 
