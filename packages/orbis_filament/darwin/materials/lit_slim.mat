@@ -1,0 +1,438 @@
+// The slim surface: what the standard surface's feature level 3 becomes
+// when the device cannot reach it.
+//
+// The standard surface binds twelve samplers, and Filament allows nine
+// below feature level 3 however capable the hardware is. This is not a
+// lesser copy that dropped its samplers at random — it packs what it can
+// and drops the rest, keeping every full-resolution picture map, ground
+// blending and textured decals, and letting go of two things whose absence
+// is not a hard-and-fast product feature, just less right than perfect:
+// rectangular area lights lose their shadow, and the irradiance field does
+// not light the scene at all. orbis::Renderer chooses this material instead
+// of the standard one, once, from what the engine answers for its feature
+// level — see startWithWidth and surfaceAt in OrbisRendererCore.cpp.
+//
+// Where the twelve samplers went:
+//   base colour, normal, metallic/roughness, occlusion, emissive  -- kept, 5
+//   ground blend base colour, ground blend mask                   -- kept, 2
+//   the LTC pair and the rectangles' own data (already one texture,
+//     "lightData" on the standard surface)                        -- kept, 1
+//   decal images (the picture array)                               -- kept, 1
+//   decal data (the boxes' transforms and settings)       -- packed into
+//     lightData's own tail rows rather than a sampler of its own, because
+//     both are read with texelFetch and samplers are the scarce thing here,
+//     not texels
+//   the area light shadow map                              -- dropped: an
+//     unshadowed rectangle still lights a surface, which is most of what
+//     it was for
+//   the irradiance field atlas                              -- dropped: a
+//     baked, temporally accumulated render target rather than authored
+//     data, and folding a render target into a shared sampler with three
+//     other tenants was not a change to make with the same confidence as
+//     the other two
+// Nine samplers, exactly the ceiling, with textured decals and ground
+// blending both still standing — the packing bought back what a plainer cut
+// would have dropped along with the two above.
+//
+// A scene that asks for either dropped feature is not left to wonder why:
+// Renderer::notes() says so under "surface" and, only when the scene
+// actually asks, "field"; applyLights says so under "areaShadows" the same
+// way it already does when a second rectangle asks to cast on the standard
+// surface.
+material {
+    name : orbisLitSlim,
+    shadingModel : lit,
+    // The first level asks Filament for nothing past what every backend
+    // this engine reaches already has, which is the whole point of this
+    // surface: it is chosen exactly when the device cannot manage the
+    // third, and there is no reason to ask for the second either. See
+    // lit.mat for what asking for more than nine samplers below the third
+    // does — matc refuses the build outright, which is why this is a
+    // second material rather than a lower number on that file's line.
+    featureLevel : 1,
+    blending : opaque,
+    // Only the rectangles arrive this way now — the field, the other half
+    // of postLightingBlending's reason for being on the standard surface,
+    // does not exist here. Kept anyway: a rectangle still has to add to
+    // Filament's own lighting rather than replace it, exactly as before.
+    postLightingBlending : add,
+    doubleSided : true,
+
+    // Identical to the standard surface — see lit.mat for why each of these
+    // is set the way it is. None of them touch a sampler, so none of them
+    // are why this material exists.
+    specularAntiAliasing : true,
+    specularAntiAliasingVariance : 0.15,
+    specularAntiAliasingThreshold : 0.2,
+    multiBounceAmbientOcclusion : true,
+    specularAmbientOcclusion : simple,
+
+    requires : [ uv0 ],
+    parameters : [
+        { type : float4,    name : baseColor },
+        { type : float,     name : metallic },
+        { type : float,     name : roughness },
+        { type : float,     name : reflectance },
+        { type : float3,    name : emissive },
+        { type : float,     name : emissiveIntensity },
+        { type : float,     name : ambientOcclusion },
+        { type : float,     name : normalScale },
+        { type : float4,    name : uvTransform },
+
+        { type : float,     name : clearCoat },
+        { type : float,     name : clearCoatRoughness },
+        { type : float,     name : anisotropy },
+        { type : float3,    name : sheenColor },
+        { type : float,     name : sheenRoughness },
+        { type : float4,    name : wind },
+
+        { type : sampler2d, name : baseColorMap },
+        { type : sampler2d, name : normalMap },
+        { type : sampler2d, name : metallicRoughnessMap },
+        { type : sampler2d, name : occlusionMap },
+        { type : sampler2d, name : emissiveMap },
+
+        { type : bool,      name : hasBaseColorMap },
+        { type : bool,      name : hasNormalMap },
+        { type : bool,      name : hasMetallicRoughnessMap },
+        { type : bool,      name : hasOcclusionMap },
+        { type : bool,      name : hasEmissiveMap },
+
+        // Ground blending, kept whole — see lit.mat. It costs two samplers
+        // this surface has room for once decalData folds into lightData.
+        { type : sampler2d, name : blendBaseColorMap },
+        { type : sampler2d, name : blendMaskMap },
+        { type : bool,      name : hasBlendBaseColorMap },
+        { type : bool,      name : hasBlendMaskMap },
+
+        { type : int,       name : blendMode },
+        { type : float,     name : blendAmount },
+        { type : float,     name : blendSharpness },
+        { type : float4,    name : blendUvTransform },
+
+        // Rectangular area lights, unshadowed. Same layout as the standard
+        // surface's lightData — the two fitted tables, then the rectangles'
+        // own rows including the shadow settings and matrix nothing here
+        // reads — with the slim surface's own decal rows appended after
+        // them; see kSlimDecalRow in OrbisRendererCore.h and applyDecals in
+        // this file's fragment block.
+        { type : sampler2d, name : lightData, precision : high },
+
+        // Projected decals, in full: the picture array survives, and the
+        // boxes' transforms and settings live in lightData's tail rather
+        // than a sampler of their own. See applyDecals below.
+        { type : sampler2dArray, name : decalImages },
+        { type : int,            name : decalLayer }
+    ],
+}
+
+vertex {
+    // Wind, identical to the standard surface — see lit.mat for the reasons
+    // behind the three frequency bands. No sampler is involved, so nothing
+    // here changes.
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        float strength = materialParams.wind.w;
+        if (strength <= 0.0) return;
+
+        vec2 direction = materialParams.wind.xy;
+        float speed = materialParams.wind.z;
+        if (speed <= 0.0) return;
+
+        mat4 model = getWorldFromModelMatrix();
+        vec3 anchor = vec3(model[3][0], model[3][1], model[3][2]);
+        float phase = anchor.x * 0.73 + anchor.z * 1.31;
+
+        float height = max(material.worldPosition.y - anchor.y, 0.0);
+
+        float lever = height * height * strength;
+
+        float t = getUserTime().x * speed;
+
+        float lean = sin(t * 0.55 + phase) * 0.60;
+        float recoil = sin(t * 1.30 + phase * 1.7) * 0.25;
+        float chatter = sin(t * 3.10 + phase * 2.9
+                            + material.worldPosition.x * 1.7) * 0.10;
+
+        float flutter = sin(t * 6.7
+                            + material.worldPosition.x * 3.1
+                            + material.worldPosition.z * 2.7) * 0.04 * strength;
+
+        float bend = lever * (lean + recoil + chatter) * 0.05 * speed;
+
+        material.worldPosition.xz += direction * (bend + flutter * height);
+        material.worldPosition.y -= abs(bend) * 0.25;
+    }
+}
+
+fragment {
+    // ---- Rectangular area lights, unshadowed ----
+    //
+    // The linearly transformed cosines maths is identical to the standard
+    // surface's — see lit.mat for the derivation and the citation. What is
+    // missing is the shadow test: rectangleShadow and the depth map it read
+    // do not exist here, so a casting rectangle lights this surface exactly
+    // as an uncast one would. That is the one visible difference a scene
+    // with area lights sees on this surface, and applyLights says so under
+    // "areaShadows" when a light actually asks to cast.
+    //
+    // lightData is taller here than on the standard surface: the two fitted
+    // tiles and the rectangles' rows are the same kDataRows would describe
+    // there, but a third region follows them — the decal rows kDecalTexel
+    // reads below. kDataRows still has to name the *whole* texture's height,
+    // because that is what normalises the fitted tiles' own v coordinate.
+    #define kLtcRows 64.0
+    #define kDataRows 112.0
+
+    vec4 ltcTable(vec2 uv, float tile) {
+        vec2 t = uv * (63.0 / 64.0) + 0.5 / 64.0;
+        return textureLod(materialParams_lightData,
+                          vec2((t.x + tile) * 0.5,
+                               t.y * (kLtcRows / kDataRows)), 0.0);
+    }
+
+    vec3 ltcEdge(vec3 a, vec3 b) {
+        float x = dot(a, b);
+        float y = abs(x);
+        float p = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
+        float q = 3.4175940 + (4.1616724 + y) * y;
+        float v = p / q;
+        float thetaSinTheta = x > 0.0
+            ? v
+            : 0.5 * inversesqrt(max(1.0 - x * x, 1e-7)) - v;
+        return cross(a, b) * thetaSinTheta;
+    }
+
+    float ltcIntegrate(vec3 n, vec3 v, vec3 p, mat3 invM,
+                       vec3 c0, vec3 c1, vec3 c2, vec3 c3) {
+        vec3 t1 = normalize(v - n * dot(v, n));
+        vec3 t2 = cross(n, t1);
+        mat3 toCosine = invM * transpose(mat3(t1, t2, n));
+
+        vec3 l0 = normalize(toCosine * (c0 - p));
+        vec3 l1 = normalize(toCosine * (c1 - p));
+        vec3 l2 = normalize(toCosine * (c2 - p));
+        vec3 l3 = normalize(toCosine * (c3 - p));
+
+        vec3 sum = ltcEdge(l0, l1) + ltcEdge(l1, l2)
+                 + ltcEdge(l2, l3) + ltcEdge(l3, l0);
+
+        float len = length(sum);
+        if (len < 1e-6) return 0.0;
+
+        vec3 lightNormal = cross(c1 - c0, c3 - c0);
+        float z = sum.z / len;
+        if (dot(c0 - p, lightNormal) < 0.0) return 0.0;
+
+        return len * ltcTable(vec2(z * 0.5 + 0.5, len), 1.0).w;
+    }
+
+    vec3 areaLighting(const MaterialInputs material,
+                      float metallic, float roughness) {
+        int count = int(texelFetch(materialParams_lightData, ivec2(0, int(kLtcRows)), 0).w);
+        if (count <= 0) return vec3(0.0);
+
+        vec3 p = getUserWorldPosition();
+        vec3 n = getWorldNormalVector();
+        vec3 v = getWorldViewVector();
+
+        float nDotV = clamp(dot(n, v), 0.0, 1.0);
+        vec2 lut = vec2(roughness, sqrt(1.0 - nDotV));
+        vec4 t1 = ltcTable(lut, 0.0);
+        vec4 t2 = ltcTable(lut, 1.0);
+
+        mat3 invM = mat3(vec3(t1.x, 0.0, t1.y),
+                         vec3(0.0, 1.0, 0.0),
+                         vec3(t1.z, 0.0, t1.w));
+
+        vec3 diffuseColour = material.baseColor.rgb * (1.0 - metallic);
+        vec3 f0 = mix(vec3(0.04), material.baseColor.rgb, metallic);
+        vec3 fresnel = f0 * t2.x + (1.0 - f0) * t2.y;
+
+        vec3 total = vec3(0.0);
+        for (int i = 0; i < count; i++) {
+            vec4 a0 = texelFetch(materialParams_lightData, ivec2(0, int(kLtcRows) + i), 0);
+            vec4 a1 = texelFetch(materialParams_lightData, ivec2(1, int(kLtcRows) + i), 0);
+            vec4 a2 = texelFetch(materialParams_lightData, ivec2(2, int(kLtcRows) + i), 0);
+            vec4 a3 = texelFetch(materialParams_lightData, ivec2(3, int(kLtcRows) + i), 0);
+
+            vec3 centre = a0.xyz;
+            vec3 radiance = a1.rgb;
+            vec3 right = a2.xyz * (a2.w * 0.5);
+            vec3 up = a3.xyz * (a3.w * 0.5);
+
+            vec3 c0 = centre - right - up;
+            vec3 c1 = centre + right - up;
+            vec3 c2 = centre + right + up;
+            vec3 c3 = centre - right + up;
+
+            vec3 toCentre = centre - p;
+            float factor = dot(toCentre, toCentre) * a1.w * a1.w;
+            float window = clamp(1.0 - factor * factor, 0.0, 1.0);
+            window *= window;
+            if (window <= 0.0) continue;
+
+            float specular = ltcIntegrate(n, v, p, invM, c0, c1, c2, c3);
+            float diffuse = ltcIntegrate(n, v, p, mat3(1.0), c0, c1, c2, c3);
+
+            // No shadow test: columns 4 to 8 of this row hold the casting
+            // flag and the light-space matrix on the standard surface, and
+            // are simply never read here. An uncast rectangle there looks
+            // exactly like every rectangle looks on this one.
+            total += radiance * window
+                   * (fresnel * specular + diffuseColour * diffuse);
+        }
+
+        return total * getExposure();
+    }
+
+    // ---- Projected decals ----
+    //
+    // Identical to the standard surface except where the data comes from:
+    // decalTexel reads lightData's tail instead of a decalData sampler of
+    // its own, at the row kSlimDecalRow (OrbisRendererCore.h) starts —
+    // buildDecalData and applyDecals in OrbisRendererCore.cpp write the same
+    // bytes there as they write into decalData on the standard surface.
+    #define kDecalTexels 7
+    #define kDecalDataRow 80.0
+
+    vec4 decalTexel(int decal, int texel) {
+        return texelFetch(materialParams_lightData,
+                          ivec2(texel, int(kDecalDataRow) + decal), 0);
+    }
+
+    void applyDecals(inout vec4 base, inout float metallic,
+                     inout float roughness) {
+        int count = int(decalTexel(0, 6).w);
+        if (count <= 0) return;
+
+        vec3 p = getUserWorldPosition();
+
+        vec3 dpdx = dFdx(p);
+        vec3 dpdy = dFdy(p);
+
+        vec3 facing = getWorldGeometricNormalVector();
+        int layer = materialParams.decalLayer;
+
+        for (int i = 0; i < count; i++) {
+            vec4 r0 = decalTexel(i, 0);
+            vec4 r1 = decalTexel(i, 1);
+            vec4 r2 = decalTexel(i, 2);
+            vec3 local = vec3(dot(r0.xyz, p) + r0.w,
+                              dot(r1.xyz, p) + r1.w,
+                              dot(r2.xyz, p) + r2.w);
+            if (any(greaterThan(abs(local), vec3(0.5)))) continue;
+
+            vec4 settings = decalTexel(i, 4);
+            if ((int(settings.w) & layer) == 0) continue;
+
+            float square = dot(facing, decalTexel(i, 6).xyz);
+            float fade = settings.y - settings.z < 1e-4
+                ? step(settings.z, square)
+                : smoothstep(settings.z, settings.y, square);
+            if (fade <= 0.0) continue;
+
+            vec4 tint = decalTexel(i, 3);
+            vec4 picture = vec4(1.0);
+            if (settings.x >= 0.0) {
+                vec2 uv = local.xz + 0.5;
+                vec2 gx = vec2(dot(r0.xyz, dpdx), dot(r2.xyz, dpdx));
+                vec2 gy = vec2(dot(r0.xyz, dpdy), dot(r2.xyz, dpdy));
+                picture = textureGrad(materialParams_decalImages,
+                                      vec3(uv, settings.x), gx, gy);
+            }
+
+            float cover = picture.a * tint.a * fade;
+            base.rgb = base.rgb * (1.0 - cover)
+                     + picture.rgb * tint.rgb * (tint.a * fade);
+
+            vec4 surface = decalTexel(i, 5);
+            roughness = mix(roughness, surface.x, cover * surface.y);
+            metallic = mix(metallic, surface.z, cover * surface.w);
+        }
+    }
+
+    void material(inout MaterialInputs material) {
+        vec2 uv = getUV0() * materialParams.uvTransform.xy
+                + materialParams.uvTransform.zw;
+
+        vec2 blendUv = getUV0() * materialParams.blendUvTransform.xy
+                     + materialParams.blendUvTransform.zw;
+
+        float layer = 0.0;
+        if (materialParams.blendMode > 0) {
+            float amount = clamp(materialParams.blendAmount, 0.0, 1.0);
+            if (materialParams.blendMode == 1) {
+                layer = amount;
+            } else {
+                float mask = materialParams.hasBlendMaskMap
+                    ? texture(materialParams_blendMaskMap, uv).r
+                    : 1.0;
+                if (materialParams.blendMode == 2) {
+                    layer = clamp(mask * amount, 0.0, 1.0);
+                } else {
+                    float sharp = max(materialParams.blendSharpness, 0.0001);
+                    layer = clamp((mask - (1.0 - amount)) * sharp + 0.5,
+                                  0.0, 1.0);
+                }
+            }
+        }
+
+        if (materialParams.hasNormalMap) {
+            vec3 packed = texture(materialParams_normalMap, uv).xyz;
+            material.normal = packed * 2.0 - 1.0;
+            material.normal.xy *= materialParams.normalScale * (1.0 - layer);
+        }
+
+        prepareMaterial(material);
+
+        vec4 base = materialParams.baseColor;
+        if (materialParams.hasBaseColorMap) {
+            base *= texture(materialParams_baseColorMap, uv);
+        }
+        if (layer > 0.0 && materialParams.hasBlendBaseColorMap) {
+            vec4 over = materialParams.baseColor
+                      * texture(materialParams_blendBaseColorMap, blendUv);
+            base = mix(base, over, layer);
+        }
+        material.baseColor = base;
+
+        float metallic  = materialParams.metallic;
+        float roughness = materialParams.roughness;
+        if (materialParams.hasMetallicRoughnessMap) {
+            vec3 packed = texture(materialParams_metallicRoughnessMap, uv).rgb;
+            roughness *= packed.g;
+            metallic  *= packed.b;
+        }
+        applyDecals(base, metallic, roughness);
+        material.baseColor = base;
+        material.metallic    = metallic;
+        material.roughness   = roughness;
+        material.reflectance = materialParams.reflectance;
+
+        material.clearCoat = materialParams.clearCoat;
+        material.clearCoatRoughness = materialParams.clearCoatRoughness;
+        material.anisotropy = materialParams.anisotropy;
+        material.sheenColor = materialParams.sheenColor;
+        material.sheenRoughness = materialParams.sheenRoughness;
+
+        float occlusion = materialParams.ambientOcclusion;
+        if (materialParams.hasOcclusionMap) {
+            occlusion *= texture(materialParams_occlusionMap, uv).r;
+        }
+        material.ambientOcclusion = occlusion;
+
+        vec3 emissive = materialParams.emissive * materialParams.emissiveIntensity;
+        if (materialParams.hasEmissiveMap) {
+            emissive *= texture(materialParams_emissiveMap, uv).rgb;
+        }
+        material.emissive = vec4(emissive, 1.0);
+
+        // Added, as on the standard surface — see lit.mat's
+        // postLightingBlending note. Only the rectangles contribute here:
+        // there is no field to sum alongside them.
+        material.postLightingColor = vec4(
+            areaLighting(material, metallic, roughness),
+            0.0);
+    }
+}
