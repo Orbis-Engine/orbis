@@ -61,6 +61,21 @@
   batched and into how many groups. A depth prepass was measured and not
   built: on Apple's tile-based GPUs there is no overdraw cost for it to remove.
 
+- **God rays and screen distortion.** `OrbisScene.godRays` adds shafts of light
+  from the scene's own directional light, by Mitchell's screen-space light
+  scattering. Open sky is read from the depth buffer, so a sunlit wall blocks
+  light rather than sending it; the shafts fade as the sun leaves the frame,
+  vanish when it is behind the camera, and thin under cloud.
+  `OrbisScene.distortions` takes shockwaves, heat haze and a lens warp, summed
+  in one depth-aware pass with an optional chromatic split — measured, a
+  shockwave moves the floor by the 21.6 pixels its strength predicts. Both are
+  render-graph effects, `OrbisEffect.godRays` and `OrbisEffect.distortion`; a
+  scene with no graph of its own has the passes put in for it, and neither
+  costs anything while off.
+
+- The plugin read a render graph of twelve or more passes out of step: it
+  divided the pass list by twelve floats where a pass is thirteen.
+
 - `OrbisScene.copyWith` keeps `probes` and `field`, which it used to drop
   silently.
 

@@ -6,7 +6,7 @@
   nothing is the one that proves it does: a soft shadow under each occluder,
   softer at the tall one's far end than at its foot.
 
-- **Seven new examples.** Shadows puts every shadow setting on a slider.
+- **Nine new examples.** Shadows puts every shadow setting on a slider.
   Environment volumes walks from a sunny courtyard into a dim, foggy hall.
   Decals paints a poster, a scorch, a puddle, a stripe across the corner of a
   room and a splash around a crate that the crate's own layer is spared.
@@ -14,7 +14,9 @@
   it, or any capture named by `ORBIS_SPLAT`. Outline puts a selected box half
   behind a wall. Batching draws thousands of crates in one, six or every
   colour, and Overdraw crosses heavy surfaces through each other to measure
-  what a depth prepass could save.
+  what a depth prepass could save. God rays stands a low sun behind a row of
+  pillars, and Distortion sends a shockwave across a striped floor, with a
+  heat haze rising over a vent and a lens warp on a slider.
 
 ## 0.21.0
 
