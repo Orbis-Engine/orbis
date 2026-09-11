@@ -44,7 +44,16 @@ class _SpikeHomeState extends State<SpikeHome> {
   Future<void> _startWith(FilamentBackend backend) async {
     setState(() => _error = null);
     try {
-      final info = await FilamentSurface.start(backend: backend);
+      // Square, not the full (tall, narrow) screen. The camera in
+      // spike_renderer.cpp is framed for a roughly square view -- at this
+      // phone's actual aspect ratio the cube overflows the frustum on its
+      // short axis and fills the frame edge to edge, hiding the one thing
+      // that makes the skybox worth having: seeing it *around* the cube as
+      // proof the render path works even where the cube does not. Sized in
+      // physical pixels, not logical, so the texture is still sharp.
+      final physical = View.of(context).physicalSize;
+      final side = physical.shortestSide.round().clamp(1, 4096);
+      final info = await FilamentSurface.start(backend: backend, width: side, height: side);
       if (!mounted) return;
       setState(() {
         _backend = backend;
@@ -173,7 +182,20 @@ class _SpikeHomeState extends State<SpikeHome> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (id != null) Texture(textureId: id) else const ColoredBox(color: Colors.black),
+              if (id != null)
+                Center(
+                  child: AspectRatio(
+                    // Always square -- see the comment in _startWith.
+                    // Centered on the surrounding Scaffold's black rather than
+                    // filling the Stack: the Texture's own edges are visible
+                    // against it, which is one more compositing proof (the
+                    // Flutter layer both above *and* around Filament's).
+                    aspectRatio: 1,
+                    child: Texture(textureId: id),
+                  ),
+                )
+              else
+                const ColoredBox(color: Colors.black),
               Positioned(
                 left: 12,
                 right: 12,
