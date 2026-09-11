@@ -1,0 +1,12 @@
+# Build output and everything setup.sh stages: Filament's Android release
+# (~1.5 GB across four ABIs) and, if the local cache was not found, a fetched
+# copy of it. The generated materials this plugin also writes live under
+# ../darwin/orbis_filament/Sources/orbis_filament_native/generated/, which
+# the top-level .gitignore already covers.
+.cxx/
+.gradle/
+.kotlin/
+build/
+third_party/
+local.properties
+*.iml
