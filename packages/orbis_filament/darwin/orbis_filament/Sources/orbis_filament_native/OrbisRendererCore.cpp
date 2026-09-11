@@ -5337,12 +5337,20 @@ void Renderer::setExposure(float aperture, float shutter, float sensitivity) {
 }
 
 void Renderer::allocateBuffers() {
+  // Null while detached (see detachSurface) — Apple and headless hosts never
+  // see that state, since their surface is set once and lives for the whole
+  // renderer, but a resize requested while Android has no Surface to attach
+  // to would otherwise dereference nothing here.
+  if (_surface == nullptr) return;
   _surface->allocate(_engine, _width, _height, _swapChains, kOrbisBufferCount);
   _backIndex = 0;
   _presentedIndex = -1;
 }
 
 void Renderer::releaseBuffers() {
+  // See allocateBuffers: dispose() calls this too, and dispose() may run
+  // while Android has already let go of its surface.
+  if (_surface == nullptr) return;
   _surface->release(_engine, _swapChains, kOrbisBufferCount);
 }
 
@@ -5356,6 +5364,43 @@ void Renderer::resizeToWidth(uint32_t width, uint32_t height) {
   _pendingWidth = std::max(width, 1u);
   _pendingHeight = std::max(height, 1u);
   _presentLock.unlock();
+}
+
+bool Renderer::attachSurface(OrbisSurface *surface, uint32_t width, uint32_t height) {
+  // Ownership passes the instant this is called, whatever it returns — the
+  // same contract the constructor documents for the first surface a renderer
+  // is given, and for the same reason: the caller (the C ABI's
+  // orbis_renderer_attach_surface) has nothing else to do with it either way.
+  detachSurface();
+  _surface = surface;
+  if (_surface == nullptr || _engine == nullptr || _disposed) return false;
+
+  _width = std::max(width, 1u);
+  _height = std::max(height, 1u);
+  _pendingWidth = _width;
+  _pendingHeight = _height;
+  _presentLock.lock();
+  _presentedIndex = -1;
+  _presentLock.unlock();
+
+  allocateBuffers();
+  applyViewportSize();
+  return _swapChains[0] != nullptr;
+}
+
+void Renderer::detachSurface() {
+  if (_surface == nullptr) return;
+  releaseBuffers();
+  // The ordering the Android spike found load-bearing: Engine::destroy()
+  // (inside releaseBuffers, via OrbisSurface::release) only queues the swap
+  // chain's destruction onto Filament's driver thread. A host that releases
+  // the native window it came from — an ANativeWindow, on Android — before
+  // that drains is a use-after-free the driver still holds. flushAndWait
+  // blocks until it has actually let go, which is why this comes before the
+  // surface object itself (and whatever it wraps) goes.
+  if (_engine != nullptr) _engine->flushAndWait();
+  delete _surface;
+  _surface = nullptr;
 }
 
 void Renderer::setOutlineKeys(const int64_t *keys, uint32_t count, const float *params) {

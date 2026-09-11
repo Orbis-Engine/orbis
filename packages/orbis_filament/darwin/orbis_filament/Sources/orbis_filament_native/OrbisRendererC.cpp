@@ -220,6 +220,61 @@ int orbis_renderer_resize(orbis_renderer *renderer, uint32_t width,
   });
 }
 
+int orbis_renderer_attach_surface(orbis_renderer *renderer,
+                                  const orbis_surface_desc *surface,
+                                  uint32_t width, uint32_t height) {
+  if (renderer == nullptr || renderer->core == nullptr) return ORBIS_ERROR_NULL;
+  if (surface == nullptr) return ORBIS_ERROR_NULL;
+
+  OrbisSurface *made = nullptr;
+  switch (surface->kind) {
+    case ORBIS_SURFACE_HEADLESS:
+      made = OrbisCreateHeadlessSurface();
+      break;
+    case ORBIS_SURFACE_WINDOW:
+      if (surface->window == nullptr) return ORBIS_ERROR_NULL;
+      made = OrbisCreateWindowSurface(surface->window);
+      break;
+    case ORBIS_SURFACE_PLATFORM:
+      orbis::log("[orbis] attach_surface takes a window or a headless "
+                 "surface, not the platform one.");
+      return ORBIS_ERROR_FAILED;
+  }
+  if (made == nullptr) return ORBIS_ERROR_FAILED;
+
+  // Not routed through guarded(): that helper marks the whole renderer
+  // failed on any non-OK return, which is right for a scene call but wrong
+  // here — the surface lifecycle this exists for (Android backgrounding, a
+  // forced Surface replacement) is meant to be retried, and a renderer whose
+  // Activity is merely backgrounded should still be alive when it resumes.
+  // attachSurface takes ownership of `made` unconditionally and immediately
+  // (see its comment), so there is nothing to delete in either branch below.
+  try {
+    return renderer->core->attachSurface(made, width, height)
+               ? ORBIS_OK
+               : ORBIS_ERROR_FAILED;
+  } catch (const std::exception &error) {
+    orbis::log("[orbis] attach_surface: %s", error.what());
+  } catch (...) {
+    orbis::log("[orbis] attach_surface failed for an unknown reason.");
+  }
+  return ORBIS_ERROR_FAILED;
+}
+
+int orbis_renderer_detach_surface(orbis_renderer *renderer) {
+  if (renderer == nullptr || renderer->core == nullptr) return ORBIS_ERROR_NULL;
+  // See attach_surface for why this bypasses guarded() too.
+  try {
+    renderer->core->detachSurface();
+    return ORBIS_OK;
+  } catch (const std::exception &error) {
+    orbis::log("[orbis] detach_surface: %s", error.what());
+  } catch (...) {
+    orbis::log("[orbis] detach_surface failed for an unknown reason.");
+  }
+  return ORBIS_ERROR_FAILED;
+}
+
 int orbis_renderer_draw(orbis_renderer *renderer, double seconds) {
   return guarded(renderer,
                  [&](orbis::Renderer &core) { core.renderAtTime(seconds); });

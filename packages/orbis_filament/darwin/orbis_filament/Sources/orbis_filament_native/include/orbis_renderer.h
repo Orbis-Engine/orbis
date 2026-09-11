@@ -152,6 +152,31 @@ OrbisBackend orbis_renderer_backend(const orbis_renderer *renderer);
 int orbis_renderer_resize(orbis_renderer *renderer, uint32_t width,
                           uint32_t height);
 
+/* Replaces the presentation surface after construction: detaches whatever is
+ * attached (see orbis_renderer_detach_surface) and allocates fresh buffers
+ * onto the new one. `surface` may be HEADLESS or WINDOW; PLATFORM is refused,
+ * as it is at create — there is nowhere off Apple to get one from, and
+ * Apple's own texture-sharing surface lives for the renderer's whole life
+ * and never needs replacing this way.
+ *
+ * This is for Android, where a Surface can be destroyed and handed back any
+ * number of times across backgrounding while the engine, scene and every GPU
+ * resource in it survive untouched: detach on the way out, attach on the way
+ * back in, same renderer throughout. ORBIS_ERROR_FAILED if Filament could not
+ * build the new swap chain, which leaves the renderer presenting nowhere —
+ * not back on the old surface, which by the time a host has a new one to
+ * offer is usually already gone. Unlike other calls, a failure here does not
+ * stop the renderer: the surface lifecycle this exists for is expected to be
+ * retried, not treated as fatal the way a scene call's failure is. */
+int orbis_renderer_attach_surface(orbis_renderer *renderer,
+                                  const orbis_surface_desc *surface,
+                                  uint32_t width, uint32_t height);
+
+/* Destroys the swap chain(s) and gives the surface back, leaving the
+ * renderer presenting nowhere until the next orbis_renderer_attach_surface.
+ * Drawing while detached is safe and draws nothing. NULL is fine. */
+int orbis_renderer_detach_surface(orbis_renderer *renderer);
+
 /* Draws one frame at `seconds` and presents it. */
 int orbis_renderer_draw(orbis_renderer *renderer, double seconds);
 
