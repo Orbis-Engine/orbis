@@ -26,15 +26,41 @@ done
 
 # shoot <name> <virtual milliseconds> <query string>
 # A fresh profile per shot keeps it clear of any Chrome already running.
+#
+# Headless Chrome's --screenshot mode is documented to quit on its own once
+# the shot is written, but observed here not to: the process outlives its own
+# PNG once virtual-time-budget elapses, with nothing left to wait for. Left
+# alone that wedges every shot queued after it (macOS ships no `timeout(1)`
+# to guard against it), so this polls for the PNG and gives the process a
+# couple of seconds to flush and exit on its own before killing it, with a
+# hard ceiling in case even the screenshot never lands.
 shoot() {
+  local name="$1" budget="$2" query="$3"
   "$CHROME" --headless=new \
     --use-angle=swiftshader --enable-unsafe-swiftshader \
-    --user-data-dir="$PROFILES/$1" --no-first-run --no-default-browser-check \
+    --user-data-dir="$PROFILES/$name" --no-first-run --no-default-browser-check \
     --hide-scrollbars --window-size=1280,800 \
     --enable-logging=stderr --v=0 \
-    --virtual-time-budget="$2" \
-    --screenshot="$OUT/$1.png" "http://127.0.0.1:$PORT/$3" >"$OUT/$1.log" 2>&1 || true
-  echo "capture: $OUT/$1.png  ($(grep -c 'CONSOLE' "$OUT/$1.log" || true) console lines)"
+    --virtual-time-budget="$budget" \
+    --screenshot="$OUT/$name.png" "http://127.0.0.1:$PORT/$query" >"$OUT/$name.log" 2>&1 &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ -f "$OUT/$name.png" ]; then
+      sleep 2
+      kill "$pid" 2>/dev/null || true
+      break
+    fi
+    if [ "$waited" -ge 45 ]; then
+      echo "capture: $name timed out with no screenshot after ${waited}s" >&2
+      kill -9 "$pid" 2>/dev/null || true
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid" 2>/dev/null || true
+  echo "capture: $OUT/$name.png  ($(grep -c 'CONSOLE' "$OUT/$name.log" || true) console lines)"
 }
 
 shoot 1_default_3s 3000 ""
