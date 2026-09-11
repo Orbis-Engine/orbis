@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.23.0
+
+- **A depth prepass, off by default.** With `OrbisScene.depthPrepass` on, every
+  opaque object the prepass covers is drawn twice: once writing depth and no
+  colour, then once shaded. The second time, every fragment the first pass
+  already covered from in front fails the depth test and is thrown away before
+  a single light is evaluated, so a pixel is shaded once however many surfaces
+  stand over it.
+
+  Filament has no depth-prepass API to ask for: the `View` setting was
+  deprecated in 1.4.5 and the APIs removed in 1.5.0, and the paragraph still in
+  `Renderer.h` describing a depth pre-pass stage is stale. What it has instead
+  covers other ground — the structure pass is half-resolution by default,
+  allocates its own buffer and reaches the colour pass only as a sampler, while
+  the colour pass always allocates and clears its own full-resolution depth;
+  and `TransparencyMode::TWO_PASSES_ONE_SIDE` is a real per-object prepass but
+  is gated to materials that are not opaque. So this is built out of render
+  channels, which are public: a second entity per covered object over the same
+  vertex and index buffers, wearing a new depth-only surface, on the channel
+  below the one everything else draws on. Both channels draw inside one
+  `RenderPass` against one full-resolution depth attachment, so no extra
+  FrameGraph pass and no second target.
+
+  The shaded draws keep the depth test they already had. Filament renders
+  reversed-Z and its opaque draws already test greater-or-equal, so a covered
+  fragment is rejected before it is shaded, which is the whole saving;
+  tightening those draws to equal would reject the same fragments and gain
+  nothing while risking an object vanishing if the two vertex shaders disagree
+  about a position by one unit in the last place.
+
+  The prepass draw is pushed a hair behind the surface it stands in for, and
+  that is not a fudge. A prepass entity is real geometry, so it is drawn into
+  the structure buffer that screen-space contact shadows march along — which
+  every object here receives. Sitting exactly on the surface it duplicates, it
+  occludes that surface: measured, one per cent of the frame came back in dark
+  clusters, wrong by up to 229 of 255. Pushed behind, it can never be the
+  nearest thing at a pixel and occludes nothing anywhere, while still standing
+  well in front of anything genuinely hidden. With it, the frame is
+  bit-identical with the prepass on and off — 0 of 518400 pixels differ, on
+  Metal and on Vulkan alike.
+
+  **What it is worth, measured on two kinds of GPU.** On an Apple M4 Pro it is
+  worth nothing, because the hardware already does it: a tile-based GPU settles
+  which surface wins a tile before shading any of it. On Mesa's llvmpipe under
+  Vulkan — a software rasteriser, immediate-mode by construction — it roughly
+  halves the frame. The Overdraw example, medians of three runs each way:
+
+  | slabs | Apple off | Apple on | llvmpipe off | llvmpipe on |
+  |-------|-----------|----------|--------------|-------------|
+  | 96    | 3.97 ms   | 4.10 ms  | 40.9 ms      | 21.3 ms     |
+  | 48    | 3.84 ms   | 3.89 ms  | 44.0 ms      | 17.3 ms     |
+  | 1     | 3.47 ms   | 3.47 ms  | 11.0 ms      | 11.3 ms     |
+
+  The one-slab row is the control and says the same on both machines: with
+  nothing hidden there is nothing to save, and the second pass costs about
+  three per cent for its trouble.
+
+  **It ships off, including off Apple.** Defaulting it on wherever the backend
+  is not Metal would extrapolate from a software rasteriser to hardware nobody
+  has measured. llvmpipe is the most favourable possible case for a prepass —
+  no early-Z, no hierarchical depth, no compression — and a discrete GPU has
+  all three. So it stays an opt-in until a real immediate-mode GPU is measured,
+  and the switch is per scene rather than per backend, so the same scene draws
+  the same way everywhere.
+
+  Covers objects drawn as the placeholder cube, visible, with an opaque
+  surface. A glTF model is not covered: Filament's public `RenderableManager`
+  has `setGeometryAt` but no matching getter, so a second renderable over the
+  same geometry cannot be built through the public API at all. A group merged
+  by `OrbisScene.batching` gets no prepass either, so the two switches do not
+  compound.
+
 ## 0.22.0
 
 - **A rectangular light's shadow now actually falls.** The depth map it drew

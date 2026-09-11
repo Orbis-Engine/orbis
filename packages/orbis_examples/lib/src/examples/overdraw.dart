@@ -46,6 +46,23 @@ import 'surface.dart' show linearOf;
 /// and again with `ORBIS_PREPASS=1`; the frame's cost is on the
 /// `[orbis] frame 180:` line. Gallery frame dumps share one path, so two of
 /// these must not run at once.
+///
+/// The other half of the answer needed a GPU that is not tile-based, which no
+/// Apple machine has. This same scene was built into the Flutter-free headless
+/// host (`ORBIS_SLABS`) and run under Mesa's llvmpipe in a Linux container — a
+/// software rasteriser, so immediate-mode by construction, shading every layer
+/// it is handed. There the prepass roughly halves the frame: 40.9 ms against
+/// 21.3 ms at ninety-six slabs, 44.0 against 17.3 at forty-eight, medians of
+/// three runs. At one slab it is 11.0 against 11.3 — the control, and the same
+/// small loss the Apple GPU shows, because with nothing hidden there is
+/// nothing to save.
+///
+/// The picture is bit-identical with the prepass on and off, on both backends:
+/// 0 of 518400 pixels differ. That is worth stating because it was not true of
+/// the first attempt — a prepass entity sitting exactly on the surface it
+/// stands in for occludes that surface in the structure buffer that contact
+/// shadows march along, and one per cent of the frame came back visibly darker
+/// until the depth-only draw was pushed a hair behind.
 class OverdrawExample extends Example {
   OverdrawExample();
 

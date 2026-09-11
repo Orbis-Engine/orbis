@@ -1280,12 +1280,38 @@ class OrbisScene {
   /// ninety-seven culls and saves nothing, because there was nothing to save.
   /// See the Overdraw example for the exact commands.
   ///
-  /// So: leave it off on Apple hardware. On an immediate-mode GPU — a desktop
-  /// Vulkan or GL backend, which shades every layer it is handed in the order
-  /// it is handed them — the arithmetic is the other way round and this is
-  /// what it exists for. Either way, measure rather than assume: a scene whose
-  /// objects barely overlap has nothing for this to save and will only pay for
-  /// the extra draws, which is exactly what the one-slab row above shows.
+  /// **On an immediate-mode GPU it is the other way round.** Such a GPU shades
+  /// every layer it is handed in the order it is handed them, so hidden
+  /// surface costs real time and removing it saves real time. Measured on the
+  /// same scene through the same renderer, on Mesa's llvmpipe under Vulkan —
+  /// a software rasteriser, and immediate-mode by construction — medians of
+  /// three runs each way:
+  ///
+  /// | slabs | prepass off | prepass on |
+  /// |-------|-------------|------------|
+  /// | 96    | 40.9 ms     | 21.3 ms    |
+  /// | 48    | 44.0 ms     | 17.3 ms    |
+  /// | 1     | 11.0 ms     | 11.3 ms    |
+  ///
+  /// Roughly half the frame, where there is real depth complexity to remove.
+  /// The one-slab row is the control and it says the same thing on both
+  /// machines: with nothing hidden there is nothing to save, and the second
+  /// pass costs about three per cent for its trouble.
+  ///
+  /// **Why it still ships off.** The obvious move — default it on wherever the
+  /// backend is not Metal — is not supported by what was actually measured.
+  /// The only immediate-mode hardware available here was a software
+  /// rasteriser, and a software rasteriser is the most favourable possible
+  /// case for a prepass: it has no early-Z, no hierarchical depth and no
+  /// compression, so every fragment it skips is a fragment genuinely shaded on
+  /// the CPU. A real desktop GPU has all three and behaves far more like the
+  /// tile-based case for this workload. Defaulting this on for every non-Metal
+  /// backend would be extrapolating from llvmpipe to hardware nobody has
+  /// measured, so it stays an opt-in until somebody measures a discrete GPU.
+  ///
+  /// So: turn it on for a backend and a scene you have measured, and leave it
+  /// off otherwise. The picture is identical either way — bit-for-bit, on both
+  /// Metal and Vulkan — so the only thing at stake is time.
   ///
   /// **What it does not change.** The shaded draws keep the depth test they
   /// already had. Filament renders reversed-Z and its opaque draws test
