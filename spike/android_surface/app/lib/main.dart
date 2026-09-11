@@ -168,6 +168,22 @@ class _SpikeHomeState extends State<SpikeHome> {
           SizedBox(
             width: 260,
             height: 64,
+            // The other half of the feature-level question: below the bar,
+            // Filament is documented to refuse to build rather than degrade.
+            // This asks OpenGL ES for level 3 -- which supportedFL=1 says it
+            // cannot serve -- so the failure path in FilamentSurfaceSession
+            // .start (an engine of 0, reported as an error) is expected and
+            // is the point: seeing it happen beats citing the doc for it.
+            child: ElevatedButton(
+              key: const Key('start_opengl_fl3'),
+              onPressed: () => _startWith(FilamentBackend.openGL, requestFeatureLevel3: true),
+              child: const Text('OpenGL ES (force FL3)', style: TextStyle(fontSize: 16)),
+            ),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: 260,
+            height: 64,
             child: ElevatedButton(
               key: const Key('start_vulkan'),
               onPressed: () => _startWith(FilamentBackend.vulkan),
