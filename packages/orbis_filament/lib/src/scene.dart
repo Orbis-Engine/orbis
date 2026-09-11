@@ -1088,6 +1088,7 @@ class OrbisScene {
       this,
     ).resolve(volumes, at ?? camera.position).applyTo(this);
   }
+
   /// What is painted onto the surfaces: posters, scorches, puddles, road
   /// markings. Each one a box and a picture, projected onto whatever lit
   /// surface is inside the box before it is lit.
