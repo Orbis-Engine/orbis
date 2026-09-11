@@ -76,6 +76,12 @@ for r in runtimes:
   # launching, and installing into one that has not finished comes back with
   # "Unable to lookup in current state".
   xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1
+  # A simulator booted from the command line has no screen until Simulator.app
+  # shows it, and on a headless CI runner nothing else will: the app launches
+  # and the engine starts, then the renderer waits for display-link ticks that
+  # never come. Showing it costs a moment, and only a device this script had to
+  # boot is shown, so a developer's own session is left as it was.
+  open -a Simulator --args -CurrentDeviceUDID "$udid" 2>/dev/null || true
 fi
 
 xcrun simctl install "$udid" "$APP" || { echo "the app would not install"; exit 1; }

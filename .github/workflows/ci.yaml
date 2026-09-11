@@ -243,6 +243,9 @@ jobs:
         working-directory: orbis/examples/gallery
         env:
           ORBIS_DUMP_FRAME: 30
+          # A GitHub runner's simulator boots slowly and draws on a virtual
+          # GPU, so thirty frames take far longer than on a developer's Mac.
+          ORBIS_FRAME_TIMEOUT: 240
         run: ../../tool/ci_draw_frame_ios.sh build/ios/iphonesimulator/Runner.app
 
   # The renderer again, linked for Android -- the plugin's Kotlin/JNI bridge
