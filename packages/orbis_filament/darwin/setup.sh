@@ -145,7 +145,29 @@ fi
 # every material silently stays as it was. That is exactly what happened when
 # this moved from -p desktop to -p all: the build succeeded, the app launched,
 # and Filament refused the material at runtime with "was not built for mobile".
-MATC_FLAGS="-a metal -p all"
+#
+# Which backends the materials carry shaders for: ORBIS_MATC_BACKENDS, a list
+# of metal, vulkan, opengl, or all. Metal alone by default, because it is the
+# only one an Apple build can use and every backend added is another copy of
+# every shader in the binary. A build for anywhere else names its own —
+# "vulkan opengl" for Android or Linux, where OpenGL is the fallback — and
+# "all" is every backend matc knows. The list goes into the stamp below with
+# the rest of the flags, so changing it recompiles everything.
+ORBIS_MATC_BACKENDS="${ORBIS_MATC_BACKENDS:-metal}"
+MATC_API=""
+for api in ${ORBIS_MATC_BACKENDS//,/ }; do
+  case "$api" in
+    metal|vulkan|opengl|all) MATC_API="$MATC_API -a $api" ;;
+    *)
+      echo "orbis_filament: ORBIS_MATC_BACKENDS names '$api', which is not"
+      echo "  one of metal, vulkan, opengl or all."
+      exit 1
+      ;;
+  esac
+done
+# The default comes out as exactly the flags this used before there was a
+# choice, so an existing checkout's stamp still matches and nothing rebuilds.
+MATC_FLAGS="${MATC_API# } -p all"
 MATC_STAMP="$GENERATED/.matc"
 MATC_WANT="$FILAMENT_VERSION $MATC_FLAGS"
 STALE=""
