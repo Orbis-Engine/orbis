@@ -994,6 +994,25 @@ class Renderer {
                       const float *params);
   void resizeToWidth(uint32_t width, uint32_t height);
 
+  /// Replaces the presentation surface after construction: detaches whatever
+  /// is attached (see detachSurface) and allocates fresh buffers onto the new
+  /// one, taking ownership of it exactly as the constructor does with the
+  /// first one. Android is why this exists — a Surface there can be
+  /// destroyed and handed back any number of times across backgrounding
+  /// while the engine, scene and every GPU resource in it survive untouched,
+  /// which resizeToWidth's pending-dimensions dance was never built for.
+  /// False if Filament could not build the new swap chain, which leaves the
+  /// renderer presenting nowhere — not back on the old surface, which by the
+  /// time a host has a new one to offer is usually already gone.
+  bool attachSurface(OrbisSurface *surface, uint32_t width, uint32_t height);
+
+  /// Destroys the swap chain(s) and gives the surface back, leaving the
+  /// renderer presenting nowhere until the next attachSurface. Safe to call
+  /// with nothing attached. drawAtTime already returns before touching a
+  /// null swap chain, so a host may keep calling render while detached —
+  /// nothing is drawn until the surface returns.
+  void detachSurface();
+
   /// The most recently presented frame with a reference the caller owns, or
   /// null before the first one. Opaque: on Apple it is a CVPixelBufferRef.
   void *copyPresentedBuffer();

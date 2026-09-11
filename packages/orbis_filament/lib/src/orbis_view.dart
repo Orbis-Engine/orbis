@@ -247,9 +247,17 @@ class _OrbisViewState extends State<OrbisView> {
     // one implementation — the same Filament, the same Metal backend, the
     // same CVPixelBuffer handed to the texture registry — so this is a list
     // rather than a single platform, and the rest grows it as they land.
-    const drawable = {TargetPlatform.macOS, TargetPlatform.iOS};
+    // Android's implementation is the same renderer and the same channel
+    // protocol behind a Kotlin/JNI plugin instead of Swift's, presenting
+    // into a Flutter SurfaceProducer texture rather than a CVPixelBuffer —
+    // see packages/orbis_filament/android/.
+    const drawable = {
+      TargetPlatform.macOS,
+      TargetPlatform.iOS,
+      TargetPlatform.android,
+    };
     if (!drawable.contains(defaultTargetPlatform)) {
-      return const _Notice('Orbis renders on macOS and iOS so far.');
+      return const _Notice('Orbis renders on macOS, iOS and Android so far.');
     }
 
     return LayoutBuilder(

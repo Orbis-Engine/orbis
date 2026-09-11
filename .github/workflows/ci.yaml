@@ -244,3 +244,62 @@ jobs:
         env:
           ORBIS_DUMP_FRAME: 30
         run: ../../tool/ci_draw_frame_ios.sh build/ios/iphonesimulator/Runner.app
+
+  # The renderer again, linked for Android -- the plugin's Kotlin/JNI bridge
+  # over the same portable core the two jobs above build for Apple. Builds
+  # only, not yet a drawn frame the way those two finish on: that needs a
+  # running device or emulator, which this runner does not have, and is
+  # exercised by hand against the AVD this plugin was developed against (see
+  # the Android section of the top-level report) rather than in CI so far.
+  #
+  # Unverified end to end: GitHub's ubuntu-latest image is assumed to carry
+  # an Android SDK under ANDROID_HOME with cmdline-tools available to install
+  # the pinned NDK, which has not been checked against an actual run of this
+  # job.
+  renderer-android:
+    name: Renderer (Android build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orbis
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      # Pinned to match packages/orbis_filament/android/build.gradle.kts's
+      # own ndkVersion -- the two have to agree, which is why that file pins
+      # it rather than inheriting Flutter's own default, and the runner's
+      # preinstalled NDK (whatever version that happens to be) is not
+      # necessarily this one.
+      - name: Install the pinned NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;28.2.13676358"
+
+      # Two things live under third_party/ and are both worth caching: the
+      # Android release setup.sh fetches (headers and static libraries for
+      # every ABI, since this runner has no local cache to symlink the way
+      # the dev machine does), and a Linux release fetched for its matc
+      # alone -- see setup.sh's own comment on why a Linux host cannot
+      # borrow darwin/setup.sh's mac matc. Keyed on setup.sh itself, so
+      # changing which Filament version it names fetches fresh copies of
+      # both rather than reusing a stale cache under the same key.
+      - name: Cache Filament SDKs
+        uses: actions/cache@v4
+        with:
+          path: orbis/packages/orbis_filament/android/third_party
+          key: filament-android-${{ runner.os }}-${{ hashFiles('orbis/packages/orbis_filament/android/setup.sh') }}
+
+      - name: Fetch Filament and compile materials
+        run: bash orbis/packages/orbis_filament/android/setup.sh
+
+      - name: Build the gallery APK
+        working-directory: orbis/examples/gallery
+        run: flutter build apk --debug --target-platform=android-arm64

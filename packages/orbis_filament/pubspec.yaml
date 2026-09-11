@@ -31,3 +31,6 @@ flutter:
         pluginClass: OrbisFilamentPlugin
       ios:
         pluginClass: OrbisFilamentPlugin
+      android:
+        package: dev.orbis.filament
+        pluginClass: OrbisFilamentPlugin
