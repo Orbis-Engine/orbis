@@ -229,6 +229,15 @@ NS_ASSUME_NONNULL_BEGIN
            targetCount:(uint32_t)targetCount
                  names:(NSArray<NSString *> *)names;
 
+/// What the god-ray and distortion effect passes read: one row of god-ray
+/// settings and every distortion end to end, as OrbisGodRays and
+/// OrbisDistortion pack them. Kept until the next scene; a row that is not
+/// whole is taken as none.
+- (void)setGodRays:(const float *)godRays
+              count:(NSUInteger)count
+        distortions:(const float *)distortions
+    distortionCount:(NSUInteger)distortionCount;
+
 /// What each pass of the last frame cost, in milliseconds, and how many
 /// renderables it submitted — two numbers per pass, in the order they ran.
 ///

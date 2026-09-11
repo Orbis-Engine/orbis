@@ -69,6 +69,9 @@
 #include "generated/smaa_weights_material.h"
 #include "generated/smaa_blend_material.h"
 #include "generated/bounce_material.h"
+// Hook (screen effects): god rays and distortion live in plain C++, beside
+// this file, so the port to the renderer's C++ class carries them unchanged.
+#include "ScreenEffects.h"
 #include "generated/irradiance_material.h"
 #include "generated/copy_material.h"
 // SMAA's precomputed tables, fetched by setup.sh from the reference
@@ -1083,6 +1086,10 @@ static constexpr NSUInteger kMaxPostParams = 128;
   /// One material per effect, built on first use and shared by every pass
   /// that runs it. Indexed by the effect's own number.
   std::map<int, filament::Material *> _effectMaterials;
+
+  /// Hook (screen effects): what the host said about god rays and
+  /// distortion, turned into material parameters when their pass runs.
+  orbis::ScreenEffects _screenEffects;
 
   /// SMAA's two precomputed tables, uploaded once.
   /// The world-space irradiance field: two atlases, written in turn.
@@ -3646,6 +3653,17 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
   _environmentHasHarmonics = false;
 }
 
+// Hook (screen effects): the host's god-ray and distortion settings, kept by
+// the plain C++ side until an effect pass reads them.
+- (void)setGodRays:(const float *)godRays
+              count:(NSUInteger)count
+        distortions:(const float *)distortions
+    distortionCount:(NSUInteger)distortionCount {
+  if (_disposed) return;
+  _screenEffects.setGodRays(godRays, count);
+  _screenEffects.setDistortions(distortions, distortionCount);
+}
+
 - (void)setRenderGraph:(const float *)passes
                  count:(uint32_t)count
                targets:(const float *)targets
@@ -4179,6 +4197,9 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       length = ksmaa_blendMaterial_len;
       break;
     default:
+      // Hook (screen effects): god rays and distortion keep their compiled
+      // materials in ScreenEffects.cpp.
+      if (orbis::screenEffectPackage(effect, &package, &length)) break;
       _effectMaterials[effect] = nullptr;
       return nullptr;
   }
@@ -4386,6 +4407,27 @@ static void orbisReportPanic(void *user, const utils::Panic &panic) {
       const int slices = pass.plane[3] > 0.0f ? int(pass.plane[3]) : 4;
       pass.effectMaterial->setParameter("slices", int32_t(std::clamp(slices, 1, 8)));
       pass.effectMaterial->setParameter("steps", int32_t(8));
+      break;
+    }
+    case orbis::kEffectGodRays:
+    case orbis::kEffectDistortion: {
+      // Hook (screen effects). The colour is `from`, as for every effect;
+      // the depth is the first read that kept one, which is what lets a
+      // distortion bend the god rays' output by the world's depth. The
+      // scene's camera, not this pass's, for the same reason as the bounce.
+      Texture *depth = nullptr;
+      for (int r = 0; r < 4 && depth == nullptr; r++) {
+        if (pass.reads[r] >= 0) depth = _targets[pass.reads[r]].depth;
+      }
+      if (depth == nullptr) return;
+      if (pass.effect == orbis::kEffectGodRays) {
+        _screenEffects.applyGodRays(*pass.effectMaterial, _view->getCamera(),
+                                    uint32_t(wide), uint32_t(tall), depth);
+      } else {
+        _screenEffects.applyDistortion(*pass.effectMaterial,
+                                       _view->getCamera(), uint32_t(wide),
+                                       uint32_t(tall), depth);
+      }
       break;
     }
     default:

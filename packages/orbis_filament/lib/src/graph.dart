@@ -164,7 +164,27 @@ enum OrbisEffect {
   /// target rather than onto the screen — and then needs something to put
   /// that target on the screen. Without this the only way to present one is
   /// to run an effect that also changes it.
-  copy('Copy');
+  copy('Copy'),
+
+  /// Shafts of light through the gaps in whatever stands against the sky.
+  ///
+  /// Each pixel walks towards the light's place on the screen and adds up how
+  /// much of the way is open sky — Mitchell's screen-space light scattering.
+  /// Open sky is read from the depth buffer, so it reads the picture and the
+  /// depth of the same target, the way [bounce] does. Its settings are the
+  /// scene's [OrbisGodRays]; at a strength of nought it is a copy.
+  ///
+  /// A scene with no graph of its own does not need to name this: turning
+  /// god rays on puts it in. A graph that is its own puts it where it wants.
+  godRays('God rays'),
+
+  /// The picture read from a little way off, where air bends the light.
+  ///
+  /// Sums the scene's [OrbisDistortion]s — shockwaves, heat haze, a lens —
+  /// into one offset per pixel. Depth-aware, so it reads depth as well as
+  /// colour: from the first target it reads that kept depth, which lets it
+  /// take its colour from a pass that ran after the world was drawn.
+  distortion('Distortion');
 
   const OrbisEffect(this.label);
 
@@ -480,6 +500,28 @@ class OrbisRenderGraph {
           }
         }
       }
+      // God rays and distortion need depth too, but from any one of their
+      // reads rather than every one: the distortion takes its colour from the
+      // god rays' output, which is a picture with no depth, and its depth
+      // from the world that pass read.
+      if ((pass.effect == OrbisEffect.godRays ||
+              pass.effect == OrbisEffect.distortion) &&
+          pass.reads.isNotEmpty) {
+        final kept = pass.reads.any(
+          (read) =>
+              targets.where((one) => one.name == read).firstOrNull?.depth ??
+              false,
+        );
+        if (!kept) {
+          found.add(
+            OrbisGraphProblem(
+              pass.name,
+              'reads no target that keeps depth — so there is no telling '
+              'what stands in front of what',
+            ),
+          );
+        }
+      }
       if (pass.kind == OrbisPassKind.reflection && pass.plane == null) {
         found.add(
           OrbisGraphProblem(
@@ -541,6 +583,77 @@ class OrbisRenderGraph {
 
   /// Whether every pass can run.
   bool get isRunnable => problems.isEmpty;
+
+  /// Whether this is the frame as the renderer draws it unasked: everything,
+  /// straight into the picture, with nothing after it.
+  bool get isStandard =>
+      passes.isEmpty ||
+      (passes.length == 1 &&
+          passes.first.kind == OrbisPassKind.scene &&
+          passes.first.into == null &&
+          passes.first.enabled);
+
+  /// What the world is drawn into when a scene's god rays or distortion need
+  /// a picture to work on, and what the god rays write when a distortion
+  /// comes after them.
+  static const String screenTarget = 'orbis.screen';
+  static const String raysTarget = 'orbis.rays';
+
+  /// This graph with god rays and distortion put into it.
+  ///
+  /// Only into the renderer's own graph. A scene that never built one should
+  /// get the shafts it asked for without learning what a pass is; a scene
+  /// that did build one has decided its own order, and an effect slotted in
+  /// by guesswork would land somewhere it did not mean — so it is returned
+  /// untouched and places an [OrbisEffect.godRays] or
+  /// [OrbisEffect.distortion] pass itself.
+  ///
+  /// Neither asked for is this graph, unchanged — which is what makes both
+  /// free when off: no texture, no extra pass, the same frame as before.
+  ///
+  /// God rays come before distortion, because hot air bends everything behind
+  /// it, the shafts included.
+  OrbisRenderGraph withScreenEffects({
+    bool godRays = false,
+    bool distortion = false,
+  }) {
+    if (!godRays && !distortion) return this;
+    if (!isStandard) return this;
+
+    final world = passes.isEmpty ? null : passes.first;
+    return OrbisRenderGraph(
+      targets: [
+        const OrbisTarget(name: screenTarget),
+        if (godRays && distortion)
+          const OrbisTarget(name: raysTarget, depth: false),
+      ],
+      passes: [
+        OrbisPass(
+          name: world?.name ?? 'scene',
+          into: screenTarget,
+          layers: world?.layers ?? 0xFF,
+        ),
+        if (godRays)
+          OrbisPass(
+            name: 'god rays',
+            kind: OrbisPassKind.effect,
+            effect: OrbisEffect.godRays,
+            reads: const [screenTarget],
+            into: distortion ? raysTarget : null,
+          ),
+        if (distortion)
+          OrbisPass(
+            name: 'distortion',
+            kind: OrbisPassKind.effect,
+            effect: OrbisEffect.distortion,
+            // The colour to bend first, and the depth to bend it by second.
+            reads: godRays
+                ? const [raysTarget, screenTarget]
+                : const [screenTarget],
+          ),
+      ],
+    );
+  }
 
   /// The targets nothing reads.
   ///
