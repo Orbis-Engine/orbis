@@ -85,10 +85,15 @@ internal class FilamentSurfaceSession(
     val textureId: Long
         get() = producer?.id() ?: -1L
 
-    fun start(backendOrdinal: Int, width: Int, height: Int): Map<String, Any> {
+    fun start(
+        backendOrdinal: Int,
+        width: Int,
+        height: Int,
+        requestFeatureLevel3: Boolean = false,
+    ): Map<String, Any> {
         check(handle == 0L) { "session already started" }
 
-        handle = SpikeRenderer.nativeCreate(backendOrdinal)
+        handle = SpikeRenderer.nativeCreate(backendOrdinal, requestFeatureLevel3)
         if (handle == 0L) {
             // A null Engine is the honest failure for a backend the device
             // cannot serve -- no Vulkan driver, or an OpenGL ES below what
@@ -96,7 +101,8 @@ internal class FilamentSurfaceSession(
             // texture" and "no engine" want completely different next steps.
             throw IllegalStateException(
                 "Filament refused to start on backend ordinal $backendOrdinal " +
-                    "(0=OpenGL ES, 1=Vulkan). See logcat tag Filament for the driver's reason.",
+                    "(0=OpenGL ES, 1=Vulkan)${if (requestFeatureLevel3) " at requested feature level 3" else ""}. " +
+                    "See logcat tag Filament for the driver's reason.",
             )
         }
 

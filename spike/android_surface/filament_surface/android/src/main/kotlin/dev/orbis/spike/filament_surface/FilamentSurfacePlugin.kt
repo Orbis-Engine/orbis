@@ -43,10 +43,11 @@ class FilamentSurfacePlugin :
                     }
                     val width = call.argument<Int>("width") ?: 720
                     val height = call.argument<Int>("height") ?: 720
+                    val requestFeatureLevel3 = call.argument<Boolean>("requestFeatureLevel3") ?: false
 
                     val s = FilamentSurfaceSession(registry)
                     session = s
-                    result.success(s.start(backend, width, height))
+                    result.success(s.start(backend, width, height, requestFeatureLevel3))
                 }
 
                 "stop" -> {

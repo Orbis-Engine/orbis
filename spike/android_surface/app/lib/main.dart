@@ -41,7 +41,7 @@ class _SpikeHomeState extends State<SpikeHome> {
   String? _error;
   Timer? _poll;
 
-  Future<void> _startWith(FilamentBackend backend) async {
+  Future<void> _startWith(FilamentBackend backend, {bool requestFeatureLevel3 = false}) async {
     setState(() => _error = null);
     try {
       // Square, not the full (tall, narrow) screen. The camera in
@@ -53,7 +53,12 @@ class _SpikeHomeState extends State<SpikeHome> {
       // physical pixels, not logical, so the texture is still sharp.
       final physical = View.of(context).physicalSize;
       final side = physical.shortestSide.round().clamp(1, 4096);
-      final info = await FilamentSurface.start(backend: backend, width: side, height: side);
+      final info = await FilamentSurface.start(
+        backend: backend,
+        width: side,
+        height: side,
+        requestFeatureLevel3: requestFeatureLevel3,
+      );
       if (!mounted) return;
       setState(() {
         _backend = backend;
@@ -167,6 +172,21 @@ class _SpikeHomeState extends State<SpikeHome> {
               key: const Key('start_vulkan'),
               onPressed: () => _startWith(FilamentBackend.vulkan),
               child: const Text('Vulkan', style: TextStyle(fontSize: 18)),
+            ),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: 260,
+            height: 64,
+            // Orbis's standard lit surface needs feature level 3. Vulkan
+            // reports *supporting* it here (see the overlay's supportedFL
+            // after the plain Vulkan button) without the engine actually
+            // running at it -- this button is the difference between a
+            // reported ceiling and one Filament will actually build.
+            child: ElevatedButton(
+              key: const Key('start_vulkan_fl3'),
+              onPressed: () => _startWith(FilamentBackend.vulkan, requestFeatureLevel3: true),
+              child: const Text('Vulkan (force FL3)', style: TextStyle(fontSize: 16)),
             ),
           ),
         ],

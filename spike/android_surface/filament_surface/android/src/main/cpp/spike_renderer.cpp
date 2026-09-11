@@ -139,18 +139,28 @@ const char* backendName(Engine::Backend b) {
 
 class SpikeRenderer {
 public:
-    static SpikeRenderer* create(Engine::Backend backend) {
+    // requestFeatureLevel3 exists only to answer one question this spike was
+    // built to answer: is a reported ceiling one Orbis's standard lit surface
+    // (feature level 3, twelve samplers) could actually reach, or only a
+    // number? Left false -- the default -- the engine settles at its own
+    // default level and getSupportedFeatureLevel() reports the honest device
+    // ceiling: asking for a level the device cannot serve makes build()
+    // return nullptr, which would tell us nothing about how far short it
+    // fell. Set true, it asks Filament for level 3 outright; if the backend
+    // was only ever going to grant level 1 or 2, build() returning nullptr
+    // here *is* the answer, logged before it happens so it is still visible.
+    static SpikeRenderer* create(Engine::Backend backend, bool requestFeatureLevel3 = false) {
         Engine::Builder builder;
         builder.backend(backend);
+        if (requestFeatureLevel3) {
+            LOGI("requesting feature level 3 outright for backend %s", backendName(backend));
+            builder.featureLevel(Engine::FeatureLevel::FEATURE_LEVEL_3);
+        }
 
-        // Deliberately *not* calling builder.featureLevel(): we want the engine
-        // at its own default so getSupportedFeatureLevel() reports the honest
-        // device ceiling rather than whatever we demanded. Asking for a level
-        // the device cannot serve makes build() return nullptr, which would
-        // tell us nothing about how far short it fell.
         Engine* engine = builder.build();
         if (engine == nullptr) {
-            LOGE("Engine::build() returned nullptr for backend %s", backendName(backend));
+            LOGE("Engine::build() returned nullptr for backend %s%s", backendName(backend),
+                    requestFeatureLevel3 ? " at requested feature level 3" : "");
             return nullptr;
         }
 
@@ -455,13 +465,14 @@ extern "C" {
 
 JNIEXPORT jlong JNICALL
 Java_dev_orbis_spike_filament_1surface_SpikeRenderer_nativeCreate(
-        JNIEnv*, jclass, jint backendOrdinal) {
+        JNIEnv*, jclass, jint backendOrdinal, jboolean requestFeatureLevel3) {
     // 0 = OpenGL ES, 1 = Vulkan. Kept as an int so the Dart side can ask for a
     // backend by name without the Kotlin layer knowing Filament's enum.
     const auto backend =
             backendOrdinal == 1 ? Engine::Backend::VULKAN : Engine::Backend::OPENGL;
-    LOGI("nativeCreate backend=%s", backendName(backend));
-    return reinterpret_cast<jlong>(SpikeRenderer::create(backend));
+    LOGI("nativeCreate backend=%s requestFeatureLevel3=%d", backendName(backend),
+            static_cast<int>(requestFeatureLevel3));
+    return reinterpret_cast<jlong>(SpikeRenderer::create(backend, requestFeatureLevel3));
 }
 
 JNIEXPORT jboolean JNICALL

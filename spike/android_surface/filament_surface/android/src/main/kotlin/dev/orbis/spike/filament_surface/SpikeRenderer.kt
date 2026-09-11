@@ -18,8 +18,16 @@ internal object SpikeRenderer {
         System.loadLibrary("orbis_spike")
     }
 
-    /** 0 = OpenGL ES, 1 = Vulkan. Returns 0 if the backend would not start. */
-    external fun nativeCreate(backendOrdinal: Int): Long
+    /**
+     * 0 = OpenGL ES, 1 = Vulkan. Returns 0 if the backend would not start.
+     *
+     * [requestFeatureLevel3] asks Filament for feature level 3 outright
+     * instead of leaving the engine at its own default -- see the comment on
+     * SpikeRenderer::create in spike_renderer.cpp for why that distinction
+     * matters: a reported *supported* level is not proof the engine actually
+     * reaches it.
+     */
+    external fun nativeCreate(backendOrdinal: Int, requestFeatureLevel3: Boolean = false): Long
 
     external fun nativeAttachSurface(handle: Long, surface: Any, width: Int, height: Int): Boolean
 

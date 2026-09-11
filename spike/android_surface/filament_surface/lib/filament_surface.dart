@@ -29,6 +29,12 @@ class FilamentSurface {
   /// Starts a session on [backend] at [width]x[height] texture pixels.
   /// Stops any session already running first -- see the plugin's `start`.
   ///
+  /// [requestFeatureLevel3] asks Filament for feature level 3 outright rather
+  /// than leaving the engine at its own default. Orbis's standard lit surface
+  /// needs it (twelve samplers); this is how the spike tells "the backend
+  /// reports it could reach level 3" apart from "the engine actually starts
+  /// there" -- see the native SpikeRenderer::create for why those can differ.
+  ///
   /// Returns what `describe()` would: textureId and the rest. Throws
   /// [PlatformException] if Filament would not start on this backend at all
   /// (no engine), which is a different failure from a black texture.
@@ -36,11 +42,13 @@ class FilamentSurface {
     required FilamentBackend backend,
     int width = 720,
     int height = 720,
+    bool requestFeatureLevel3 = false,
   }) async {
     final result = await _channel.invokeMapMethod<String, Object?>('start', {
       'backend': backend.wireName,
       'width': width,
       'height': height,
+      'requestFeatureLevel3': requestFeatureLevel3,
     });
     return result ?? const {};
   }
