@@ -131,6 +131,13 @@
   unchanged and still chosen wherever it was. On the iOS simulator this is the
   difference between no frame at all and a frame drawn.
 
+- **The renderer core runs in a browser.** `native/web` compiles the same
+  portable C++ and C ABI to WebAssembly with Emscripten — no shared source
+  changed — against a Filament built for the web, and a small host page draws
+  the headless program's scene into a `<canvas>` through the ABI alone. WebGL 2
+  is feature level 1, so the slim surface is chosen and the renderer's notes
+  say so. Not yet wired into the Flutter plugin.
+
 - `OrbisScene.copyWith` keeps `probes` and `field`, which it used to drop
   silently.
 
