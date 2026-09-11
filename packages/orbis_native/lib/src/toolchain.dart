@@ -43,15 +43,33 @@ class Toolchain {
   ///
   /// clang first because it is what macOS ships and what the engine itself is
   /// built with, so a script and the core disagree about the C++ runtime as
-  /// rarely as possible.
-  static Toolchain? find({
-    List<String> candidates = const ['clang++', 'c++', 'g++'],
-  }) {
-    for (final candidate in candidates) {
+  /// rarely as possible. On Windows that means `clang-cl` before plain
+  /// `clang++`: `clang-cl` speaks MSVC's command line and finds an installed
+  /// Visual Studio's headers and libraries the way `cl.exe` would, where
+  /// `clang++` on Windows only links cleanly against a MinGW-style
+  /// environment that a machine with Visual Studio alone does not have.
+  /// `cl` itself is the last resort, for a machine with Visual Studio and no
+  /// LLVM.
+  static Toolchain? find({List<String>? candidates}) {
+    final tried =
+        candidates ??
+        (Platform.isWindows
+            ? const ['clang-cl', 'clang++', 'cl']
+            : const ['clang++', 'c++', 'g++']);
+    for (final candidate in tried) {
       if (!_onPath(candidate)) continue;
+      // clang-cl and cl both take MSVC's command line; compile() spells the
+      // arguments accordingly for either.
+      final msvc = candidate == 'clang-cl' || candidate == 'cl';
       return Toolchain(
         compiler: candidate,
-        extraFlags: Platform.isMacOS
+        extraFlags: msvc
+            // /LD: build a DLL. There is no separate "undefined symbol"
+            // stance to take here the way -undefined error takes one on
+            // macOS — the MSVC linker already refuses an unresolved symbol
+            // by default.
+            ? const ['/LD']
+            : Platform.isMacOS
             // A dylib, and one whose install name is its own path, so the
             // loader does not go looking for it beside the executable.
             ? const ['-dynamiclib', '-undefined', 'error']
@@ -96,20 +114,47 @@ class Toolchain {
       '$name.$revision$librarySuffix',
     );
 
-    final arguments = <String>[
-      ...extraFlags,
-      '-std=c++17',
-      // On by default: a script is somebody's gameplay loop, and the point of
-      // writing it in C++ was that it is fast.
-      '-O2',
-      // Position-independent everywhere, which a loadable library must be.
-      '-fPIC',
-      for (final include in includes) ...['-I', include],
-      ...flags,
-      source.path,
-      '-o',
-      target.path,
-    ];
+    // clang-cl and cl take MSVC's command line, not clang's own — a
+    // different spelling for every flag below, not just the ones in
+    // extraFlags.
+    final msvc = compiler == 'clang-cl' || compiler == 'cl';
+    final arguments = msvc
+        ? <String>[
+            // The banner clang-cl and cl both print unasked, which would
+            // otherwise be the first line of "what the compiler said"
+            // whether it had anything to say or not.
+            '/nologo',
+            ...extraFlags,
+            '/std:c++17',
+            // On by default: a script is somebody's gameplay loop, and the
+            // point of writing it in C++ was that it is fast.
+            '/O2',
+            // The standard exception model. Without it a throw in a script
+            // is undefined behaviour rather than a stack unwind.
+            '/EHsc',
+            for (final include in includes) '/I$include',
+            ...flags,
+            source.path,
+            '/Fe:${target.path}',
+            // Otherwise the object file lands beside the source — which may
+            // be a project's asset folder, not somewhere this owns.
+            '/Fo:${target.path}.obj',
+          ]
+        : <String>[
+            ...extraFlags,
+            '-std=c++17',
+            // On by default: a script is somebody's gameplay loop, and the
+            // point of writing it in C++ was that it is fast.
+            '-O2',
+            // Position-independent everywhere, which a loadable library must
+            // be.
+            '-fPIC',
+            for (final include in includes) ...['-I', include],
+            ...flags,
+            source.path,
+            '-o',
+            target.path,
+          ];
 
     into.createSync(recursive: true);
 

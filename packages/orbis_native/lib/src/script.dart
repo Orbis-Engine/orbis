@@ -76,6 +76,47 @@ final class _Loader {
   }
 }
 
+/// The loader for Windows, which has none of `dlopen`'s family.
+///
+/// `LoadLibraryW` is `dlopen`, `GetProcAddress` is `dlsym` — close enough in
+/// shape that it is the same call once the name is UTF-8 — and `FreeLibrary`
+/// is `dlclose`. All three live in `kernel32.dll` rather than in the running
+/// executable's own export table, which is what [DynamicLibrary.process]
+/// would search: a script's symbols are found by opening *it*, not by asking
+/// the process about itself, and on Windows the process handle simply does
+/// not see into a DLL loaded after the fact the way `RTLD_DEFAULT` does on
+/// macOS and Linux.
+///
+/// Kept beside `_Loader` rather than folded into it, because the one call
+/// whose signature actually differs — opening the library, a wide string
+/// here against a UTF-8 one and a flag `dlopen` takes that this has no
+/// equivalent for — would otherwise hide behind a signature neither side
+/// really has.
+final class _WindowsLoader {
+  static final DynamicLibrary _kernel32 = DynamicLibrary.open('kernel32.dll');
+
+  static final Pointer<Void> Function(Pointer<Utf16>) open = _kernel32
+      .lookupFunction<
+        Pointer<Void> Function(Pointer<Utf16>),
+        Pointer<Void> Function(Pointer<Utf16>)
+      >('LoadLibraryW');
+
+  static final Pointer<Void> Function(Pointer<Void>, Pointer<Char>) symbol =
+      _kernel32.lookupFunction<
+        Pointer<Void> Function(Pointer<Void>, Pointer<Char>),
+        Pointer<Void> Function(Pointer<Void>, Pointer<Char>)
+      >('GetProcAddress');
+
+  static final int Function(Pointer<Void>) close = _kernel32
+      .lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('FreeLibrary');
+
+  static final int Function() lastError = _kernel32
+      .lookupFunction<Uint32 Function(), int Function()>('GetLastError');
+}
+
 /// A compiled script, loaded and running.
 ///
 /// The four questions and nothing else. What a script *is* — a `.cpp`, a
@@ -117,27 +158,41 @@ class NativeScript {
       throw ScriptError('${library.path} is not there.');
     }
 
-    final handle = using(
-      (arena) => _Loader.open(
-        library.path.toNativeUtf8(allocator: arena).cast<Char>(),
-        _Loader.flags,
-      ),
-    );
+    final handle = Platform.isWindows
+        ? using(
+            (arena) => _WindowsLoader.open(
+              library.path.toNativeUtf16(allocator: arena),
+            ),
+          )
+        : using(
+            (arena) => _Loader.open(
+              library.path.toNativeUtf8(allocator: arena).cast<Char>(),
+              _Loader.flags,
+            ),
+          );
     if (handle == nullptr) {
-      throw ScriptError(
-        '${_nameOf(library)} could not be loaded: ${_Loader.lastError()}',
-      );
+      // GetLastError is a code, not a message — FormatMessage would spell it
+      // out, but the number is enough to look up and this is already two
+      // loaders for the sake of one platform.
+      final why = Platform.isWindows
+          ? 'Windows error ${_WindowsLoader.lastError()}'
+          : _Loader.lastError();
+      throw ScriptError('${_nameOf(library)} could not be loaded: $why');
     }
 
-    Pointer<Void> find(String symbol) => using(
-      (arena) => _Loader.symbol(
-        handle,
-        symbol.toNativeUtf8(allocator: arena).cast<Char>(),
-      ),
-    );
+    Pointer<Void> find(String symbol) => using((arena) {
+      final name = symbol.toNativeUtf8(allocator: arena).cast<Char>();
+      return Platform.isWindows
+          ? _WindowsLoader.symbol(handle, name)
+          : _Loader.symbol(handle, name);
+    });
 
     void refuse(String why) {
-      _Loader.close(handle);
+      if (Platform.isWindows) {
+        _WindowsLoader.close(handle);
+      } else {
+        _Loader.close(handle);
+      }
       throw ScriptError(why);
     }
 
@@ -236,7 +291,11 @@ class NativeScript {
     if (_closed) return;
     stop();
     _closed = true;
-    _Loader.close(_handle);
+    if (Platform.isWindows) {
+      _WindowsLoader.close(_handle);
+    } else {
+      _Loader.close(_handle);
+    }
     try {
       if (_file.existsSync()) _file.deleteSync();
     } on FileSystemException {
