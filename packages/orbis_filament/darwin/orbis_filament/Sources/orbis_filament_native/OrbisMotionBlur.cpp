@@ -335,8 +335,10 @@ void MotionBlur::size(uint32_t width, uint32_t height, uint32_t tile) {
 
 void MotionBlur::releaseTargets() {
   // Render targets before the textures behind them. Nothing samples a render
-  // target, and every material sampling these textures is re-bound before
-  // anything is drawn with it again.
+  // target, and the materials that sample these textures are pointed at the
+  // new ones by prepare before any of them is drawn — which is why prepare
+  // binds them on every path it can take through a frame, and not only
+  // beside the draws that read them.
   for (RenderTarget **target : {&objectTarget_, &resolvedTarget_, &tileTarget_}) {
     if (*target != nullptr) engine_.destroy(*target);
     *target = nullptr;
@@ -476,6 +478,30 @@ void MotionBlur::prepare(Renderer &renderer, const Camera &camera,
   gather.setParameter("tile", int32_t(tile));
   gather.setParameter("samples", int32_t(samples));
 
+  // The resolve and tile passes' own samplers, bound here beside the
+  // gather's rather than beside the draws that read them, because this can
+  // return before it ever reaches those draws.
+  //
+  // Their instances are built once and kept for as long as the effect is
+  // wanted, and two of the textures they name are not theirs to keep: the
+  // three above are given back whenever the picture changes size, and the
+  // scene's depth belongs to the render graph, which destroys it outright
+  // the moment the graph changes. A frame with nothing moving returns below
+  // without reaching the old binding site — and just after a host switches
+  // scenes that is every frame, because setWanted has just forgotten what
+  // moved and the camera has not stirred yet. An instance carried over that
+  // return still names a destroyed texture, and the next frame that does
+  // draw it binds a freed handle, which Filament ends the process for.
+  MaterialInstance &resolve = *resolveScreen_.instance;
+  MaterialInstance &tiles = *tileScreen_.instance;
+  resolve.setParameter("objects", objectColour_, exact);
+  tiles.setParameter("velocity", resolved_, exact);
+  // Only when there is one. A graph whose target kept no depth has none to
+  // give, and binding nothing would leave the sampler unset rather than
+  // stale — and nothing draws the resolve pass without depth in any case,
+  // since both of the reasons to draw it below require one.
+  if (depth != nullptr) resolve.setParameter("depth", depth, exact);
+
   // The camera's part, rebuilt from depth. Only for a perspective camera:
   // the depth-to-distance step is near/depth, which is a perspective fact,
   // and an orthographic view is left to its objects' own motion.
@@ -497,9 +523,6 @@ void MotionBlur::prepare(Renderer &renderer, const Camera &camera,
     return;
   }
 
-  MaterialInstance &resolve = *resolveScreen_.instance;
-  resolve.setParameter("depth", depth, exact);
-  resolve.setParameter("objects", objectColour_, exact);
   resolve.setParameter("useObjects", drewObjects ? 1.0f : 0.0f);
   resolve.setParameter("near", float(camera.getNear()));
   resolve.setParameter("tangents", float2{float(1.0 / projection[0][0]),
@@ -515,8 +538,6 @@ void MotionBlur::prepare(Renderer &renderer, const Camera &camera,
   resolveScreen_.view->setViewport({0, 0, width_, height_});
   renderer.render(resolveScreen_.view);
 
-  MaterialInstance &tiles = *tileScreen_.instance;
-  tiles.setParameter("velocity", resolved_, exact);
   tiles.setParameter("tile", int32_t(tile));
   tiles.setParameter("tiles", grid);
   tiles.setParameter("size", pixels);
