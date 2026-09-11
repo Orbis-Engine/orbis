@@ -184,7 +184,9 @@ void main() {
       final steps = RegExp(
         r'constexpr float kSplatHarmonicSteps\s*=\s*([0-9.]+)f',
       ).firstMatch(splatNative);
-      final decode = RegExp(r'-\s*128\.0\)\s*/\s*([0-9.]+)').firstMatch(material);
+      final decode = RegExp(
+        r'-\s*128\.0\)\s*/\s*([0-9.]+)',
+      ).firstMatch(material);
       expect(steps, isNotNull);
       expect(decode, isNotNull);
       expect(double.parse(decode!.group(1)!), double.parse(steps!.group(1)!));

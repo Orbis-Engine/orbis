@@ -121,7 +121,10 @@ void main() {
     test('carry the sort in the low bit and the degree above it', () {
       expect(OrbisSplats(key: 1, path: 'a.ply').flags, 1 | (2 << 1));
       expect(OrbisSplats(key: 1, path: 'a.ply', harmonics: 0).flags, 1);
-      expect(OrbisSplats(key: 1, path: 'a.ply', harmonics: 1).flags, 1 | (1 << 1));
+      expect(
+        OrbisSplats(key: 1, path: 'a.ply', harmonics: 1).flags,
+        1 | (1 << 1),
+      );
       expect(
         OrbisSplats(key: 1, path: 'a.ply', sorted: false, harmonics: 3).flags,
         3 << 1,
