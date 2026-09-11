@@ -185,3 +185,62 @@ jobs:
         env:
           ORBIS_DUMP_FRAME: 30
         run: ../../orbis/tool/ci_draw_frame.sh build/macos/Build/Products/Debug/orbis_viewport.app
+
+  # The same renderer, linked for the other Apple platform.
+  #
+  # iOS shares one implementation with macOS under darwin/, so nothing above
+  # would notice an Apple-only call arriving in the portable core, a framework
+  # that exists on one platform and not the other, or a library missing from
+  # the xcframework's iOS slices — all of which have broken this before and
+  # none of which a macOS build sees. The simulator slice is what makes that
+  # checkable: it is the only one that builds and runs without a signing
+  # identity, so a device build stays out of CI until there is one.
+  #
+  # The gallery rather than the viewport, because it lives in this repository
+  # and carries every worked example, so this job needs no second checkout and
+  # a pull request can change what it builds. It is checked out to the same
+  # path as the job above so both share one Filament cache.
+  renderer-ios:
+    name: Renderer (iOS simulator)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orbis
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      # Same path and key as the macOS job, so whichever runs first pays for
+      # the download and the other does not. The SDK the two need is the same
+      # tarball pair: setup.sh fetches both flavours either way, because the
+      # mac one carries matc and matc only runs on the host.
+      - name: Cache Filament SDK
+        uses: actions/cache@v4
+        with:
+          path: orbis/packages/orbis_filament/darwin/third_party
+          key: filament-${{ runner.os }}-${{ hashFiles('orbis/packages/orbis_filament/darwin/setup.sh') }}
+
+      - name: Fetch Filament and compile materials
+        run: bash orbis/packages/orbis_filament/darwin/setup.sh
+
+      - name: Build the gallery for the simulator
+        working-directory: orbis/examples/gallery
+        run: flutter build ios --simulator --debug
+
+      # Running it as well as building it, for the reason the macOS job does:
+      # a Filament precondition aborts at runtime in a build that compiled
+      # perfectly. It cannot reach a frame today — the simulator's GPU is below
+      # the standard surface's feature level, which the script explains and
+      # reports rather than failing on — but it does prove the app launches,
+      # the plugin registers and the engine starts on a Metal device that is
+      # not this host's. That is the part a build cannot claim, and it is what
+      # would silently rot otherwise.
+      - name: Draw a frame on a simulator
+        working-directory: orbis/examples/gallery
+        env:
+          ORBIS_DUMP_FRAME: 30
+        run: ../../tool/ci_draw_frame_ios.sh build/ios/iphonesimulator/Runner.app

@@ -19,10 +19,20 @@ material {
     name : orbisLit,
     shadingModel : lit,
     // The third, for one reason: a material may have nine samplers below it
-    // however capable the hardware is, and the standard surface needs ten.
-    // The engine asks for the highest the device supports and clamps, so a
-    // device that cannot manage this compiles the other surfaces and leaves
-    // this one out rather than failing to start.
+    // however capable the hardware is, and the standard surface now binds
+    // twelve. matc enforces that itself — asking for the second here fails
+    // the build with "has feature level 2 and is using more than 9 samplers"
+    // — so the only way down is a surface with fewer samplers, not a smaller
+    // number on this line.
+    //
+    // A device below the third level does not quietly go without this
+    // surface: Filament refuses the material and the renderer aborts on the
+    // first lit object, which is every scene including the placeholder. The
+    // iOS simulator is such a device — its virtual GPU reports
+    // MTLGPUFamilyApple2, and Filament's Metal backend gives the third level
+    // only to MTLGPUFamilyApple6 and newer, so A13 and later. Reaching the
+    // simulator, and any iPhone older than an 11, means a lit surface with
+    // nine samplers or fewer.
     featureLevel : 3,
     blending : opaque,
     // Both the area lights and the irradiance field are handed back this

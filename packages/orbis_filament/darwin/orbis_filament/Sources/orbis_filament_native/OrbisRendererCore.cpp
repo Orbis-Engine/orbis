@@ -134,11 +134,20 @@ void Renderer::startWithWidth(uint32_t width, uint32_t height) {
   _pacing = getenv("ORBIS_PACE") != nullptr;
 
   // Asked for at the highest the device will give, because the standard
-  // surface needs a tenth sampler and Filament rations them by feature level:
+  // surface binds twelve samplers and Filament rations them by feature level:
   // a material may have nine below the third, whatever the hardware could
-  // manage. Metal on anything Orbis runs on reports the third — but it is
-  // asked for rather than assumed, because an engine built above what the
-  // device supports fails to build at all rather than falling back.
+  // manage. It is asked for rather than assumed, because an engine built
+  // above what the device supports fails to build at all rather than falling
+  // back.
+  //
+  // Raising it is not the same as getting it. Filament's Metal backend
+  // reports the third level for MTLGPUFamilyApple6 and newer — A13, so an
+  // iPhone 11 and later, and every Apple silicon Mac — and the second for
+  // anything else. The iOS simulator's virtual GPU is anything else: it
+  // reports MTLGPUFamilyApple2, so the clamp below settles on the second
+  // level and the standard surface is refused when the first lit object is
+  // built. That is an abort, not a degradation; there is no fallback surface
+  // to drop to yet.
   //
   // Which backend is the platform's, or the host's if it named one: see
   // OrbisBackend.cpp. Tried in turn where there is something to fall back to
