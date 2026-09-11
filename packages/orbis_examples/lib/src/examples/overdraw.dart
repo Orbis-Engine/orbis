@@ -17,8 +17,8 @@ import 'surface.dart' show linearOf;
 /// somewhere and behind them somewhere else, and no order of objects is the
 /// right order for every pixel. That is the case a depth prepass exists for.
 ///
-/// It is also the scene that says a prepass is not worth building here. On an
-/// Apple GPU, going from one slab to ninety-six of them — every one of them
+/// It is also the scene that says a prepass is not worth turning on here. On
+/// an Apple GPU, going from one slab to ninety-six of them — every one of them
 /// wearing the dearest surface the engine has, three specular lobes and seven
 /// lights — moves a frame from about 3.4 ms to about 3.9 ms, and forty-eight
 /// slabs sometimes measures *faster* than one. The hardware works out which
@@ -27,6 +27,25 @@ import 'surface.dart' show linearOf;
 /// second pass would only add the draws. Where it should pay is a desktop
 /// Vulkan or GL backend, which shades every layer it is handed in the order it
 /// is handed them.
+///
+/// That is no longer a prediction. [OrbisScene.depthPrepass] builds the second
+/// pass, and this scene was measured with it on and off, on an M4 Pro, three
+/// runs each way — 3.97 ms against 4.10 ms at ninety-six slabs, 3.84 against
+/// 3.89 at forty-eight, and 3.47 either way at one. The spread within a single
+/// setting is a hundredth of a millisecond, so the loss at ninety-six slabs is
+/// real rather than noise. A prepass on this hardware costs about three per
+/// cent and returns nothing, which is why the switch ships off.
+///
+/// To reproduce, with the clock pinned so two runs are the same picture:
+///
+/// ```sh
+/// ORBIS_EXAMPLE=Overdraw ORBIS_SLABS=96 ORBIS_SECONDS=2 ORBIS_CIRCLING=0 \
+///   ORBIS_PREPASS=0 ORBIS_DUMP_FRAME=180 orbis_gallery
+/// ```
+///
+/// and again with `ORBIS_PREPASS=1`; the frame's cost is on the
+/// `[orbis] frame 180:` line. Gallery frame dumps share one path, so two of
+/// these must not run at once.
 class OverdrawExample extends Example {
   OverdrawExample();
 

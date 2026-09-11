@@ -1263,18 +1263,29 @@ class OrbisScene {
   /// a tile-based renderer works out which surface wins a tile before it
   /// shades any of it, which is a prepass in silicon, so there is no fragment
   /// cost left for a second pass to save and the second pass is pure addition.
-  /// Measured on the Overdraw example — ninety-six heavy interpenetrating
-  /// slabs, the case built precisely to make overdraw expensive — turning
-  /// this on moved the frame the wrong way. On an immediate-mode GPU, which
-  /// shades every layer it is handed in the order it is handed them, it is
-  /// the opposite: the same scene under Mesa's software rasteriser came down
-  /// by about a third. See the Overdraw example for the numbers and the exact
-  /// commands.
+  /// Measured on an M4 Pro, on the Overdraw example — the scene built
+  /// precisely to make overdraw expensive, every slab crossing every other so
+  /// that no order of objects is the right order for any pixel — three runs
+  /// each way, medians of recent frames:
   ///
-  /// So: leave it off on Apple hardware, turn it on for a desktop Vulkan or
-  /// GL backend drawing a scene with real depth complexity, and measure
-  /// rather than assume — a scene whose objects barely overlap has nothing
-  /// for this to save and will only pay for the extra draws.
+  /// | slabs | prepass off | prepass on |
+  /// |-------|-------------|------------|
+  /// | 96    | 3.97 ms     | 4.10 ms    |
+  /// | 48    | 3.84 ms     | 3.89 ms    |
+  /// | 1     | 3.47 ms     | 3.47 ms    |
+  ///
+  /// Run to run within one setting the spread is a hundredth of a millisecond,
+  /// so the ninety-six-slab figure is a real and repeatable *loss* of about
+  /// three per cent, not noise: the second pass adds ninety-seven draws and
+  /// ninety-seven culls and saves nothing, because there was nothing to save.
+  /// See the Overdraw example for the exact commands.
+  ///
+  /// So: leave it off on Apple hardware. On an immediate-mode GPU — a desktop
+  /// Vulkan or GL backend, which shades every layer it is handed in the order
+  /// it is handed them — the arithmetic is the other way round and this is
+  /// what it exists for. Either way, measure rather than assume: a scene whose
+  /// objects barely overlap has nothing for this to save and will only pay for
+  /// the extra draws, which is exactly what the one-slab row above shows.
   ///
   /// **What it does not change.** The shaded draws keep the depth test they
   /// already had. Filament renders reversed-Z and its opaque draws test
