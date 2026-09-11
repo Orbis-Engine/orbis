@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!-- Replaced by flutter build's --base-href; must start and end with "/". -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="Spike: Filament (WebAssembly) rendering into a canvas inside a Flutter web app.">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <title>Orbis web canvas spike</title>
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <!--
+    Filament's web build: an Emscripten module plus Filament's own JavaScript
+    helpers, defining the global `Filament`. It finds filament.wasm beside
+    itself, from its own script URL. tool/build.sh copies both into
+    web/filament/, which is gitignored.
+  -->
+  <script src="filament/filament.js"></script>
+  <!--
+    The spike's JavaScript renderer, which owns Filament for each canvas and
+    defines `orbisWeb`, the one object Dart calls. Plain synchronous scripts,
+    so both globals exist before Flutter's code runs.
+  -->
+  <script src="orbis_filament_view.js"></script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
