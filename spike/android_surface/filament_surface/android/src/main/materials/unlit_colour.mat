@@ -1,0 +1,24 @@
+// The spike's only material: unlit, coloured by the vertex colour attribute.
+//
+// Unlit on purpose. The spike is proving how a frame reaches the screen, not
+// how it is lit, and an unlit material needs no light, no tangent frames and
+// no image-based lighting before it shows anything. Fewer things that can be
+// wrong on a new platform means a black texture points at presentation.
+//
+// Compiled by setup.sh with `-a opengl -a vulkan -p mobile`, so one package
+// carries the GLSL ES and SPIR-V variants and the same binary serves both
+// backends the spike tries.
+material {
+    name : spikeUnlitColour,
+    shadingModel : unlit,
+    requires : [
+        color
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = getColor();
+    }
+}
