@@ -90,6 +90,8 @@
 ///   ORBIS_SHUTTER          its shutter, in seconds
 library;
 
+import 'dart:convert';
+import 'dart:ffi' as ffi;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -100,8 +102,79 @@ import 'package:vector_math/vector_math_64.dart' hide Colors;
 
 void main() => runApp(const Gallery());
 
-double? _number(String name) =>
-    double.tryParse(Platform.environment[name] ?? '');
+/// The process's real environment variables.
+///
+/// `Platform.environment` already reads them correctly on every desktop
+/// platform this gallery runs on — that is how every `ORBIS_*` switch above
+/// has driven it from a shell for as long as they have existed. On the iOS
+/// simulator it comes back an empty map regardless of what the process was
+/// actually launched with: dumping it to a file mid-run showed
+/// `Platform.environment.length == 0` while `SIMCTL_CHILD_`-prefixed
+/// variables from that same launch were visible to `getenv` on the native
+/// side of the very same process. Nothing is wrong with the variables —
+/// `dart:io` is simply not reading them on this platform, which is also why
+/// every example looked the same however `ORBIS_EXAMPLE` was set: `_chosen`
+/// below always fell back to the first one.
+///
+/// Read once through dart:ffi, straight from libc rather than through
+/// `dart:io`, and used as the base a real `Platform.environment` reading is
+/// then layered onto — so anywhere it already worked (every desktop
+/// platform), the result is exactly what it always was, and anywhere it did
+/// not (iOS), the native reading fills the gap.
+final Map<String, String> _orbisEnv = _readEnvironment();
+
+Map<String, String> _readEnvironment() {
+  final result = <String, String>{};
+  try {
+    result.addAll(_readNativeEnvironment());
+  } catch (error) {
+    // No native environment either — carries on with whatever dart:io
+    // provides below, which on a platform without _NSGetEnviron is the
+    // same answer this file always acted on.
+    stderr.writeln('[orbis] could not read the native environment: $error');
+  }
+  // Layered on top rather than checked first: wherever dart:io already has
+  // an answer, that answer wins, so this changes nothing anywhere it did not
+  // need to.
+  result.addAll(Platform.environment);
+  return result;
+}
+
+/// `environ`, read straight through libc via `_NSGetEnviron` — Darwin's way
+/// to reach the global from a position-independent image, present in
+/// libSystem on macOS and iOS alike. Not behind a platform check: on macOS
+/// it reads the same process environment `Platform.environment` already
+/// does, so layering that on top afterwards leaves this platform untouched;
+/// on iOS it is the one channel proven to still carry it.
+Map<String, String> _readNativeEnvironment() {
+  final nsGetEnviron = ffi.DynamicLibrary.process().lookupFunction<
+      ffi.Pointer<ffi.Pointer<ffi.Pointer<ffi.Uint8>>> Function(),
+      ffi.Pointer<ffi.Pointer<ffi.Pointer<ffi.Uint8>>> Function()>(
+    '_NSGetEnviron',
+  );
+  final environ = nsGetEnviron().value; // char **, i.e. environ itself
+  final result = <String, String>{};
+  for (var i = 0; environ[i].address != 0; i++) {
+    final entry = _readCString(environ[i]);
+    final equals = entry.indexOf('=');
+    // A name-less entry ('=' as the first character) has been seen on
+    // Apple platforms; dart:io's own parser discards it the same way.
+    if (equals > 0) {
+      result[entry.substring(0, equals)] = entry.substring(equals + 1);
+    }
+  }
+  return result;
+}
+
+String _readCString(ffi.Pointer<ffi.Uint8> chars) {
+  final bytes = <int>[];
+  for (var i = 0; chars[i] != 0; i++) {
+    bytes.add(chars[i]);
+  }
+  return utf8.decode(bytes, allowMalformed: true);
+}
+
+double? _number(String name) => double.tryParse(_orbisEnv[name] ?? '');
 
 class Gallery extends StatelessWidget {
   const Gallery({super.key});
@@ -142,7 +215,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     // The whole chain: the world into a texture, its edges into another, the
     // weights into a third, and the blend onto the screen reading the first
     // and the third.
-    final smaa = Platform.environment['ORBIS_SMAA'];
+    final smaa = _orbisEnv['ORBIS_SMAA'];
     if (smaa == 'edgetarget') {
       // Edges into a target, then blitted to the screen by a sharpen set to
       // nothing. Tells apart "the weights shader is wrong" from "a target
@@ -247,7 +320,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
 
   /// The one-effect graph the environment asks for, or null for none.
   OrbisRenderGraph? _effectGraph() {
-    final named = Platform.environment['ORBIS_EFFECT'];
+    final named = _orbisEnv['ORBIS_EFFECT'];
     final amount = _number('ORBIS_SHARPEN');
     final effect = named == null || named.isEmpty
         ? (amount == null ? null : OrbisEffect.sharpen)
@@ -297,11 +370,11 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     // The pipeline and the post-processing are the example's own and are built
     // afresh for every frame, so setting them here cannot leak into the next
     // one.
-    if (Platform.environment['ORBIS_SHADOWS'] == '0') {
+    if (_orbisEnv['ORBIS_SHADOWS'] == '0') {
       drawn.pipeline.shadows.enabled = false;
     }
-    if (Platform.environment['ORBIS_POST'] == '0') drawn.post.enabled = false;
-    return switch (Platform.environment['ORBIS_BATCHING']) {
+    if (_orbisEnv['ORBIS_POST'] == '0') drawn.post.enabled = false;
+    return switch (_orbisEnv['ORBIS_BATCHING']) {
       '1' => drawn.copyWith(batching: true),
       '0' => drawn.copyWith(batching: false),
       _ => drawn,
@@ -319,7 +392,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
           mesh: path,
           transform: Matrix4.identity(),
           colour: Vector3(1, 1, 1),
-          morphWeights: switch (Platform.environment['ORBIS_MORPH']) {
+          morphWeights: switch (_orbisEnv['ORBIS_MORPH']) {
             final set? when set.isNotEmpty =>
               set.split(',').map((one) => double.parse(one.trim())).toList(),
             _ => null,
@@ -345,7 +418,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
   }
 
   Example _chosen() {
-    final wanted = Platform.environment['ORBIS_EXAMPLE'];
+    final wanted = _orbisEnv['ORBIS_EXAMPLE'];
     if (wanted == null || wanted.isEmpty) return _all.first;
     return _all.firstWhere(
       (one) => one.name.toLowerCase() == wanted.toLowerCase(),
@@ -368,37 +441,37 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     // it. This hands the camera back.
     final example = _example;
     if (example is VoxelExample) {
-      if (Platform.environment['ORBIS_WALK'] == '0') example.walking = false;
+      if (_orbisEnv['ORBIS_WALK'] == '0') example.walking = false;
       final far = _number('ORBIS_RANGE');
       if (far != null) example.range = far;
-      if (Platform.environment['ORBIS_TREES'] == '0') example.trees = false;
+      if (_orbisEnv['ORBIS_TREES'] == '0') example.trees = false;
     }
     if (example is ProbesExample) {
       example.intensity = _number('ORBIS_PROBE') ?? example.intensity;
       example.roughness = _number('ORBIS_ROUGHNESS') ?? example.roughness;
-      if (Platform.environment['ORBIS_PROBE_OFF'] == '1') example.on = false;
+      if (_orbisEnv['ORBIS_PROBE_OFF'] == '1') example.on = false;
     }
     if (example is LightsExample) {
-      final kind = Platform.environment['ORBIS_LIGHT'];
+      final kind = _orbisEnv['ORBIS_LIGHT'];
       if (kind != null) example.kind = kind;
       final lumens = _number('ORBIS_LUMENS');
       if (lumens != null) example.intensity = lumens;
       example.panelWidth = _number('ORBIS_PANEL_W') ?? example.panelWidth;
       example.panelHeight = _number('ORBIS_PANEL_H') ?? example.panelHeight;
       // Still, so two renders of the same angle are the same picture.
-      if (Platform.environment['ORBIS_CIRCLING'] == '0') {
+      if (_orbisEnv['ORBIS_CIRCLING'] == '0') {
         example.orbiting = false;
       }
     }
     if (example is PanelShadowExample) {
-      if (Platform.environment['ORBIS_PANEL_SHADOW'] == '0') {
+      if (_orbisEnv['ORBIS_PANEL_SHADOW'] == '0') {
         example.shadows = false;
       }
       example.panel = _number('ORBIS_PANEL') ?? example.panel;
       example.height = _number('ORBIS_PANEL_HEIGHT') ?? example.height;
     }
     if (example is ShadowsExample) {
-      final light = Platform.environment['ORBIS_SHADOW_LIGHT'];
+      final light = _orbisEnv['ORBIS_SHADOW_LIGHT'];
       if (light != null) {
         example.light = ShadowLight.values.firstWhere(
           (one) => one.label == light,
@@ -406,7 +479,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
         );
       }
       final shadows = example.shadows;
-      final kind = Platform.environment['ORBIS_SHADOW_KIND'];
+      final kind = _orbisEnv['ORBIS_SHADOW_KIND'];
       if (kind != null) {
         shadows.kind = OrbisShadowKind.values.firstWhere(
           (one) => one.label == kind,
@@ -421,7 +494,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
         example.handSplits = true;
         example.firstSplit = split;
       }
-      if (Platform.environment['ORBIS_SHADOW_CONTACT'] == '1') {
+      if (_orbisEnv['ORBIS_SHADOW_CONTACT'] == '1') {
         shadows.contact = true;
       }
       shadows.contactDistance =
@@ -432,17 +505,17 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     if (example is FieldExample) {
       example.intensity = _number('ORBIS_FIELD') ?? example.intensity;
       example.retention = _number('ORBIS_RETENTION') ?? example.retention;
-      if (Platform.environment['ORBIS_FIELD_OFF'] == '1') example.on = false;
+      if (_orbisEnv['ORBIS_FIELD_OFF'] == '1') example.on = false;
     }
     if (example is BatchingExample) {
       example.count = _number('ORBIS_CRATES') ?? example.count;
-      example.palette = Platform.environment['ORBIS_PALETTE'] ?? example.palette;
-      if (Platform.environment['ORBIS_BATCH_MATERIAL'] == '1') {
+      example.palette = _orbisEnv['ORBIS_PALETTE'] ?? example.palette;
+      if (_orbisEnv['ORBIS_BATCH_MATERIAL'] == '1') {
         example.material = true;
       }
-      final mesh = Platform.environment['ORBIS_BATCH_MESH'];
+      final mesh = _orbisEnv['ORBIS_BATCH_MESH'];
       if (mesh != null && mesh.isNotEmpty) example.mesh = mesh;
-      if (Platform.environment['ORBIS_MOVING'] == '0') example.moving = false;
+      if (_orbisEnv['ORBIS_MOVING'] == '0') example.moving = false;
     }
     if (example is OverdrawExample) {
       example.slabs = _number('ORBIS_SLABS') ?? example.slabs;
@@ -457,10 +530,10 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       example.density = _number('ORBIS_GODRAY_DENSITY') ?? example.density;
     }
     if (example is DistortionExample) {
-      if (Platform.environment['ORBIS_SHOCKWAVE'] == '0') {
+      if (_orbisEnv['ORBIS_SHOCKWAVE'] == '0') {
         example.shockwave = false;
       }
-      if (Platform.environment['ORBIS_HAZE'] == '0') example.haze = false;
+      if (_orbisEnv['ORBIS_HAZE'] == '0') example.haze = false;
       example.lens = _number('ORBIS_LENS') ?? example.lens;
       example.chromatic = _number('ORBIS_CHROMATIC') ?? example.chromatic;
       example.strength = _number('ORBIS_WAVE') ?? example.strength;
@@ -468,10 +541,10 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     if (example is BounceExample) {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;
       example.reach = _number('ORBIS_BOUNCE_RADIUS') ?? example.reach;
-      if (Platform.environment['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
+      if (_orbisEnv['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
     }
     if (example is DecalsExample) {
-      final environment = Platform.environment;
+      final environment = _orbisEnv;
       if (environment['ORBIS_DECALS_OFF'] == '1') example.on = false;
       if (environment['ORBIS_DECAL_FADE_OFF'] == '1') example.angleFade = false;
       if (environment['ORBIS_DECAL_MASK_OFF'] == '1') {
@@ -487,7 +560,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
         example.along = at;
       }
       example.blend = _number('ORBIS_VOLUME_BLEND') ?? example.blend;
-      if (Platform.environment['ORBIS_VOLUMES_OFF'] == '1') {
+      if (_orbisEnv['ORBIS_VOLUMES_OFF'] == '1') {
         example.volumes = false;
       }
       // The numbers the frame was drawn with, beside the frame. A blend is
@@ -512,39 +585,39 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     }
 
     if (example is OutlineExample) {
-      if (Platform.environment['ORBIS_OUTLINE'] == '0') example.on = false;
-      if (Platform.environment['ORBIS_OUTLINE_OTHERS'] == '0') {
+      if (_orbisEnv['ORBIS_OUTLINE'] == '0') example.on = false;
+      if (_orbisEnv['ORBIS_OUTLINE_OTHERS'] == '0') {
         example.others = false;
       }
       example.width = _number('ORBIS_OUTLINE_WIDTH') ?? example.width;
-      final hidden = Platform.environment['ORBIS_OUTLINE_HIDDEN'];
+      final hidden = _orbisEnv['ORBIS_OUTLINE_HIDDEN'];
       if (hidden != null && hidden.isNotEmpty) {
         example.occluded = OrbisOccluded.values.byName(hidden);
       }
-      final aa = Platform.environment['ORBIS_AA'];
+      final aa = _orbisEnv['ORBIS_AA'];
       if (aa != null && aa.isNotEmpty) {
         example.antiAliasing = AntiAliasing.values.byName(aa);
       }
     }
 
     if (example is SplatsExample) {
-      final capture = Platform.environment['ORBIS_SPLAT'];
+      final capture = _orbisEnv['ORBIS_SPLAT'];
       if (capture != null && capture.isNotEmpty) example.path = capture;
       example.count = _number('ORBIS_SPLAT_COUNT')?.round() ?? example.count;
-      if (Platform.environment['ORBIS_SPLAT_SORT'] == '0') {
+      if (_orbisEnv['ORBIS_SPLAT_SORT'] == '0') {
         example.sorted = false;
       }
-      if (Platform.environment['ORBIS_SPLAT_PILLAR'] == '0') {
+      if (_orbisEnv['ORBIS_SPLAT_PILLAR'] == '0') {
         example.pillar = false;
       }
     }
 
     if (example is MotionBlurExample) {
-      if (Platform.environment['ORBIS_MOTION'] == '0') example.on = false;
-      if (Platform.environment['ORBIS_MOTION_OBJECTS'] == '0') {
+      if (_orbisEnv['ORBIS_MOTION'] == '0') example.on = false;
+      if (_orbisEnv['ORBIS_MOTION_OBJECTS'] == '0') {
         example.objects = false;
       }
-      if (Platform.environment['ORBIS_PAN'] == '1') example.panning = true;
+      if (_orbisEnv['ORBIS_PAN'] == '1') example.panning = true;
       example.shutter = _number('ORBIS_SHUTTER') ?? example.shutter;
     }
 
@@ -576,7 +649,7 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
     body: GestureDetector(
       onPanUpdate: (details) => setState(() => _look.orbit(details.delta)),
       child: OrbisView(
-        scene: switch (Platform.environment['ORBIS_MESH']) {
+        scene: switch (_orbisEnv['ORBIS_MESH']) {
           final path? when path.isNotEmpty => _justTheMesh(path),
           // An effect over a real scene rather than only over a lone model.
           // An effect that has only ever been seen against one mesh on a
