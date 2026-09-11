@@ -66,5 +66,17 @@ class OrbisSurface {
   virtual void writeFrame(int index) = 0;
 };
 
-/// The implementation for whichever platform this was built for.
+/// The implementation for whichever platform this was built for: the
+/// texture-sharing surface a Flutter plugin hands to Flutter. Only Apple has
+/// one so far (OrbisSurfaceApple.mm).
 OrbisSurface* OrbisCreateSurface();
+
+/// Frames drawn into an offscreen swap chain nobody sees, and read back with
+/// orbis::Renderer::requestCapture. Tests, servers, and a console host that
+/// has not opened a window. Every platform (OrbisSurfaceHeadless.cpp).
+OrbisSurface* OrbisCreateHeadlessSurface();
+
+/// Frames drawn straight into a native window: an ANativeWindow* on Android,
+/// an HWND on Windows, an X11 Window or wl_surface on Linux, a CAMetalLayer*
+/// on Apple — whatever Filament's createSwapChain takes on that platform.
+OrbisSurface* OrbisCreateWindowSurface(void* window);
