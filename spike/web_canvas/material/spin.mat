@@ -1,0 +1,28 @@
+// The spike's one material: the same lit surface as spike/lit.mat, which
+// proved the Apple path, so the two spikes differ only in where they present.
+//
+// Compiled by tool/build.sh with `matc -a opengl -p mobile`: the web build of
+// Filament runs its OpenGL backend over WebGL2, which is OpenGL ES 3.0 in all
+// but name, so it wants the ESSL ("mobile") shaders, not the desktop GLSL ones.
+// A desktop-only package fails to load in the browser.
+material {
+    name : orbisSpin,
+    shadingModel : lit,
+    // WebGL2 is Filament feature level 1 (OpenGL ES 3.0). Saying so here makes
+    // matc refuse anything that would need more, rather than the browser.
+    featureLevel : 1,
+    parameters : [
+        { type : float3, name : baseColor },
+        { type : float,  name : roughness },
+        { type : float,  name : metallic }
+    ],
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor.rgb = materialParams.baseColor;
+        material.roughness     = materialParams.roughness;
+        material.metallic      = materialParams.metallic;
+    }
+}
