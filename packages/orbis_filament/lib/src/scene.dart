@@ -1170,9 +1170,17 @@ class OrbisScene {
   /// is Filament's, switched on engine-wide, and on Filament 1.76 that switch
   /// makes some scenes come back *entirely* black — every pixel nought, sky
   /// included — with no way to ask beforehand whether a given scene is one of
-  /// them. So a scene that turns this on has to be looked at with it on. Until
-  /// that is traced or the merging is done by hand instead, the default stays
-  /// off so that no scene which has never been looked at can be affected.
+  /// them. So a scene that turns this on has to be looked at with it on.
+  ///
+  /// The cause is known: Filament's automatic instancing could swallow a
+  /// custom command — in practice the colour-grading subpass — into the draw
+  /// sorted beside it, so the subpass never ran and the tone-mapped image was
+  /// never written. A one-line fix exists on Orbis's Filament fork, and
+  /// against a Filament built with it every scene that used to come back black
+  /// is bit-identical batched and unbatched. It is not in any Filament release
+  /// yet, so the default stays off: this package ships against the stock
+  /// release, where the fault is still there. Point `ORBIS_FILAMENT_SRC` at a
+  /// build of the fork and it is safe to turn on.
   final bool batching;
 
   /// The highest layer an object may be on.
