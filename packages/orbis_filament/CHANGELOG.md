@@ -58,16 +58,34 @@
   unchanged and moving one rewrites only its slot. It no longer uses
   Filament's engine-wide automatic instancing, so it works on stock Filament,
   where that switch blacks out whole frames. Three thousand crates batched
-  take about a fifth of the CPU time and a third of the GPU time of the same
-  crates drawn one by one. It is off by default for one measured reason: where
-  nothing batched casts a shadow, batched and unbatched frames are
-  bit-identical, but a batched group that casts shadows changes how Filament
-  fits its shadow cascades, and 4.4% of pixels differ by an average of 2.5
-  levels in 255. A group's bounding box is the union of its members', so one
-  visible member draws its whole group. The frame's stats report how many
-  objects were batched and into how many groups. A depth prepass was measured
-  and not built: on Apple's tile-based GPUs there is no overdraw cost for it
-  to remove.
+  take about a fifth of the CPU time and three fifths of the GPU time of the
+  same crates drawn one by one: 0.79 ms of CPU down to 0.15, 6.2 ms of GPU
+  down to 3.8, and three thousand and three renderables down to fifty-one.
+  It is off by default because a batched group that casts shadows still moves
+  pixels. With the clock pinned, two runs of the same frame are bit-identical,
+  and batched against unbatched 2.97% of pixels differ — 2.6 levels in 255 on
+  average, 68 at the worst — all of it along the edges of shadows. With the
+  shadow pass off the two frames are identical, which is what places it there.
+
+  **It is not the group's bounding box, and not how Filament fits its
+  cascades.** That was the standing explanation and it is wrong. A group's box
+  is the union of its members', so the test is to shrink the group: sixty-four
+  members to a chunk differ by 2.97% of pixels, thirty-two by 2.96%, and one
+  member to a chunk — where every number a cascade is fitted from is identical
+  to the unbatched frame, the same box, the same renderable count, the same
+  culling — still by 2.75%. Nine tenths of the difference survives the thing
+  that was supposed to cause all of it. Two further checks agree: the
+  world-space caster and receiver volumes are identical either way, because a
+  chunk's box is the exact union of its members' and a union of unions is the
+  same union; and squaring every crate to the axes, so no transform can round
+  differently, leaves 3.28%. What remains is something in the instanced draw
+  path that shows only through the shadow pass, and it is not yet named — so
+  the fix that was expected to work, handing Filament the shadow scene bounds
+  from the embedder, would have addressed about a fourteenth of the
+  difference and was not made. The frame's stats report how many objects were
+  batched and into how many groups. A depth prepass was measured and not
+  built: on Apple's tile-based GPUs there is no overdraw cost for it to
+  remove.
 
 - **God rays and screen distortion.** `OrbisScene.godRays` adds shafts of light
   from the scene's own directional light, by Mitchell's screen-space light

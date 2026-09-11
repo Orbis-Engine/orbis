@@ -1194,24 +1194,36 @@ class OrbisScene {
   /// caster among them, and on forty-eight overlapping slabs sharing one
   /// material. Where a batched group also casts shadows — crates in a
   /// pattern, one in five, is the case this was measured on — the frame is
-  /// close but not bit-identical: about four in a hundred pixels differ,
-  /// nearly all by one to three parts in two hundred and fifty-five, too
-  /// small to see, concentrated along the edges of shadows rather than
-  /// scattered across every silhouette or missing from a whole object.
-  /// Turning shadows off, or grouping the same crates without any of them
-  /// casting, both make the difference vanish, which places the cause in how
-  /// Filament's shadow pass fits itself to a *chunked* set of casters rather
-  /// than in anything this renderer decides — sorting a chunk's members to
+  /// close but not bit-identical: with the clock pinned, 2.97% of pixels
+  /// differ, by 2.6 parts in 255 on average and 68 at the worst, along the
+  /// edges of shadows rather than scattered across every silhouette or
+  /// missing from a whole object. Two runs of the same frame are
+  /// bit-identical, so that is a real difference and not noise. Turning the
+  /// shadow pass off makes it vanish, which is what places it there.
+  ///
+  /// It is *not* the group's bounding box, and not how Filament fits its
+  /// cascades. That was the explanation this comment used to give, and it is
+  /// wrong. A group's box is the union of its members', so the test is to
+  /// shrink the group: sixty-four members to a chunk differ by 2.97% of
+  /// pixels, thirty-two by 2.96%, and one member to a chunk — where every
+  /// number a cascade is fitted from is identical to the unbatched frame,
+  /// the same box, the same renderable count, the same culling — still by
+  /// 2.75%. Nine tenths of the difference survives the thing that was
+  /// supposed to cause it. Squaring every crate to the axes, so no transform
+  /// can round differently, leaves 3.28%. Sorting a chunk's members to
   /// tighten its box, and giving a chunk every per-renderable shadow setting
   /// an individual object would have had, were both tried and neither moved
-  /// the result, which is what says so. So: proven bit-identical wherever
-  /// nothing casts a shadow onto or out of a batched group, not proven
-  /// otherwise — which is why this stays off by default rather than on,
-  /// even though most scenes that turn it on will never notice the
-  /// difference. Turning it on is safe in the sense that mattered most: it
-  /// no longer touches the Filament feature that used to blacken a frame
-  /// outright (see below), so the worst this can now do is a handful of
-  /// sub-visible pixels near a shadow's edge, never a black screen.
+  /// the result — which reads as evidence for this conclusion rather than
+  /// against it. What is left is something in the instanced draw path that
+  /// shows only through the shadow pass, and it is not yet named.
+  ///
+  /// So this stays off by default: the difference is far above the noise,
+  /// which with a pinned clock is exactly nothing. Turning it on is safe in
+  /// the sense that mattered most: it no longer touches the Filament feature
+  /// that used to blacken a frame outright (see below), so the worst this
+  /// can now do is a scattering of pixels near a shadow's edge, never a
+  /// black screen. A scene where nothing batched casts a shadow stays
+  /// bit-identical.
   ///
   /// **Not Filament's automatic instancing, and deliberately so.** An
   /// earlier version of this switched on `Engine::setAutomaticInstancingEnabled`
