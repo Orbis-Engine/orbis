@@ -90,6 +90,36 @@
 - The plugin read a render graph of twelve or more passes out of step: it
   divided the pass list by twelve floats where a pass is thirteen.
 
+- **The black frames that made batching experimental are a fault in Filament,
+  and it is traced.** `RenderPass::instanceify()` tested custom commands for
+  equivalence alongside draws, and a custom command carries no primitive
+  info — only its key is written — so it holds whatever the command arena last
+  contained. Where that stale copy matched the draw beside it, the custom
+  command was folded into that draw's instanced run and never executed. The
+  one this reaches is the colour-grading subpass, sorted last of all: without
+  it the tone-mapped attachment keeps its clear value and the whole frame, sky
+  included, comes back black — which is why it looked scene-dependent and
+  unrelated to what was actually merged. An eleven-line fix with a regression
+  test sits on Orbis's Filament fork, and against a Filament built with it
+  every scene that used to fail is bit-identical batched and unbatched, with
+  the saving unchanged (3000 crates: 6.08 ms down to 3.56 ms). It is in no
+  Filament release, so `batching` still defaults to off; the documentation now
+  says what the fault is and what would have to be true to change that.
+
+- **What a device below the standard surface's feature level really does**, now
+  said where three comments said otherwise. The lit surface declares Filament
+  feature level 3, because `matc` allows nine samplers below that and the
+  surface binds twelve. A device that cannot manage it does not quietly go
+  without: it refuses the material and the renderer aborts on the first lit
+  object, before any scene is chosen. Filament's Metal backend grants the third
+  level only to `MTLGPUFamilyApple6` and newer — A13, so iPhone 11 onwards —
+  and to every Apple silicon Mac; the iOS simulator's virtual GPU reports
+  `MTLGPUFamilyApple2`, so it sits below the bar and nothing draws there.
+  Lowering the declaration is not the fix: at level 2 the build fails with
+  "using more than 9 samplers" despite that level's sixteen texture units. The
+  gallery now has an iOS simulator runner and CI builds and runs it, with a
+  known feature-level refusal reported loudly rather than passed off as a pass.
+
 - `OrbisScene.copyWith` keeps `probes` and `field`, which it used to drop
   silently.
 
