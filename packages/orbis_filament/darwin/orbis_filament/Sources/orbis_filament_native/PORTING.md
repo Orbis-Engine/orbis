@@ -75,8 +75,20 @@ Proven on this Mac:
   include only `orbis_renderer.h`: the C ABI's test, which passes, and a
   headless host that draws a scene offscreen and writes a PNG.
 
+Proven on the iOS simulator, which is the second platform the same sources
+serve and the only one that runs without a signing identity:
+
+- The whole package builds and links for the simulator with no change to any
+  source — core, C ABI, platform layer, wrapper and plugin — against the
+  xcframework's `ios-arm64_x86_64-simulator` slice.
+- The app launches, the plugin registers, and a Filament Metal engine is
+  created on the simulator's GPU. `flutter build ios --simulator` and a run
+  are now a CI job beside the macOS one.
+
 Not proven:
 
+- A frame on iOS. The simulator stops at the feature level above; a device
+  needs a signing identity there is none of.
 - A Linux, Android or Windows build. Docker's daemon did not answer, so the
   core has not been compiled against a Linux sysroot or linked against the
   Linux release.
@@ -95,10 +107,21 @@ OpenGL alone, 13.27 MiB for Vulkan and OpenGL, and 18.21 MiB for all.
 `lit.mat` declares `featureLevel : 3`: the standard surface binds twelve
 samplers (seven maps, the light data, the area shadow, the field atlas and
 two for decals), and Filament allows a material nine below the third level.
-Every other material is feature level 1. OpenGL ES 3.0, WebGL 2 and desktop
-OpenGL below 4.3 are feature level 1, so on those the standard surface does
-not load, and the renderer does not start. Reaching them means a lit surface
-with nine samplers or fewer.
+matc enforces that at build time, so the declaration cannot simply be
+lowered — `featureLevel : 2` fails with "has feature level 2 and is using
+more than 9 samplers", the second level's sixteen texture units
+notwithstanding. Every other material is feature level 1. OpenGL ES 3.0,
+WebGL 2 and desktop OpenGL below 4.3 are feature level 1, so on those the
+standard surface does not load, and the renderer does not start. Reaching
+them means a lit surface with nine samplers or fewer.
+
+Metal is not automatically above that bar. `MetalDriver::getFeatureLevel`
+returns the third level for `MTLGPUFamilyApple6` or `MTLGPUFamilyMac2` and
+newer, and the second for everything else — so A13 and later (an iPhone 11
+onwards) and every Apple silicon Mac, but *not* the iOS simulator, whose
+virtual GPU reports `MTLGPUFamilyApple2`. On the simulator the engine starts
+at the second level and aborts when the first lit object is built. There is
+no degradation path: the renderer has no fallback surface to drop to.
 
 ## The audit this started from
 
