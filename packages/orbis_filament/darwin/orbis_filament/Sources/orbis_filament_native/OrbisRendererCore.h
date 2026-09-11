@@ -521,6 +521,16 @@ constexpr uint32_t kAreaLightBudget = 16;
 /// sit after the four every rectangle needs rather than among them.
 constexpr uint32_t kAreaLightTexels = 9;
 
+/// Where the slim surface's decal rows start inside lightData: sixty four
+/// rows of two fitted tables, then the sixteen the rectangles occupy.
+///
+/// Below Filament's third feature level a material has nine samplers to
+/// spend, not ten, so decalData has no sampler of its own there — its rows
+/// are appended to lightData instead, which is read by texelFetch already
+/// and does not mind a third tenant. The standard surface never uses this:
+/// it keeps decalData as its own texture, where there is a sampler to spare.
+constexpr uint32_t kSlimDecalRow = 64 + kAreaLightBudget;
+
 /// How wide the one shadow map is, in pixels.
 ///
 /// One map, not an atlas, and one casting rectangle rather than sixteen. A
@@ -1111,6 +1121,14 @@ class Renderer {
   /// blending variants it never draws.
   filament::Material *_surfaces[kSurfaceCount]{};
 
+  /// Whether this engine cannot manage the standard lit surface's feature
+  /// level, decided once in startWithWidth from what the device answered and
+  /// never revisited — a GPU does not grow samplers mid-session. surfaceAt
+  /// reads it to build the slim five packages in place of the standard
+  /// five, and everywhere a sampler the slim surface does not declare would
+  /// otherwise be bound reads it too.
+  bool _slimSurface{};
+
   /// Every material the host has named, by its key.
   std::unordered_map<int64_t, Surfaced> _materials{};
 
@@ -1369,6 +1387,13 @@ class Renderer {
   /// honour. Replaced on every publish, so fixing the scene clears it.
   Notes _objectNotes{};
   Notes _lightNotes{};
+
+  /// What the slim surface cost, said once rather than left for a host to
+  /// notice by its absence. "surface" is set once, in startWithWidth, and
+  /// stays for the renderer's life; "field" comes and goes with whether the
+  /// current scene actually asks for a field, the same way areaShadows in
+  /// _lightNotes comes and goes with whether a light asks to cast.
+  Notes _surfaceNotes{};
 
   bool _sceneIsOwnedByHost{};
   Skybox *_skybox{};
