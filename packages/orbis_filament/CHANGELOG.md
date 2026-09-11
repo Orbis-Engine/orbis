@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.22.0
+
+- **A rectangular light's shadow now actually falls.** The depth map it drew
+  was compared in the wrong units — Filament renders reversed-Z with the far
+  plane at infinity, and the projection a camera hands out is neither — and
+  the lookup read the map the wrong way up on Metal and Vulkan; either alone
+  gave a scene that rendered identically with the panel casting and not. The
+  lookup is now percentage-closer soft shadows, so the penumbra comes from the
+  panel's real size and the gap it bridges: 12 pixels wide under a one-metre
+  panel and 36 under a four-metre one. Filament's own shadow settings are
+  exposed alongside it — cascade splits placed by hand, PCSS penumbra scales,
+  contact-shadow trace length and steps, and the variance-map options — all
+  defaulting to Filament's own values, so no existing scene changes. Shadow
+  caching is not reachable through Filament's API and is not attempted.
+
+- **Environment volumes.** `OrbisScene.volumes` takes `OrbisEnvironmentVolume`s
+  — a turned box or a sphere, with a blend distance, a priority and a weight —
+  whose `OrbisEnvironmentOverrides` change the fog, exposure, sky ambient and
+  colour, image-based light intensity and rotation, bloom and colour grade
+  within a region, fading smoothly across the blend distance. An override left
+  null leaves that setting alone. They are resolved against the camera by a
+  pure Dart resolver (`OrbisScene.resolved()`) when the scene is sent, so the
+  renderer and the scene message are unchanged: lux blends in log space,
+  exposure in stops, rotation the short way round, colours in linear light.
+
+- **Projected decals.** `OrbisScene.decals` takes up to 32 `OrbisDecal`s, each
+  a box that throws a picture or a tint onto every lit surface inside it. They
+  are painted into base colour, and optionally roughness and metalness, before
+  the surface is lit, so they take shadows and highlights like what is under
+  them. Each has an angle fade that keeps it off surfaces edge-on to its
+  projector, a layer mask and a sort order; a decal past the budget, or a
+  picture that cannot be read, is reported rather than dropped.
+
+- **Gaussian splats.** `OrbisSplats` draws a 3D Gaussian splat capture from the
+  reference trainer's binary `.ply` or a compact `.splat`, or a cloud made in
+  Dart with `OrbisSplats.pack`. Each splat is projected with the EWA
+  approximation and drawn as a 3σ ellipse, blended back to front over the solid
+  scene and hidden by anything solid in front of it. The sort runs on its own
+  thread when the view turns — about 8 ms for a million splats in an optimised
+  build. Only a capture's degree-0 colour is used; higher spherical-harmonic
+  bands are reported and ignored.
+
+- **Selection outlines.** `OrbisScene.outline` takes an `OrbisOutline`: a set of
+  object keys, an active one drawn brighter, colours, a width in pixels, and how
+  to draw the parts other objects hide (`OrbisOccluded.shown`, `faint`,
+  `dashed` or `hidden`). It follows the silhouette and is drawn over the
+  finished frame after tone mapping and anti-aliasing, so its colour is exact
+  and it cannot shimmer under temporal anti-aliasing. It costs nothing while
+  nothing is outlined.
+
+- **Instance batching, experimental and off by default.** With
+  `OrbisScene.batching` on, objects sharing a mesh, a material and their shadow
+  and layer flags are merged into instanced draws while each keeps its own key,
+  renderable and transform. Three thousand identical crates come out
+  bit-for-bit identical batched and unbatched, for a third off the GPU time.
+  It is off by default because the merging is Filament's engine-wide switch,
+  and on Filament 1.76 that switch blacks out some scenes entirely with no way
+  to tell beforehand. The frame's stats now report how many objects were
+  batched and into how many groups. A depth prepass was measured and not
+  built: on Apple's tile-based GPUs there is no overdraw cost for it to remove.
+
+- `OrbisScene.copyWith` keeps `probes` and `field`, which it used to drop
+  silently.
+
+- The renderer's new parts — decals, splat loading and sorting, the outline,
+  shadow packing and the batching census — are plain C++ with nothing Apple in
+  them, so every port can take them, and the podspec now compiles `.cpp`.
+
 ## 0.21.0
 
 - **Specular anti-aliasing, and occlusion that stops darkening twice.**
