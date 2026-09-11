@@ -1,6 +1,7 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
+
+import '../platform/io.dart';
 
 import 'package:flutter/material.dart';
 import 'package:orbis_filament/orbis_filament.dart';

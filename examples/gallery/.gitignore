@@ -46,3 +46,14 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# The renderer, built by packages/orbis_filament/native/web/build.sh and
+# copied in beside web/index.html. Eight megabytes of build output, the same
+# as darwin/'s Filament.xcframework and the compiled materials: built, not
+# committed. See packages/orbis_filament/native/web/README.md.
+/web/orbis_renderer.js
+/web/orbis_renderer.wasm
+
+# Screenshots from tool/capture_web.sh, the same as the other captures/
+# directories in this repository: proof of a run, not a source file.
+/captures/

@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 import 'dart:ui' show Color;
 
+import 'key_list.dart';
+
 /// What becomes of the parts of an outlined object that something else hides.
 ///
 /// The reason an outline is worth drawing in the renderer rather than as a box
@@ -127,9 +129,9 @@ class OrbisOutline {
   /// Ordered rather than flagged because the renderer only needs to know how
   /// many at the front are active, and a count is one number where a flag per
   /// key is a second array.
-  Int64List get packedKeys {
+  List<int> get packedKeys {
     final active = primary;
-    return Int64List.fromList([
+    return keyListFrom([
       if (active != null) active,
       for (final key in keys)
         if (key != active) key,

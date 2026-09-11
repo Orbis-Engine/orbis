@@ -13,6 +13,12 @@ dependencies:
   vector_math: ^2.1.4
   flutter:
     sdk: flutter
+  # The web implementation only. Both resolve on every platform — they are
+  # plain pub packages — but nothing outside lib/src/web/ imports them, and
+  # that directory is only ever compiled for a web target.
+  flutter_web_plugins:
+    sdk: flutter
+  web: ^1.1.0
 
 dev_dependencies:
   flutter_lints: ^5.0.0
@@ -34,3 +40,11 @@ flutter:
       android:
         package: dev.orbis.filament
         pluginClass: OrbisFilamentPlugin
+      # The renderer core, compiled to WebAssembly, drawing into a <canvas>
+      # shown as a platform view. Unlike the three above there is no native
+      # build step here that Flutter knows about: the app's own web/ directory
+      # has to carry orbis_renderer.js and orbis_renderer.wasm, built by
+      # native/web/build.sh. See that directory's README.md.
+      web:
+        pluginClass: OrbisFilamentWeb
+        fileName: src/web/orbis_filament_web.dart

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'graph.dart';
 import 'scene.dart';
+import 'web_view_type.dart';
 
 /// A Filament-rendered surface, laid out and composited like any other widget.
 ///
@@ -251,13 +252,21 @@ class _OrbisViewState extends State<OrbisView> {
     // protocol behind a Kotlin/JNI plugin instead of Swift's, presenting
     // into a Flutter SurfaceProducer texture rather than a CVPixelBuffer —
     // see packages/orbis_filament/android/.
+    // The web is asked about separately, and first, because
+    // defaultTargetPlatform reports the *host* operating system in a browser:
+    // Chrome on a Mac answers macOS, which would pass this set and then build
+    // a Texture the web has no registry for. There the renderer is the same
+    // core compiled to WebAssembly, drawing into its own canvas — see
+    // lib/src/web/ and packages/orbis_filament/native/web/.
     const drawable = {
       TargetPlatform.macOS,
       TargetPlatform.iOS,
       TargetPlatform.android,
     };
-    if (!drawable.contains(defaultTargetPlatform)) {
-      return const _Notice('Orbis renders on macOS, iOS and Android so far.');
+    if (!kIsWeb && !drawable.contains(defaultTargetPlatform)) {
+      return const _Notice(
+        'Orbis renders on macOS, iOS, Android and the web so far.',
+      );
     }
 
     return LayoutBuilder(
@@ -290,7 +299,16 @@ class _OrbisViewState extends State<OrbisView> {
             ),
           );
         }
-        return Texture(textureId: id);
+        // On the web the renderer owns a <canvas> and draws into it directly,
+        // shown here as a platform view; there is no external texture for
+        // Flutter to adopt. The id `create` answered with travels as the
+        // view's creation params, which is how the factory in
+        // lib/src/web/orbis_filament_web.dart finds the viewport it belongs
+        // to — a platform view's own id is minted separately by Flutter and
+        // never reaches the plugin.
+        return kIsWeb
+            ? HtmlElementView(viewType: orbisWebViewType, creationParams: id)
+            : Texture(textureId: id);
       },
     );
   }

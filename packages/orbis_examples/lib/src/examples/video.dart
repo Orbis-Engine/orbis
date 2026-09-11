@@ -1,4 +1,4 @@
-import 'dart:io';
+import '../platform/io.dart';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
