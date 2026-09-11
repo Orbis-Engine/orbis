@@ -121,7 +121,12 @@ material {
         // Projected decals, in full: the picture array survives, and the
         // boxes' transforms and settings live in lightData's tail rather
         // than a sampler of their own. See applyDecals below.
-        { type : sampler2dArray, name : decalImages },
+        //
+        // High precision — see lit.mat's decalImages for why: it is the one
+        // sampler read with textureGrad, and Metal's gradient2d has no
+        // constructor for a pair of half2 derivatives, only float2. Found
+        // compiling this surface for the first time on the iOS simulator.
+        { type : sampler2dArray, name : decalImages, precision : high },
         { type : int,            name : decalLayer }
     ],
 }

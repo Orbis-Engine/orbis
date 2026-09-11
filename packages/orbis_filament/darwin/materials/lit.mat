@@ -239,7 +239,21 @@ material {
         // Every decal's picture, one per layer, all the same size. An array
         // rather than an atlas so a picture's mip chain never bleeds into its
         // neighbour's at a distance.
-        { type : sampler2dArray, name : decalImages },
+        //
+        // High precision, unlike the other maps: this is the one sampler read
+        // with textureGrad rather than texture, and Metal's gradient2d has no
+        // constructor for a pair of half2 derivatives — only float2. Left at
+        // the default, mobile precision, this compiles and runs on desktop
+        // Metal (whatever accepted the half2 there is undocumented, and not
+        // worth relying on) and fails on iOS's Metal compiler with "no
+        // matching constructor for initialization of 'metal::gradient2d'",
+        // found compiling this material for the first time on the iOS
+        // simulator, which is the first place a lit material has ever
+        // reached Metal shader compilation on iOS at all — every earlier
+        // attempt aborted on the feature level precondition first. A real
+        // device would hit the same error, high end or not, so this is fixed
+        // here rather than only on the slim surface.
+        { type : sampler2dArray, name : decalImages, precision : high },
         // Which layer the object being drawn is on, as a bit. A decal paints
         // only the layers its mask names.
         { type : int,            name : decalLayer }

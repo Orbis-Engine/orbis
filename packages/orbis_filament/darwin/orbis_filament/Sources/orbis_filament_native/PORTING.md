@@ -119,9 +119,26 @@ Metal is not automatically above that bar. `MetalDriver::getFeatureLevel`
 returns the third level for `MTLGPUFamilyApple6` or `MTLGPUFamilyMac2` and
 newer, and the second for everything else — so A13 and later (an iPhone 11
 onwards) and every Apple silicon Mac, but *not* the iOS simulator, whose
-virtual GPU reports `MTLGPUFamilyApple2`. On the simulator the engine starts
-at the second level and aborts when the first lit object is built. There is
-no degradation path: the renderer has no fallback surface to drop to.
+virtual GPU reports `MTLGPUFamilyApple2`. On the simulator the engine used to
+start at the second level and abort when the first lit object was built.
+
+There is now a degradation path: `lit_slim.mat` is a second standard surface,
+feature level 1, nine samplers. It keeps every picture map and ground
+blending, packs the LTC pair, the rectangles' own data and decalData into one
+texture (three tenants sharing `lightData`, read by `texelFetch` and
+`textureLod` as the standard surface's own LTC tables and rectangles already
+were) and keeps decalImages besides it, so textured decals and ground
+blending both survive. What does not fit is the area shadow map and the
+irradiance field atlas — a rectangle still lights a slim surface, only
+unshadowed, and a scene's field does not reach it at all. `Renderer::
+startWithWidth` asks `getSupportedFeatureLevel()`, exactly as before, and
+now chooses between the two surfaces by what comes back rather than only
+clamping the engine to it; `surfaceAt` hands out the slim five packages in
+place of the standard five whenever it does. What a scene loses is said once
+through `notes()`, under "surface", "areaShadows" and "field" — the same
+mechanism that already reports a missing texture or an unplayable video —
+so a host is told rather than left to notice a shadowless panel or a dark
+field on its own.
 
 ## The audit this started from
 
