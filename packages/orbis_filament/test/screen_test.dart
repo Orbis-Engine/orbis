@@ -110,7 +110,9 @@ void main() {
     test('cloud only thins them when the sky that carries it is drawn', () {
       final cloudy = OrbisSky(clouds: OrbisClouds.cumulus(cover: 0.7));
       expect(
-        raysOf(sceneWith(godRays: const OrbisGodRays(strength: 1), sky: cloudy))[10],
+        raysOf(
+          sceneWith(godRays: const OrbisGodRays(strength: 1), sky: cloudy),
+        )[10],
         closeTo(0.7, 1e-6),
       );
       final hidden = OrbisSky(
@@ -118,7 +120,9 @@ void main() {
         clouds: OrbisClouds.cumulus(cover: 0.7),
       );
       expect(
-        raysOf(sceneWith(godRays: const OrbisGodRays(strength: 1), sky: hidden))[10],
+        raysOf(
+          sceneWith(godRays: const OrbisGodRays(strength: 1), sky: hidden),
+        )[10],
         0,
       );
     });
@@ -224,7 +228,13 @@ void main() {
         0.5,
       ]);
       expect(packed[s], 2);
-      expect(packed.sublist(s + 6, s + 11), [0.5, 1, 0.5, closeTo(0.2, 1e-6), 6]);
+      expect(packed.sublist(s + 6, s + 11), [
+        0.5,
+        1,
+        0.5,
+        closeTo(0.2, 1e-6),
+        6,
+      ]);
       expect(packed[2 * s], 3);
       expect(packed[2 * s + 1], closeTo(-0.1, 1e-6));
     });
@@ -239,21 +249,24 @@ void main() {
       );
     });
 
-    test('after god rays, it bends their picture by the depth of the world', () {
-      // The god rays write a picture with no depth, so the distortion takes
-      // its colour from that and its depth from the world, in that order.
-      final scene = sceneWith(
-        godRays: const OrbisGodRays(strength: 1),
-        distortions: [OrbisDistortion.lens(strength: 0.1)],
-      );
-      final graph = scene.drawnGraph;
-      expect(graph.problems, isEmpty);
-      expect(scene.passNames, ['scene', 'god rays', 'distortion']);
-      expect(graph.schedule[1].into, OrbisRenderGraph.raysTarget);
-      expect(graph.schedule.last.reads, [
-        OrbisRenderGraph.raysTarget,
-        OrbisRenderGraph.screenTarget,
-      ]);
-    });
+    test(
+      'after god rays, it bends their picture by the depth of the world',
+      () {
+        // The god rays write a picture with no depth, so the distortion takes
+        // its colour from that and its depth from the world, in that order.
+        final scene = sceneWith(
+          godRays: const OrbisGodRays(strength: 1),
+          distortions: [OrbisDistortion.lens(strength: 0.1)],
+        );
+        final graph = scene.drawnGraph;
+        expect(graph.problems, isEmpty);
+        expect(scene.passNames, ['scene', 'god rays', 'distortion']);
+        expect(graph.schedule[1].into, OrbisRenderGraph.raysTarget);
+        expect(graph.schedule.last.reads, [
+          OrbisRenderGraph.raysTarget,
+          OrbisRenderGraph.screenTarget,
+        ]);
+      },
+    );
   });
 }

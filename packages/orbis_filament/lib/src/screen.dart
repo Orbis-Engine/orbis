@@ -32,9 +32,12 @@ import 'package:vector_math/vector_math_64.dart';
 /// an [OrbisEffect.godRays] pass wherever it wants them, and this says how
 /// strong they are.
 ///
-/// Measured at 800 by 600: about a millisecond at 64 samples, on top of the
-/// cost of drawing the world into a texture rather than straight to the
-/// screen.
+/// Not free when on. Measured on the God rays example at 1600 by 1200 on
+/// Metal: 64 samples takes the frame from about 2.2 ms, drawn through a
+/// texture and a copy, to 3.8–4.1 ms — so the shafts themselves cost 1.6 to
+/// 1.9 ms, near enough in proportion to the number of pixels. Running the
+/// walk into a half-size target would cut that by three quarters and is not
+/// built yet.
 class OrbisGodRays {
   const OrbisGodRays({
     this.strength = 0,
@@ -231,12 +234,14 @@ class OrbisDistortion {
   /// Each pixel reads from further out or further in by the square of its
   /// distance from the middle, so the top and bottom edges move by half of
   /// [strength] of the frame's height and the middle does not move at all.
-  factory OrbisDistortion.lens({required double strength, double chromatic = 0}) =>
-      OrbisDistortion._(
-        kind: OrbisDistortionKind.lens,
-        strength: strength,
-        chromatic: chromatic,
-      );
+  factory OrbisDistortion.lens({
+    required double strength,
+    double chromatic = 0,
+  }) => OrbisDistortion._(
+    kind: OrbisDistortionKind.lens,
+    strength: strength,
+    chromatic: chromatic,
+  );
 
   final OrbisDistortionKind kind;
 

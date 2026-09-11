@@ -92,6 +92,8 @@ fragment {
         // channels are read further along and short of.
         vec2 offset = vec2(0.0);
         vec2 split = vec2(0.0);
+        vec2 lens = vec2(0.0);
+        vec2 lensSplit = vec2(0.0);
         // The nearest distance of anything bending this pixel. A lookup that
         // lands on a surface nearer than this has found something standing
         // in front of the distortion, and is refused.
@@ -152,14 +154,19 @@ fragment {
                 // heights, so the top and bottom edges are at one.
                 vec2 centred = uv - 0.5;
                 vec2 spread = centred * vec2(aspect, 1.0) * 2.0;
-                push = centred * head.y * dot(spread, spread);
+                vec2 warp = centred * head.y * dot(spread, spread);
+                // Kept apart from the rest: a lens is not anywhere in the
+                // world, so nothing can stand in front of it, and the depth
+                // test below would refuse it on every surface.
+                lens += warp;
+                lensSplit += warp * head.z;
             }
 
             offset += push;
             split += push * head.z;
         }
 
-        if (offset.x == 0.0 && offset.y == 0.0) {
+        if (offset.x == 0.0 && offset.y == 0.0 && lens.x == 0.0 && lens.y == 0.0) {
             material.baseColor = textureLod(materialParams_source, uv, 0.0);
             return;
         }
@@ -169,6 +176,8 @@ fragment {
             moved = uv;
             split = vec2(0.0);
         }
+        moved += lens;
+        split += lensSplit;
 
         vec4 middle = textureLod(materialParams_source, moved, 0.0);
         float red = textureLod(materialParams_source, moved + split, 0.0).r;
