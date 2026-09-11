@@ -78,14 +78,18 @@
   world-space caster and receiver volumes are identical either way, because a
   chunk's box is the exact union of its members' and a union of unions is the
   same union; and squaring every crate to the axes, so no transform can round
-  differently, leaves 3.28%. What remains is something in the instanced draw
-  path that shows only through the shadow pass, and it is not yet named — so
-  the fix that was expected to work, handing Filament the shadow scene bounds
-  from the embedder, would have addressed about a fourteenth of the
-  difference and was not made. The frame's stats report how many objects were
-  batched and into how many groups. A depth prepass was measured and not
-  built: on Apple's tile-based GPUs there is no overdraw cost for it to
-  remove.
+  differently, leaves 3.28%. What remains needs batched *casters*: batch the
+  same three thousand crates with nothing in the scene casting, so the shadow
+  pass still runs and still fits itself to the receivers, and the frame is
+  bit-identical — which disposes of the receiver side, and with it the idea
+  that a batched row is admitted to the receiver bounds whole. So it is
+  something in how an instanced caster is drawn into the shadow map, and it is
+  not yet named. The fix that was expected to work, handing Filament the
+  shadow scene bounds from the embedder, would have addressed about a
+  fourteenth of the difference, and was not made. The frame's stats report how
+  many objects were batched and into how many groups. A depth prepass was
+  measured and not built: on Apple's tile-based GPUs there is no overdraw cost
+  for it to remove.
 
 - **God rays and screen distortion.** `OrbisScene.godRays` adds shafts of light
   from the scene's own directional light, by Mitchell's screen-space light

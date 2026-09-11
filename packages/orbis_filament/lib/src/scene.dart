@@ -1214,8 +1214,11 @@ class OrbisScene {
   /// tighten its box, and giving a chunk every per-renderable shadow setting
   /// an individual object would have had, were both tried and neither moved
   /// the result — which reads as evidence for this conclusion rather than
-  /// against it. What is left is something in the instanced draw path that
-  /// shows only through the shadow pass, and it is not yet named.
+  /// against it. What is left needs batched *casters*: batch the same crates
+  /// with nothing in the scene casting, so the shadow pass still runs and
+  /// still fits itself to the receivers, and the frame is bit-identical. The
+  /// receiver side contributes nothing. So it is something in how an
+  /// instanced caster is drawn into the shadow map, and it is not yet named.
   ///
   /// So this stays off by default: the difference is far above the noise,
   /// which with a pinned clock is exactly nothing. Turning it on is safe in
