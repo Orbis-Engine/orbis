@@ -93,9 +93,26 @@
 - `OrbisScene.copyWith` keeps `probes` and `field`, which it used to drop
   silently.
 
-- The renderer's new parts — decals, splat loading and sorting, the outline,
-  shadow packing and the batching census — are plain C++ with nothing Apple in
-  them, so every port can take them, and the podspec now compiles `.cpp`.
+- **The renderer is portable C++.** Everything it does is now `orbis::Renderer`
+  (`OrbisRendererCore.h`/`.cpp`), with no Objective-C and no Apple header in
+  it; the Objective-C `OrbisRenderer` is a thin wrapper, so the Swift plugin is
+  unchanged and macOS draws what it drew — fifteen of the examples
+  bit-for-bit, the rest within the difference between two runs of the same
+  code. Logging, the clock, files, decal pictures, video and a parallel loop
+  come from a small platform layer: the same Apple frameworks as before on
+  Apple, and the standard library, stb_image and Filament's resampler
+  elsewhere, where video is not yet supported and the notes say so. The
+  backend is chosen per platform — Metal on Apple, Vulkan then OpenGL on
+  Android, Linux and Windows, OpenGL on the web — and `ORBIS_BACKEND`
+  overrides it; a backend with no driver is skipped rather than crashing.
+  `include/orbis_renderer.h` is a C ABI for hosts with neither Objective-C nor
+  Flutter, every array length checked, and `native/headless` drives it with no
+  Flutter at all, drawing offscreen to a PNG. `setup.sh`'s
+  `ORBIS_MATC_BACKENDS` compiles the materials for other backends; every
+  material compiles for all of them. The standard lit surface binds twelve
+  samplers and so needs Filament's feature level 3, which OpenGL ES 3.0,
+  WebGL 2 and OpenGL below 4.3 do not reach — those need a slimmer surface
+  before the renderer can start on them.
 
 ## 0.21.0
 

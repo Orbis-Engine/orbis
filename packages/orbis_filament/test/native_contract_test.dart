@@ -25,10 +25,12 @@ void main() {
     'darwin/orbis_filament/Sources/orbis_filament/OrbisFilamentPlugin.swift',
   );
   // The renderer, and the plain C++ beside it that it calls into: a number
-  // that lives in either is the renderer's.
+  // that lives in either is the renderer's. The renderer's own constants are
+  // in its C++ core's header now that the Objective-C class only forwards to
+  // it — the same lines, moved, so this reads them there.
   final native =
       _read(
-        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisRenderer.mm',
+        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisRendererCore.h',
       ) +
       _read(
         'darwin/orbis_filament/Sources/orbis_filament_native/OrbisDecals.h',

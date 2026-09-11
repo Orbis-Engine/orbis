@@ -80,7 +80,7 @@ void main() {
       // before it keeps its number — and checked, because an index that
       // drifts runs a different shader rather than failing.
       final native = _read(
-        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisRenderer.mm',
+        'darwin/orbis_filament/Sources/orbis_filament_native/OrbisRendererCore.h',
       );
       final found = RegExp(
         r'constexpr int kEffectMotionBlur\s*=\s*(\d+);',
