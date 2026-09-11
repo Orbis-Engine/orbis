@@ -30,8 +30,14 @@ void main() {
   }
 
   test('is off unless asked for', () {
-    // Off by default, so every scene written before batching existed draws
-    // exactly as it did — which is what makes it safe to have shipped.
+    // Still off by default even now that the renderer builds a merged group
+    // as one manually-instanced renderable rather than asking Filament's own
+    // automatic instancing to notice one after the fact: proven bit-identical
+    // wherever nothing casts a shadow onto or out of a batched group, but not
+    // proven where one does — see the field's own doc comment for the
+    // measurements this rests on. A scene written before batching existed,
+    // or one that never turns it on, draws exactly as it always did either
+    // way.
     expect(sceneOf().batching, isFalse);
     expect(sceneOf().toMessage(1)['batching'], isFalse);
   });

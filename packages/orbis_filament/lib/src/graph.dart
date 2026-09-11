@@ -803,14 +803,16 @@ class OrbisFrameCapture {
   /// How many objects the last publish put into a group big enough to merge.
   ///
   /// Nought with [OrbisScene.batching] off, and nought with it on in a scene
-  /// where nothing is repeated. It counts objects rather than draws saved,
-  /// because the two are not the same number: Filament merges only the draws
-  /// that land next to each other once it has sorted them, so a group of
-  /// forty may come out as one draw or as three.
+  /// where nothing is repeated.
   final int batchedObjects;
 
-  /// How many such groups there were — one draw each if every group merges
-  /// whole, so [batchedObjects] minus this is the ceiling on the draws saved.
+  /// How many manually-instanced renderables those objects came to once
+  /// built — a group of up to sixty-four members is one, so
+  /// [batchedObjects] minus this is exactly the number of draws saved, not
+  /// a ceiling on it: unlike Filament's own automatic instancing, which only
+  /// merges draws that happen to land next to each other once sorted, a
+  /// batched group is built as one renderable from the start and there is
+  /// nothing left for a sort order to get in the way of.
   final int batchGroups;
 
   /// Reads a capture out of what the renderer sent back.
