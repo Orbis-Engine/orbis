@@ -56,6 +56,10 @@ set(FILAMENT_STATIC_LIBS
     ibl-lite        # indirect-light maths filament links unconditionally
     smol-v          # SPIR-V decompression for the Vulkan shader variants
     utils           # filament's own JobSystem, Entity, allocators
+    zstd            # MaterialParser/ZstdHelper decompress the .filamat package
+                     # with it unconditionally in 1.76; --no-undefined caught
+                     # the missing ZSTD_* symbols at link time, which is the
+                     # whole reason that flag is on
 )
 
 set(FILAMENT_LINK_LINE "")
