@@ -149,6 +149,14 @@ void Renderer::startWithWidth(uint32_t width, uint32_t height) {
   const std::vector<OrbisBackend> candidates =
       orbis::backendCandidates(_backendAsked);
   for (OrbisBackend candidate : candidates) {
+    // A backend whose driver is not installed is passed over rather than
+    // tried: Filament loads the driver on its own thread, and a missing
+    // Vulkan loader is a panic there that no try here can catch.
+    if (!orbis::backendLoadable(candidate)) {
+      orbis::log("[orbis] %s has no driver on this machine.",
+                 orbis::backendName(candidate));
+      continue;
+    }
     builder.backend(orbis::filamentBackend(candidate));
     try {
       _engine = builder.build();
@@ -5975,10 +5983,17 @@ void Renderer::readBackIfAsked() {
     Renderer *renderer;
     uint32_t width;
     uint32_t height;
+    bool bottomFirst;
   };
   const size_t bytes = size_t(_width) * _height * 4;
   auto *pixels = static_cast<uint8_t *>(malloc(bytes));
-  auto *arrival = new Arrival{this, _width, _height};
+  // Which way up the rows come. OpenGL reads a framebuffer bottom row first,
+  // as glReadPixels always has. Metal hands back the texture's own rows, top
+  // first — the headless host's first picture came out upside down until
+  // this said so — and Vulkan's framebuffer has its origin at the top left
+  // as Metal's does.
+  auto *arrival = new Arrival{this, _width, _height,
+                              _backend == ORBIS_BACKEND_OPENGL};
   _renderer->readPixels(
       0, 0, _width, _height,
       backend::PixelBufferDescriptor(
@@ -5990,13 +6005,13 @@ void Renderer::readBackIfAsked() {
             const size_t stride = size_t(arrival->width) * 4;
             std::lock_guard<std::mutex> lock(self->_captureLock);
             self->_captured.resize(stride * arrival->height);
-            // Filament reads a swap chain bottom row first, as OpenGL does
-            // on every backend; a picture is stored top row first.
-            const auto *from = static_cast<const uint8_t *>(buffer);
+            // Stored top row first, which is how a picture is kept.
+            const auto *source = static_cast<const uint8_t *>(buffer);
             for (uint32_t row = 0; row < arrival->height; row++) {
+              const uint32_t from =
+                  arrival->bottomFirst ? arrival->height - 1 - row : row;
               memcpy(self->_captured.data() + size_t(row) * stride,
-                     from + size_t(arrival->height - 1 - row) * stride,
-                     stride);
+                     source + size_t(from) * stride, stride);
             }
             self->_capturedWidth = arrival->width;
             self->_capturedHeight = arrival->height;

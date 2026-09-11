@@ -4,7 +4,39 @@
 #include <cstdlib>
 #include <string>
 
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
 namespace orbis {
+
+bool backendLoadable(OrbisBackend backend) {
+  if (backend != ORBIS_BACKEND_VULKAN) return true;
+  // The names bluevk opens, platform by platform — libs/bluevk/src in
+  // Filament — so the answer here is the answer it would get.
+#if defined(_WIN32)
+  HMODULE library = LoadLibraryA("vulkan-1.dll");
+  if (library == nullptr) return false;
+  FreeLibrary(library);
+  return true;
+#else
+#if defined(__ANDROID__)
+  const char *name = "libvulkan.so";
+#elif defined(__APPLE__)
+  const char *name = "libvulkan.1.dylib";
+#else
+  const char *name = "libvulkan.so.1";
+#endif
+  void *library = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+  if (library == nullptr) return false;
+  dlclose(library);
+  return true;
+#endif
+}
 
 std::vector<OrbisBackend> backendCandidates(OrbisBackend asked) {
   // The override, for trying a backend on a machine whose default is another.

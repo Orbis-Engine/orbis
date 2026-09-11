@@ -39,4 +39,15 @@ const char *backendName(OrbisBackend backend);
 /// one of them.
 OrbisBackend backendNamed(const char *name);
 
+/// Whether a backend's driver can be loaded on this machine at all.
+///
+/// Asked before the backend is, because Filament loads a driver on its own
+/// render thread, and a Vulkan loader that is not installed is a panic there
+/// that nothing on the calling thread can catch — the process ends, which is
+/// what asking for Vulkan on a Mac without MoltenVK did. So the loader is
+/// looked for first, by the name bluevk would open, and a backend without one
+/// is passed over. Metal, OpenGL and WebGPU are answered yes and left for
+/// Filament to refuse properly if it must.
+bool backendLoadable(OrbisBackend backend);
+
 }  // namespace orbis
