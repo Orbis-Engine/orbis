@@ -43,7 +43,15 @@ trap 'kill "$app" 2>/dev/null; wait "$app" 2>/dev/null' EXIT
 
 drew=""
 for _ in $(seq "$SECONDS_ALLOWED"); do
-  if grep -q '\[orbis\] frame' "$log" 2>/dev/null; then drew=yes; break; fi
+  # The line that ends in "written", not merely one that starts "[orbis]
+  # frame": the renderer prints the frame's cost first and the picture after
+  # it has been read back, and stopping at the first of the two killed the app
+  # before the second — a pass that had not proved the readback, and a PNG that
+  # anybody measuring from it found missing.
+  if grep -q '\[orbis\] frame .* -> .*: written' "$log" 2>/dev/null; then
+    drew=yes
+    break
+  fi
   # An app that has exited is not going to draw anything, and waiting the full
   # ninety seconds to say so wastes the run and buries the reason.
   kill -0 "$app" 2>/dev/null || break
