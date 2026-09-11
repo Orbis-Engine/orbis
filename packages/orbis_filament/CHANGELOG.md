@@ -50,16 +50,24 @@
   and it cannot shimmer under temporal anti-aliasing. It costs nothing while
   nothing is outlined.
 
-- **Instance batching, experimental and off by default.** With
-  `OrbisScene.batching` on, objects sharing a mesh, a material and their shadow
-  and layer flags are merged into instanced draws while each keeps its own key,
-  renderable and transform. Three thousand identical crates come out
-  bit-for-bit identical batched and unbatched, for a third off the GPU time.
-  It is off by default because the merging is Filament's engine-wide switch,
-  and on Filament 1.76 that switch blacks out some scenes entirely with no way
-  to tell beforehand. The frame's stats now report how many objects were
-  batched and into how many groups. A depth prepass was measured and not
-  built: on Apple's tile-based GPUs there is no overdraw cost for it to remove.
+- **Instance batching, off by default.** With `OrbisScene.batching` on,
+  objects sharing a mesh, a material and their shadow and layer flags are
+  drawn as instanced renderables Orbis builds itself — up to sixty-four
+  members each, sorted by position, every member's transform in the instance
+  buffer — while each object keeps its own key, so picking and selection are
+  unchanged and moving one rewrites only its slot. It no longer uses
+  Filament's engine-wide automatic instancing, so it works on stock Filament,
+  where that switch blacks out whole frames. Three thousand crates batched
+  take about a fifth of the CPU time and a third of the GPU time of the same
+  crates drawn one by one. It is off by default for one measured reason: where
+  nothing batched casts a shadow, batched and unbatched frames are
+  bit-identical, but a batched group that casts shadows changes how Filament
+  fits its shadow cascades, and 4.4% of pixels differ by an average of 2.5
+  levels in 255. A group's bounding box is the union of its members', so one
+  visible member draws its whole group. The frame's stats report how many
+  objects were batched and into how many groups. A depth prepass was measured
+  and not built: on Apple's tile-based GPUs there is no overdraw cost for it
+  to remove.
 
 - **God rays and screen distortion.** `OrbisScene.godRays` adds shafts of light
   from the scene's own directional light, by Mitchell's screen-space light
@@ -130,6 +138,17 @@
   through the scene notes when a scene asks for it. The standard surface is
   unchanged and still chosen wherever it was. On the iOS simulator this is the
   difference between no frame at all and a frame drawn.
+
+- **Android.** The plugin has an Android implementation: Kotlin and JNI over
+  the same C ABI and the same `orbis_filament` channel protocol as the Swift
+  plugin, so the Dart API is unchanged, presenting into a Flutter
+  `SurfaceProducer` texture. Vulkan is the default and reaches feature level 3
+  on the emulator, where every worked example tried draws correctly; OpenGL ES
+  starts too, at feature level 1 with the slim surface. Video is Apple-only and
+  says so. Two calls join the C ABI, `orbis_renderer_attach_surface` and
+  `_detach_surface`, for a surface that comes and goes with the app; no
+  existing call changed. Scenes are applied on the main thread for now, so a
+  very large one stutters, and it has not yet been run on a device.
 
 - **The renderer core runs in a browser.** `native/web` compiles the same
   portable C++ and C ABI to WebAssembly with Emscripten — no shared source
