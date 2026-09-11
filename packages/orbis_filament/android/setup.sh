@@ -107,11 +107,13 @@ elif [ -d "$FILAMENT/include" ]; then
   echo "orbis_filament/android: Filament $FILAMENT_VERSION (android) already present"
 else
   echo "orbis_filament/android: fetching Filament $FILAMENT_VERSION (android)"
-  echo "  (unverified path -- this asset name has not been exercised; if it" \
-       "404s, unpack a release by hand into \$ORBIS_FILAMENT_ANDROID_DIR)"
   mkdir -p "$SDK_DIR/android-fetched"
+  # android-native, not android: the release's plain "android" assets are
+  # .aar files for Java callers, and the static libraries and headers this
+  # build links against ship only in the -android-native tarball, which
+  # unpacks to filament/{include,lib/<abi>}.
   curl -fsSL -o "$SDK_DIR/android-fetched/filament.tgz" \
-    "https://github.com/google/filament/releases/download/$FILAMENT_VERSION/filament-$FILAMENT_VERSION-android.tgz"
+    "https://github.com/google/filament/releases/download/$FILAMENT_VERSION/filament-$FILAMENT_VERSION-android-native.tgz"
   tar xzf "$SDK_DIR/android-fetched/filament.tgz" -C "$SDK_DIR/android-fetched"
   rm -f "$SDK_DIR/android-fetched/filament.tgz"
   rm -f "$FILAMENT"
