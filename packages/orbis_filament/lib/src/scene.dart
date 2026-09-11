@@ -9,6 +9,7 @@ import 'graph.dart';
 import 'pipeline.dart';
 import 'video.dart';
 import 'post.dart';
+import 'screen.dart';
 import 'volumes.dart';
 
 import 'package:vector_math/vector_math_64.dart';
@@ -905,9 +906,13 @@ class OrbisScene {
     List<OrbisDecal>? decals,
     OrbisOutline? outline,
     this.batching = false,
+    OrbisGodRays? godRays,
+    List<OrbisDistortion>? distortions,
   }) : lights = lights ?? const [],
        decals = decals ?? const [],
        outline = outline ?? OrbisOutline.none,
+       godRays = godRays ?? OrbisGodRays.off,
+       distortions = distortions ?? const [],
        probes = probes ?? const [],
        volumes = volumes ?? const [],
        field = field ?? OrbisField.none,
@@ -952,11 +957,15 @@ class OrbisScene {
     List<OrbisDecal>? decals,
     OrbisOutline? outline,
     bool? batching,
+    OrbisGodRays? godRays,
+    List<OrbisDistortion>? distortions,
   }) => OrbisScene(
     // The probes and the field used to be missing here, so any copy quietly
     // dropped them. Resolving the volumes copies every scene that has any,
     // which is how it was noticed.
     probes: probes ?? this.probes,
+    godRays: godRays ?? this.godRays,
+    distortions: distortions ?? this.distortions,
     field: field ?? this.field,
     volumes: volumes ?? this.volumes,
     batching: batching ?? this.batching,
@@ -1076,6 +1085,28 @@ class OrbisScene {
   /// See [resolved] for the scene that is actually drawn.
   final List<OrbisEnvironmentVolume> volumes;
 
+  /// Shafts of light from the scene's directional light, through whatever
+  /// stands against the sky. Off by default, and free when off.
+  final OrbisGodRays godRays;
+
+  /// Air that bends the light through it: shockwaves, heat haze, a lens.
+  /// None by default, and free when none of them moves anything.
+  final List<OrbisDistortion> distortions;
+
+  /// The light god rays come from: the first directional one, which is the
+  /// one the renderer draws.
+  OrbisLight? get _sun => lights
+      .where((light) => light.kind == OrbisLightKind.directional)
+      .firstOrNull;
+
+  /// The graph the renderer is actually sent: [graph], with the passes for
+  /// [godRays] and [distortions] put in when the graph is the renderer's own
+  /// and something asks for them. See [OrbisRenderGraph.withScreenEffects].
+  OrbisRenderGraph get drawnGraph => graph.withScreenEffects(
+    godRays: godRays.isOn && _sun != null,
+    distortion: distortions.any((one) => one.isActive),
+  );
+
   /// This scene as it looks from [at] — the camera's position unless said
   /// otherwise — with every volume applied and none left in it.
   ///
@@ -1156,7 +1187,9 @@ class OrbisScene {
   /// What a capture's timings line up against: the renderer sends back two
   /// numbers per pass and this says which pass each pair belongs to, so the
   /// names never have to cross.
-  List<String> get passNames => [for (final pass in graph.schedule) pass.name];
+  List<String> get passNames => [
+    for (final pass in drawnGraph.schedule) pass.name,
+  ];
 
   /// Packs the scene into the flat arrays the channel carries.
   /// The whole scene, as the renderer takes it.
@@ -1326,6 +1359,8 @@ class OrbisScene {
               return decalPaths.length - 1;
             });
     }
+    final drawn = drawnGraph;
+    final sun = _sun;
 
     final lightCount = lights.length;
     final lightKeys = Int64List(lightCount);
@@ -1397,11 +1432,20 @@ class OrbisScene {
       'environmentRadiance': environment.radiance ?? '',
       'environmentSkybox': environment.skybox ?? '',
       'environmentParams': environment.packed,
-      'graphPasses': graph.packedPasses,
-      'graphTargets': graph.packedTargets,
-      'graphTargetNames': [for (final target in graph.targets) target.name],
+      'graphPasses': drawn.packedPasses,
+      'graphTargets': drawn.packedTargets,
+      'graphTargetNames': [for (final target in drawn.targets) target.name],
       'outlineKeys': outline.packedKeys,
       'outlineParams': outline.packed,
+      // The shafts' settings, with the light they come from and the cloud in
+      // front of it worked out here, where the scene is whole. Cloud only
+      // counts when the sky that carries it is drawn.
+      'godRayParams': godRays.pack(
+        towardLight: sun == null ? null : -sun.direction,
+        lightColour: sun?.colour,
+        cloudCover: sky.drawn && sky.clouds.isVisible ? sky.clouds.cover : 0,
+      ),
+      'distortionParams': OrbisDistortion.packAll(distortions),
       // When the application reckons this is, in its own seconds.
       //
       // The renderer draws far more often than it is told anything, and works

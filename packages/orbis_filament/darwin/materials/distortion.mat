@@ -1,0 +1,187 @@
+// The picture, looked up somewhere other than where it was drawn.
+//
+// Air that is hotter or denser than the air around it bends light passing
+// through it: the shimmer over a road in summer, the ring that runs out from
+// an explosion. On the screen, bending the light is reading the frame from a
+// little way off, so every distortion here is an offset added to where each
+// pixel is read from.
+//
+// Three sources, summed:
+//
+//  - A shockwave: a shell of given radius and thickness around a point in
+//    the world. Surfaces the shell passes through are pushed outwards from
+//    its centre, so on a floor it reads as a ring running across it.
+//  - A heat haze: a box of air over something hot, full of noise that rises.
+//  - A lens: the whole frame warped about its centre, barrel one way and
+//    pincushion the other.
+//
+// Depth-aware twice over. A haze or a wave only moves pixels whose surface
+// is behind it, and a pixel is never moved to read a surface that is in
+// front of it — without the second, haze behind a pillar would drag the
+// pillar's edge into the shimmer and the pillar would bend.
+material {
+    name : orbisDistortion,
+    shadingModel : unlit,
+    vertexDomain : device,
+    requires : [ uv0 ],
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    parameters : [
+        { type : sampler2d, name : source },
+        { type : sampler2d, name : depth, precision : high },
+
+        // Depth back to distance, and a place on the screen plus a distance
+        // back to a position — as the bounce pass does it.
+        { type : float, name : near, precision : high },
+        { type : float2, name : tangents },
+        { type : float, name : aspect },
+
+        // Each distortion as three rows, in the space the passes rebuild
+        // from depth: x right, y up, z into the screen. Eight of them at
+        // most, which is what the loop below is bounded by.
+        //   row 0: kind, strength, chromatic split, and how far a haze has
+        //          risen
+        //   shockwave: row 1 is the centre and the radius, row 2 the
+        //          thickness
+        //   haze: row 1 is the centre and the size of the noise, row 2 the
+        //          box's half-extents
+        { type : float4[24], name : rows },
+        { type : int, name : count }
+    ]
+}
+
+fragment {
+    // Metres straight ahead of the eye, or a very long way for the sky.
+    float distanceAt(vec2 uv) {
+        float d = textureLod(materialParams_depth, uv, 0.0).r;
+        return d > 0.0 ? materialParams.near / d : 1.0e9;
+    }
+
+    // Smooth value noise, which is all a shimmer needs: no direction to it,
+    // no grid to see, and cheap enough to take twice per pixel per haze.
+    float hash(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+    }
+
+    float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        float a = hash(i);
+        float b = hash(i + vec2(1.0, 0.0));
+        float c = hash(i + vec2(0.0, 1.0));
+        float d = hash(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 uv = getUV0();
+        float aspect = materialParams.aspect;
+        vec2 ndc = vec2(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y);
+        float z = distanceAt(uv);
+        vec3 surface = vec3(ndc * materialParams.tangents * min(z, 1.0e5),
+                            min(z, 1.0e5));
+
+        // In texture coordinates. `split` is the part of it that belongs to
+        // distortions asking for a chromatic fringe, which the red and blue
+        // channels are read further along and short of.
+        vec2 offset = vec2(0.0);
+        vec2 split = vec2(0.0);
+        vec2 lens = vec2(0.0);
+        vec2 lensSplit = vec2(0.0);
+        // The nearest distance of anything bending this pixel. A lookup that
+        // lands on a surface nearer than this has found something standing
+        // in front of the distortion, and is refused.
+        float front = 1.0e9;
+
+        for (int i = 0; i < 8; i++) {
+            if (i >= materialParams.count) break;
+            vec4 head = materialParams.rows[i * 3];
+            vec4 a = materialParams.rows[i * 3 + 1];
+            vec4 b = materialParams.rows[i * 3 + 2];
+            int kind = int(head.x + 0.5);
+            vec2 push = vec2(0.0);
+
+            if (kind == 1 && z < 1.0e8) {
+                // A shell around the centre. Where this pixel's surface is
+                // inside its thickness it is pushed outwards from the centre,
+                // most at the middle of the shell and not at all at its edges.
+                vec3 apart = surface - a.xyz;
+                float s = (length(apart) - a.w) / max(b.x, 1e-3);
+                if (abs(s) < 1.0) {
+                    float bump = (1.0 - s * s) * (1.0 - s * s);
+                    vec2 way = apart.xy / max(length(apart.xy), 1e-4);
+                    // Screen heights, so a wave is round on a wide window;
+                    // and the texture's v runs down where the view's y runs
+                    // up.
+                    push = -vec2(way.x / aspect, -way.y) * head.y * bump;
+                    front = min(front, a.z - a.w - b.x);
+                }
+            } else if (kind == 2 && a.z > 0.0) {
+                // The box, as the camera sees it: where this pixel's ray is
+                // at the haze's own distance, and how far that is from the
+                // middle of the box in half-widths.
+                vec2 across = ndc * materialParams.tangents * a.z;
+                vec2 extent = vec2(max(b.x, b.z), b.y);
+                vec2 rel = (across - a.xy) / max(extent, vec2(1e-3));
+                float inside = (1.0 - smoothstep(0.55, 1.0, abs(rel.x)))
+                             * (1.0 - smoothstep(0.55, 1.0, abs(rel.y)));
+                // Only for surfaces behind the front of the box. A wall
+                // standing in front of the vent is not in the hot air.
+                float nearest = a.z - max(b.x, b.z);
+                float behind = smoothstep(nearest - 0.25, nearest, z);
+                if (inside * behind > 0.0) {
+                    // Rising: the pattern at a height is the pattern that was
+                    // lower down a moment ago.
+                    vec2 at = vec2(across.x, across.y - head.w) / max(a.w, 1e-3);
+                    vec2 wobble = vec2(noise(at), noise(at + vec2(17.3, 9.1)))
+                                * 2.0 - 1.0;
+                    // Strongest just above the source, thinning as it rises.
+                    float low = clamp(0.5 - 0.5 * rel.y, 0.0, 1.0);
+                    push = wobble * head.y * inside * behind * (0.35 + 0.65 * low);
+                    push.x /= aspect;
+                    front = min(front, nearest);
+                }
+            } else if (kind == 3) {
+                // Barrel for a positive strength, pincushion for a negative:
+                // each pixel reads from further out, or further in, by the
+                // square of how far it is from the middle — measured in half
+                // heights, so the top and bottom edges are at one.
+                vec2 centred = uv - 0.5;
+                vec2 spread = centred * vec2(aspect, 1.0) * 2.0;
+                vec2 warp = centred * head.y * dot(spread, spread);
+                // Kept apart from the rest: a lens is not anywhere in the
+                // world, so nothing can stand in front of it, and the depth
+                // test below would refuse it on every surface.
+                lens += warp;
+                lensSplit += warp * head.z;
+            }
+
+            offset += push;
+            split += push * head.z;
+        }
+
+        if (offset.x == 0.0 && offset.y == 0.0 && lens.x == 0.0 && lens.y == 0.0) {
+            material.baseColor = textureLod(materialParams_source, uv, 0.0);
+            return;
+        }
+
+        vec2 moved = uv + offset;
+        if (distanceAt(moved) < front) {
+            moved = uv;
+            split = vec2(0.0);
+        }
+        moved += lens;
+        split += lensSplit;
+
+        vec4 middle = textureLod(materialParams_source, moved, 0.0);
+        float red = textureLod(materialParams_source, moved + split, 0.0).r;
+        float blue = textureLod(materialParams_source, moved - split, 0.0).b;
+        material.baseColor = vec4(red, middle.g, blue, middle.a);
+    }
+}

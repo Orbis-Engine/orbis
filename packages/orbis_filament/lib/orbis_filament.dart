@@ -44,6 +44,8 @@ export 'src/pipeline.dart'
         OrbisVarianceShadows;
 export 'src/population.dart' show OrbisFade, OrbisPopulation;
 export 'src/splats.dart' show OrbisSplats;
+export 'src/screen.dart'
+    show OrbisDistortion, OrbisDistortionKind, OrbisGodRays;
 export 'src/video.dart' show OrbisVideo;
 export 'src/volumes.dart'
     show

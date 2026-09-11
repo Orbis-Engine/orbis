@@ -38,6 +38,8 @@ export 'src/examples/cameras.dart' show CamerasExample;
 export 'src/examples/crowd.dart' show CrowdExample;
 export 'src/examples/day_and_night.dart' show DayAndNightExample;
 export 'src/examples/decals.dart' show DecalsExample;
+export 'src/examples/distortion.dart' show DistortionExample;
+export 'src/examples/god_rays.dart' show GodRaysExample;
 export 'src/examples/lights.dart' show LightsExample;
 export 'src/examples/many.dart' show ManyExample;
 export 'src/examples/overdraw.dart' show OverdrawExample;
@@ -68,6 +70,8 @@ import 'src/examples/cameras.dart';
 import 'src/examples/crowd.dart';
 import 'src/examples/day_and_night.dart';
 import 'src/examples/decals.dart';
+import 'src/examples/distortion.dart';
+import 'src/examples/god_rays.dart';
 import 'src/examples/lights.dart';
 import 'src/examples/panel_shadow.dart';
 import 'src/examples/shadows.dart';
@@ -106,7 +110,9 @@ List<Example> engineExamples() => [
   BounceExample(),
   FieldExample(),
   DayAndNightExample(),
+  GodRaysExample(),
   WeatherExample(),
+  DistortionExample(),
   EnvironmentVolumesExample(),
   ManyExample(),
   BatchingExample(),
