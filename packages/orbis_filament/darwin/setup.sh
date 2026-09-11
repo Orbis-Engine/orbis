@@ -194,8 +194,10 @@ fi
 # axis that multiplies.
 BLENDS="opaque transparent fade masked add"
 # Compiled once each; everything else is a uniform. The shadow catcher is
-# deliberately not here: its blending is fixed by what it is.
-VARIANTS="lit unlit video"
+# deliberately not here: its blending is fixed by what it is. lit_slim is the
+# nine-sampler surface orbis::Renderer chooses instead of lit below Filament's
+# third feature level — its own five packages, not a variant of lit's.
+VARIANTS="lit lit_slim unlit video"
 
 # compile <source .mat> <generated name> [blend]
 compile() {
