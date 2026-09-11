@@ -31,11 +31,16 @@ class OrbisSplats {
     this.opacity = 1,
     this.brightness = 1,
     this.sorted = true,
+    this.harmonics = 2,
     this.revision = 0,
   }) : transform = transform ?? Matrix4.identity(),
        assert(
          (path == null) != (data == null),
          'a cloud comes from a file or from memory, not both or neither',
+       ),
+       assert(
+         harmonics >= 0 && harmonics <= 3,
+         'a capture carries spherical harmonics of degree 0, 1, 2 or 3',
        ),
        assert(
          data == null || data.length % recordBytes == 0,
@@ -75,6 +80,30 @@ class OrbisSplats {
   /// this exists so that what the sort is worth can be measured.
   final bool sorted;
 
+  /// How much of a capture's view-dependent colour to read: the degree of the
+  /// spherical harmonics, 0, 1, 2 or 3.
+  ///
+  /// A trainer fits each splat's colour as spherical harmonics rather than as
+  /// one colour, so that a surface can be one colour seen from here and
+  /// another seen from there. That is what a polished floor, a window and wet
+  /// tarmac all are, and with only the flat degree-zero term they are painted
+  /// the average of every direction at once. Each degree above nought is
+  /// another band of it.
+  ///
+  /// The bands are not free. They are quantised to a byte a coefficient and
+  /// laid out sixteen to a texel, so each degree costs sixteen bytes a splat:
+  /// at a million splats, 16 MB for degree 1, 32 MB for degree 2 and 48 MB
+  /// for degree 3, on top of the 48 MB the splats themselves take. Two by
+  /// default, which is what most captures are trained to and where nearly all
+  /// of the effect is; 0 leaves them out and draws exactly what this drew
+  /// before it could read them at all.
+  ///
+  /// Only a `.ply` carries any. The compact 32-byte record has no room for
+  /// them, so a cloud from [data] or from a `.splat` is flat whatever this
+  /// says. A file trained to a lower degree than this asks for is read as far
+  /// as it goes, and one trained higher is read to here and says so.
+  final int harmonics;
+
   /// Bumped by whoever writes into [data].
   final int revision;
 
@@ -82,8 +111,9 @@ class OrbisSplats {
   /// size the renderer finds out when it reads it.
   int get count => data == null ? 0 : data!.length ~/ recordBytes;
 
-  /// Bit flags in the order the renderer reads them.
-  int get flags => sorted ? 1 : 0;
+  /// Bit flags in the order the renderer reads them: whether to sort, then
+  /// the spherical-harmonic degree in the two bits above that.
+  int get flags => (sorted ? 1 : 0) | (harmonics << 1);
 
   /// Floats per cloud in the scene message: the transform, column-major, then
   /// the opacity and the brightness. Must match splatStride in the plugin and

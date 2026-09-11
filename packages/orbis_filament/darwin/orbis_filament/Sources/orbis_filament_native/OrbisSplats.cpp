@@ -65,6 +65,9 @@ void begin(SplatCloud &cloud, uint32_t count) {
     cloud.minimum[a] = std::numeric_limits<float>::max();
     cloud.maximum[a] = std::numeric_limits<float>::lowest();
   }
+  cloud.harmonicDegree = 0;
+  cloud.harmonics.clear();
+  for (int band = 0; band < 3; band++) cloud.harmonicScale[band] = 0;
   cloud.droppedHigherBands = false;
 }
 
@@ -158,10 +161,102 @@ float readAs(const uint8_t *at, const Property &p) {
   }
 }
 
+/// Which band a coefficient belongs to, counting the first band as nought:
+/// three coefficients in the first, five in the second, seven in the third.
+uint32_t bandOf(uint32_t coefficient) {
+  if (coefficient < 3) return 0;
+  return coefficient < 8 ? 1 : 2;
+}
+
+/// One coefficient as the byte the shader decodes: 128 is nought, and the
+/// band's scale either way is 1 and 255. Anything past the scale clamps.
+uint8_t toHarmonicByte(float value, float scale) {
+  if (!(scale > 0) || !std::isfinite(value)) return 128;
+  const float unit = std::clamp(value / scale, -1.0f, 1.0f);
+  return uint8_t(std::lround(unit * kSplatHarmonicSteps) + 128);
+}
+
+/// Reads the higher bands out of a PLY's vertices into the cloud.
+///
+/// `rest` is the property each kept coefficient lives in, channel-major as
+/// the file has them: coefficient k of channel c is rest[c * keep + k].
+///
+/// Two passes, because what a byte is worth cannot be known until every
+/// coefficient has been seen. The first only counts magnitudes; the second
+/// writes the bytes, and reorders them on the way — out of the file's
+/// channel-major order into one splat's coefficients together, which is how
+/// the shader reads them.
+void readHarmonics(const uint8_t *vertices, uint64_t count, size_t stride,
+                   const std::vector<const Property *> &rest, uint32_t degree,
+                   SplatCloud &into) {
+  const uint32_t keep = kSplatHarmonicCoefficients[degree];
+  if (keep == 0 || count == 0) return;
+
+  // What a byte of each band is worth.
+  //
+  // A trained capture's coefficients are nearly all small and a few are not:
+  // a handful of splats carry a coefficient many times larger than anything
+  // else in the file, and a scale stretched to reach those would spend most
+  // of a byte's 255 steps on values nothing has. So each band is scaled by
+  // the magnitude 99.9% of its own coefficients are below and the rest clamp:
+  // a few splats very slightly too bright, against a step several times finer
+  // on all of them.
+  //
+  // The magnitudes go into fixed bins of a 128th up to eight rather than into
+  // bins sized from the largest one seen, so this is one pass and not two,
+  // and so one absurd coefficient cannot coarsen the histogram itself.
+  constexpr int kBins = 1024;
+  constexpr float kPerUnit = 128.0f;
+  std::vector<uint64_t> histogram(size_t(kBins) * 3, 0);
+  for (uint64_t i = 0; i < count; i++) {
+    const uint8_t *v = vertices + size_t(i) * stride;
+    for (uint32_t c = 0; c < 3; c++) {
+      for (uint32_t k = 0; k < keep; k++) {
+        const Property &p = *rest[size_t(c) * keep + k];
+        const float value = readAs(v + p.offset, p);
+        if (!std::isfinite(value)) continue;
+        int bin = int(std::abs(value) * kPerUnit);
+        if (bin >= kBins) bin = kBins - 1;
+        histogram[size_t(bandOf(k)) * kBins + bin]++;
+      }
+    }
+  }
+
+  for (uint32_t band = 0; band < 3; band++) {
+    uint64_t total = 0;
+    for (int bin = 0; bin < kBins; bin++) total += histogram[size_t(band) * kBins + bin];
+    if (total == 0) continue;
+    const uint64_t want = uint64_t(double(total) * 0.999);
+    uint64_t seen = 0;
+    int at = 0;
+    for (; at < kBins - 1; at++) {
+      seen += histogram[size_t(band) * kBins + at];
+      if (seen >= want) break;
+    }
+    // The top of that bin, and never nought: a band whose coefficients are
+    // all exactly zero would otherwise be scaled by zero.
+    into.harmonicScale[band] = std::max(float(at + 1) / kPerUnit, 1.0f / kPerUnit);
+  }
+
+  into.harmonicDegree = degree;
+  into.harmonics.assign(size_t(count) * splatHarmonicBytes(degree), 128);
+  for (uint64_t i = 0; i < count; i++) {
+    const uint8_t *v = vertices + size_t(i) * stride;
+    uint8_t *out = &into.harmonics[size_t(i) * splatHarmonicBytes(degree)];
+    for (uint32_t k = 0; k < keep; k++) {
+      const float scale = into.harmonicScale[bandOf(k)];
+      for (uint32_t c = 0; c < 3; c++) {
+        const Property &p = *rest[size_t(c) * keep + k];
+        out[size_t(k) * 3 + c] = toHarmonicByte(readAs(v + p.offset, p), scale);
+      }
+    }
+  }
+}
+
 }  // namespace
 
-bool readSplatPly(const uint8_t *data, size_t length, SplatCloud &into,
-                  std::string &error) {
+bool readSplatPly(const uint8_t *data, size_t length, uint32_t maxDegree,
+                  SplatCloud &into, std::string &error) {
   // The header is text and ends at the first "end_header" line. Capped, so a
   // file that is not a PLY at all is refused rather than scanned to its end.
   const char *text = reinterpret_cast<const char *>(data);
@@ -271,16 +366,53 @@ bool readSplatPly(const uint8_t *data, size_t length, SplatCloud &into,
     }
   }
 
+  // The bands above the flat one, if the file has them and the caller asked
+  // for them.
+  //
+  // f_rest_* is channel-major: every coefficient of red, then every one of
+  // green, then blue. That is what the reference trainer writes when it
+  // flattens its (splat, coefficient, channel) tensor with the last two
+  // transposed, so coefficient k of channel c is property c * perChannel + k.
+  // How many there are says which degree the capture was trained to: three a
+  // channel is one band, eight is two, fifteen is three, and anything else is
+  // a layout this does not know how to take apart.
+  uint32_t stored = 0;
+  while (find(("f_rest_" + std::to_string(stored)).c_str()) != nullptr) stored++;
+  uint32_t fileDegree = 0;
+  for (uint32_t d = 1; d <= kSplatMaxHarmonicDegree; d++) {
+    if (stored == kSplatHarmonicCoefficients[d] * 3) fileDegree = d;
+  }
+  const uint32_t degree =
+      std::min(fileDegree, std::min(maxDegree, kSplatMaxHarmonicDegree));
+
+  std::vector<const Property *> rest;
+  if (degree > 0) {
+    const uint32_t keep = kSplatHarmonicCoefficients[degree];
+    const uint32_t perChannel = stored / 3;
+    rest.resize(size_t(keep) * 3);
+    for (uint32_t c = 0; c < 3; c++) {
+      for (uint32_t k = 0; k < keep; k++) {
+        rest[size_t(c) * keep + k] =
+            find(("f_rest_" + std::to_string(c * perChannel + k)).c_str());
+      }
+    }
+  }
+
   begin(into, uint32_t(vertices));
-  into.droppedHigherBands = find("f_rest_0") != nullptr;
+  // Said when the picture is missing something the file had: bands above the
+  // degree asked for, or a count of f_rest properties that is none of the
+  // three a trainer writes.
+  into.droppedHigherBands =
+      fileDegree > degree || (stored > 0 && fileDegree == 0);
 
   for (uint32_t i = 0; i < uint32_t(vertices); i++) {
     const uint8_t *v = data + body + size_t(i) * stride;
     const float position[3] = {readAs(v + p[0]->offset, *p[0]),
                                readAs(v + p[1]->offset, *p[1]),
                                readAs(v + p[2]->offset, *p[2])};
-    // Colour from the degree-zero coefficient; the view-dependent bands in
-    // f_rest are not evaluated.
+    // The flat part of the colour, from the degree-zero coefficient. What the
+    // higher bands add is read below and evaluated in the shader, where the
+    // direction to the camera is known.
     const float r = 0.5f + kShC0 * readAs(v + p[3]->offset, *p[3]);
     const float g = 0.5f + kShC0 * readAs(v + p[4]->offset, *p[4]);
     const float b = 0.5f + kShC0 * readAs(v + p[5]->offset, *p[5]);
@@ -300,12 +432,13 @@ bool readSplatPly(const uint8_t *data, size_t length, SplatCloud &into,
                             (uint32_t(toByte(opacity)) << 24);
     put(into, i, position, scale, rotation, colour);
   }
+  readHarmonics(data + body, vertices, stride, rest, degree, into);
   finish(into);
   return true;
 }
 
-bool loadSplatFile(const std::string &path, SplatCloud &into,
-                   std::string &error) {
+bool loadSplatFile(const std::string &path, uint32_t maxDegree,
+                   SplatCloud &into, std::string &error) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
     error = "cannot open " + path;
@@ -323,7 +456,7 @@ bool loadSplatFile(const std::string &path, SplatCloud &into,
   std::transform(lower.begin(), lower.end(), lower.begin(),
                  [](unsigned char c) { return char(std::tolower(c)); });
   const bool ply = lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".ply") == 0;
-  return ply ? readSplatPly(bytes.data(), bytes.size(), into, error)
+  return ply ? readSplatPly(bytes.data(), bytes.size(), maxDegree, into, error)
              : readSplatRecords(bytes.data(), bytes.size(), into, error);
 }
 
@@ -353,6 +486,39 @@ void packSplatTexels(const SplatCloud &cloud, std::vector<uint32_t> &texels) {
     t[7] = bits(c[4]);
     t[8] = bits(c[5]);
     t[9] = cloud.colours[i];
+  }
+}
+
+void packSplatHarmonicTexels(const SplatCloud &cloud,
+                             std::vector<uint32_t> &texels) {
+  const uint32_t perSplat = splatHarmonicTexels(cloud.harmonicDegree);
+  const uint32_t bytes = splatHarmonicBytes(cloud.harmonicDegree);
+  if (cloud.count == 0 || perSplat == 0 ||
+      cloud.harmonics.size() < size_t(cloud.count) * bytes) {
+    texels.clear();
+    return;
+  }
+
+  const size_t used = size_t(cloud.count) * perSplat;
+  const size_t rows = std::max<size_t>(1, (used + kSplatTextureWidth - 1) /
+                                              kSplatTextureWidth);
+  // Filled with 128s, which is a coefficient of nought. Nothing reads the
+  // few bytes left over at the end of a splat's texels or the end of the
+  // last row, and if anything ever does it reads no colour rather than a
+  // coefficient of minus one.
+  texels.assign(rows * kSplatTextureWidth * 4, 0x80808080u);
+
+  for (uint32_t i = 0; i < cloud.count; i++) {
+    const uint8_t *from = &cloud.harmonics[size_t(i) * bytes];
+    uint32_t *to = &texels[size_t(i) * perSplat * 4];
+    for (uint32_t b = 0; b < bytes; b++) {
+      // Placed by shifting rather than by copying the bytes across, so the
+      // byte a coefficient lands in is the one splat.mat shifts back out of
+      // it whatever order this processor stores an integer in.
+      const uint32_t within = (b % 4) * 8;
+      uint32_t &word = to[b / 4];
+      word = (word & ~(0xffu << within)) | (uint32_t(from[b]) << within);
+    }
   }
 }
 

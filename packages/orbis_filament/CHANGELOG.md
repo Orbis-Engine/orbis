@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.23.0
+
+- **A Gaussian splat capture's colour now changes with the view.** The
+  `f_rest_*` coefficients every trainer writes — the spherical-harmonic bands
+  above the flat one, which this read past until now — are read, quantised and
+  evaluated against the direction from the camera to each splat, so a surface
+  is one colour seen from here and another seen from there. That is what a
+  window, a polished floor and wet tarmac are, and with the flat term alone
+  they were painted the average of every direction at once.
+
+  `OrbisSplats.harmonics` says how many bands to read: 0, 1, 2 or 3, and 2 by
+  default, which is what most captures are trained to and where nearly all of
+  the effect is. A file trained lower is read as far as it goes; one trained
+  higher is read to the degree asked for and says so. The bands live in a
+  texture of their own — a byte a coefficient, sixteen to a texel, one texel a
+  splat per degree — so they cost 16, 32 or 48 bytes a splat, which at a
+  million splats is 16, 32 or 48 MB beside the 48 MB the splats themselves
+  take. A cloud at degree 0, a `.splat` and a cloud packed in Dart pay a single
+  texel between them and draw exactly what they drew before, through the same
+  splat texture, laid out to the byte as it was.
+
+  The basis is the real-valued spherical harmonics with the Condon-Shortley
+  phase, which is the convention the trainers write their coefficients in. It
+  is evaluated in the vertex stage: a splat has one colour rather than a colour
+  a pixel, so this is the same answer the reference rasteriser reaches, worked
+  out four times a splat instead of once per fragment of an ellipse that covers
+  hundreds of them.
+
 ## 0.22.0
 
 - **A rectangular light's shadow now actually falls.** The depth map it drew

@@ -43,6 +43,41 @@ constexpr uint32_t kSplatTexelsPerSplat = 3;
 /// `f_dc` coefficient into a colour: 0.5 + SH_C0 * f_dc.
 constexpr float kShC0 = 0.28209479177387814f;
 
+/// The highest spherical-harmonic degree a capture is read at.
+///
+/// Three because there is no fourth to support: a trained capture carries 3,
+/// 8 or 15 coefficients a colour channel and nothing else.
+constexpr uint32_t kSplatMaxHarmonicDegree = 3;
+
+/// Coefficients one colour channel has at each degree: none at all, then the
+/// first band's three, the second band's five on top of those, the third's
+/// seven on top again.
+constexpr uint32_t kSplatHarmonicCoefficients[4] = {0, 3, 8, 15};
+
+/// Texels one splat's harmonics take at `degree` — which is `degree` itself.
+///
+/// A texel of the harmonics texture is four unsigned integers and a
+/// coefficient is quantised to a byte, so sixteen coefficients fit in one.
+/// Nine bytes carry the first band for three channels, twenty-four carry two
+/// bands and forty-five carry three: one, two and three texels exactly, with
+/// seven, eight and three bytes spare. Paying those few bytes keeps a splat's
+/// harmonics at a whole number of texels, so the shader fetches `degree` of
+/// them at a known offset rather than working out which texel a coefficient
+/// straddles.
+constexpr uint32_t splatHarmonicTexels(uint32_t degree) { return degree; }
+
+/// Bytes one splat's harmonics take before that padding.
+constexpr uint32_t splatHarmonicBytes(uint32_t degree) {
+  return kSplatHarmonicCoefficients[degree] * 3;
+}
+
+/// How far either side of a band's scale a stored byte reaches.
+///
+/// A coefficient becomes 128 + round(127 * coefficient / scale), so 128 is
+/// nought exactly and 1 and 255 are the scale itself either way. Must match
+/// the decode in splat.mat.
+constexpr float kSplatHarmonicSteps = 127.0f;
+
 /// A cloud as the renderer holds it, already turned into what the shader
 /// reads: a centre, the six numbers of a symmetric 3D covariance, and a
 /// colour with its opacity.
@@ -54,6 +89,22 @@ struct SplatCloud {
   /// A box around every splat out to three standard deviations.
   float minimum[3] = {0, 0, 0};
   float maximum[3] = {0, 0, 0};
+
+  /// The degree of the spherical harmonics in `harmonics`: 0 for a cloud that
+  /// is the same colour from everywhere, up to kSplatMaxHarmonicDegree.
+  uint32_t harmonicDegree = 0;
+  /// The bands above the flat one, a byte a coefficient: per splat, in the
+  /// order the coefficients come, with red, green and blue together within
+  /// each. splatHarmonicBytes(degree) of them a splat, and empty at degree 0.
+  ///
+  /// Not in the order the file has them. A `.ply` writes every coefficient of
+  /// red, then of green, then of blue, which is the worst order to read one
+  /// splat's coefficients in; this is the order the shader wants them.
+  std::vector<uint8_t> harmonics;
+  /// What a byte of `harmonics` is worth, band by band from the first.
+  /// Nought for a band that is not there.
+  float harmonicScale[3] = {0, 0, 0};
+
   /// Whether the file had higher spherical-harmonic bands that were read
   /// past. Said so a caller can report it rather than pretend.
   bool droppedHigherBands = false;
@@ -72,18 +123,30 @@ bool readSplatRecords(const uint8_t *data, size_t length, SplatCloud &into,
 
 /// Reads the layout the reference trainer writes: a binary little-endian PLY
 /// whose vertex element has x y z, f_dc_0..2, optional f_rest_*, opacity as
-/// a logit, scale_0..2 as log-scales and rot_0..3. Only degree zero of the
-/// spherical harmonics is used.
-bool readSplatPly(const uint8_t *data, size_t length, SplatCloud &into,
-                  std::string &error);
+/// a logit, scale_0..2 as log-scales and rot_0..3.
+///
+/// `maxDegree` is how much of the view-dependent colour to keep: 0 for the
+/// flat degree-zero colour alone, up to kSplatMaxHarmonicDegree. A file
+/// carrying more bands than that is read to the degree asked for and says so
+/// in `droppedHigherBands`; one carrying fewer is read as far as it goes.
+bool readSplatPly(const uint8_t *data, size_t length, uint32_t maxDegree,
+                  SplatCloud &into, std::string &error);
 
-/// Either of the above, chosen by the file's extension.
-bool loadSplatFile(const std::string &path, SplatCloud &into,
-                   std::string &error);
+/// Either of the above, chosen by the file's extension. A `.splat` has no
+/// room for higher bands, so `maxDegree` only reaches a `.ply`.
+bool loadSplatFile(const std::string &path, uint32_t maxDegree,
+                   SplatCloud &into, std::string &error);
 
 /// The cloud as the RGBA32UI texels the shader fetches, padded out to whole
 /// rows of kSplatTextureWidth.
 void packSplatTexels(const SplatCloud &cloud, std::vector<uint32_t> &texels);
+
+/// The cloud's harmonics as their own RGBA32UI texels, sixteen quantised
+/// coefficients to a texel and splatHarmonicTexels(degree) texels a splat,
+/// padded out to whole rows. Empty for a cloud at degree 0, which is what
+/// keeps a capture without them costing nothing at all.
+void packSplatHarmonicTexels(const SplatCloud &cloud,
+                             std::vector<uint32_t> &texels);
 
 /// A float as an unsigned integer that sorts the same way.
 inline uint32_t sortableBits(float value) {

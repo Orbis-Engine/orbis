@@ -45,6 +45,17 @@ material {
         { type : sampler2d, name : splats, format : uint, precision : high },
         // Which splat is drawn in each slot, back to front.
         { type : sampler2d, name : order, format : uint, precision : high },
+        // The spherical-harmonic bands above the flat one, quantised to a
+        // byte a coefficient: sixteen to a texel, and one texel a splat for
+        // each degree. Bound even at degree nought, where nothing reads it,
+        // because a sampler a material declares has to be bound.
+        { type : sampler2d, name : harmonics, format : uint, precision : high },
+        // How many of those bands there are: 0, 1, 2 or 3. Zero is a capture
+        // with no view-dependent colour at all, and takes the same path
+        // through this shader that there was before there were any bands.
+        { type : int, name : harmonicDegree },
+        // What a stored byte is worth in each band.
+        { type : float3, name : harmonicScale },
         { type : float, name : opacity },
         { type : float, name : brightness }
     ],
@@ -58,6 +69,100 @@ vertex {
     uvec4 splatTexel(int index) {
         return texelFetch(materialParams_splats,
                           ivec2(index % kWidth, index / kWidth), 0);
+    }
+
+    uvec4 harmonicTexel(int index) {
+        return texelFetch(materialParams_harmonics,
+                          ivec2(index % kWidth, index / kWidth), 0);
+    }
+
+    // One byte of a splat's harmonics, as the number it stands for: 128 is
+    // nought, and 1 and 255 are the band's scale either way. Sixteen bytes to
+    // a texel, four to each of its unsigned integers, low byte first — the
+    // order OrbisSplats.cpp shifts them into, so neither side depends on how
+    // a processor stores an integer.
+    float harmonicByte(uvec4 texels[3], int index) {
+        uint word = texels[index / 16][(index % 16) / 4];
+        return (float((word >> (8u * uint(index % 4))) & 0xffu) - 128.0) / 127.0;
+    }
+
+    // What the bands above the flat one add to a splat's colour, seen along
+    // the direction d.
+    //
+    // The basis is the real-valued spherical harmonics in Cartesian form:
+    // orthonormal over the sphere, with the Condon-Shortley phase, which is
+    // the convention a trained capture's f_rest coefficients are written in
+    // and the one the reference implementation evaluates them against. The
+    // constants are their normalisations — sqrt(3/4pi) for the first band;
+    // sqrt(15/4pi), sqrt(5/16pi) and sqrt(15/16pi) for the second;
+    // sqrt(35/32pi), sqrt(105/4pi), sqrt(21/32pi), sqrt(7/16pi) and
+    // sqrt(105/16pi) for the third — and the minus signs are that phase,
+    // carried by the terms odd in m. A sign wrong here does not look like
+    // noise: a highlight simply appears on the side of a surface facing away
+    // from whatever made it.
+    //
+    // Evaluated here rather than in the fragment stage because a splat has
+    // one colour, not a colour a pixel: the direction is the one from the
+    // camera to the splat's centre, so this is the same answer the reference
+    // arrives at, worked out four times a splat — against the hundreds of
+    // fragments a 3-sigma ellipse covers, several splats deep, which is what
+    // the fragment stage would charge for the identical number.
+    vec3 harmonicColour(int id, int degree, vec3 d) {
+        float x = d.x;
+        float y = d.y;
+        float z = d.z;
+
+        // The basis, coefficient by coefficient in the order they are stored.
+        float basis[15];
+        basis[0] = -0.4886025119029199 * y;
+        basis[1] = 0.4886025119029199 * z;
+        basis[2] = -0.4886025119029199 * x;
+        int count = 3;
+        if (degree >= 2) {
+            float xx = x * x;
+            float yy = y * y;
+            float zz = z * z;
+            basis[3] = 1.0925484305920792 * x * y;
+            basis[4] = -1.0925484305920792 * y * z;
+            basis[5] = 0.31539156525252005 * (2.0 * zz - xx - yy);
+            basis[6] = -1.0925484305920792 * x * z;
+            basis[7] = 0.5462742152960396 * (xx - yy);
+            count = 8;
+        }
+        if (degree >= 3) {
+            float xx = x * x;
+            float yy = y * y;
+            float zz = z * z;
+            basis[8] = -0.5900435899266435 * y * (3.0 * xx - yy);
+            basis[9] = 2.890611442640554 * x * y * z;
+            basis[10] = -0.4570457994644658 * y * (4.0 * zz - xx - yy);
+            basis[11] = 0.3731763325901154 * z * (2.0 * zz - 3.0 * xx - 3.0 * yy);
+            basis[12] = -0.4570457994644658 * x * (4.0 * zz - xx - yy);
+            basis[13] = 1.445305721320277 * z * (xx - yy);
+            basis[14] = -0.5900435899266435 * x * (xx - 3.0 * yy);
+            count = 15;
+        }
+
+        // One texel a degree, at a known offset, because sixteen quantised
+        // coefficients fit in one and a degree never adds more than sixteen.
+        uvec4 texels[3];
+        texels[0] = harmonicTexel(id * degree);
+        texels[1] = degree >= 2 ? harmonicTexel(id * degree + 1) : uvec4(0u);
+        texels[2] = degree >= 3 ? harmonicTexel(id * degree + 2) : uvec4(0u);
+
+        vec3 sum = vec3(0.0);
+        for (int k = 0; k < count; k++) {
+            // Three bytes a coefficient — red, green and blue together — and
+            // what a byte is worth is the scale of the band it is in.
+            float scale = k < 3 ? materialParams.harmonicScale.x
+                        : (k < 8 ? materialParams.harmonicScale.y
+                                 : materialParams.harmonicScale.z);
+            vec3 coefficient = vec3(harmonicByte(texels, k * 3),
+                                    harmonicByte(texels, k * 3 + 1),
+                                    harmonicByte(texels, k * 3 + 2));
+            sum += basis[k] * scale * coefficient;
+        }
+        return sum;
     }
 
     void materialVertex(inout MaterialVertexInputs material) {
@@ -176,6 +281,27 @@ vertex {
         vec4 colour = vec4(float(packed & 0xffu), float((packed >> 8u) & 0xffu),
                            float((packed >> 16u) & 0xffu),
                            float((packed >> 24u) & 0xffu)) / 255.0;
+
+        // The view-dependent part, for a capture that carries any. The branch
+        // is on a uniform, so every splat in a cloud takes the same side of
+        // it, and a cloud at degree nought takes exactly the path this shader
+        // had before there were any bands.
+        int degree = materialParams.harmonicDegree;
+        if (degree > 0) {
+            // The direction from the camera to this splat, in the cloud's own
+            // space — the space its coefficients were fitted in. The camera is
+            // the origin of view space, so that direction is the centre
+            // itself, and the model-to-view rotation carries it back
+            // transposed because it is going the other way. Exact for a cloud
+            // that is turned, moved or scaled evenly; a cloud scaled unevenly
+            // skews it a little, as it skews everything else about the splat.
+            vec3 towards = normalize(transpose(mat3(viewFromModel)) * view.xyz);
+            // Never negative: the sum of a few bands can dip below nothing
+            // where the fit had no photographs to hold it up, and the
+            // reference clamps it in the same place for the same reason.
+            colour.rgb = max(colour.rgb + harmonicColour(id, degree, towards),
+                             vec3(0.0));
+        }
         material.splatColour = colour;
     }
 }

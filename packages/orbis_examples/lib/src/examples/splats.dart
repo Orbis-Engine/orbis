@@ -55,6 +55,13 @@ class SplatsExample extends Example {
   /// A real capture to show instead, `.ply` or `.splat`.
   String? path;
 
+  /// How many spherical-harmonic bands of a capture's colour to read.
+  ///
+  /// Only reaches a `.ply` from [path]. The generated ring is packed into the
+  /// compact 32-byte records, which have no room for any, so it is the same
+  /// colour from every side however this is set.
+  int harmonics = 2;
+
   Uint8List? _data;
   int _builtFor = -1;
   int _revision = 0;
@@ -100,6 +107,7 @@ class SplatsExample extends Example {
           opacity: opacity,
           brightness: brightness,
           sorted: sorted,
+          harmonics: harmonics,
           revision: _revision,
         ),
       ],
@@ -240,6 +248,20 @@ class SplatsExample extends Example {
                 changed();
               },
       ),
+      Choice(
+        label: 'Harmonics',
+        options: const ['0', '1', '2', '3'],
+        selected: '$harmonics',
+        // Greyed out with no capture loaded, because there is nothing for it
+        // to act on: the generated ring is packed into the compact records,
+        // which carry a splat's colour and no bands at all.
+        onSelect: path == null
+            ? null
+            : (option) {
+                harmonics = int.parse(option);
+                changed();
+              },
+      ),
       Setting(
         label: 'Opacity',
         value: opacity,
@@ -271,6 +293,10 @@ OrbisSplats(
   path: 'garden.ply',
   // Structure-from-motion puts y down. Turned the right way up here.
   transform: Matrix4.rotationX(math.pi),
+  // How much of the capture's view-dependent colour to read: the degree of
+  // its spherical harmonics. Two is what most captures are trained to, and
+  // costs 32 bytes a splat; 0 draws the flat colour alone and costs nothing.
+  harmonics: 2,
 )
 
 // Or a cloud made in Dart, packed into the same 32-byte layout.

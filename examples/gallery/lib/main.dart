@@ -47,6 +47,8 @@
 ///   ORBIS_SPLAT_COUNT      how many splats the generated ring has
 ///   ORBIS_SPLAT_SORT=0     draw them unsorted, to measure what the sort does
 ///   ORBIS_SPLAT_PILLAR=0   take the solid pillar out of the ring
+///   ORBIS_SPLAT_HARMONICS  how many bands of a capture's view-dependent
+///                          colour to read: 0, 1, 2 or 3
 ///   ORBIS_BATCHING=0/1     batching off or on, for any example, so the same
 ///                          frame can be drawn both ways and compared
 ///   ORBIS_CRATES           how many crates the Batching example draws
@@ -610,6 +612,8 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       if (_orbisEnv['ORBIS_SPLAT_PILLAR'] == '0') {
         example.pillar = false;
       }
+      example.harmonics =
+          _number('ORBIS_SPLAT_HARMONICS')?.round() ?? example.harmonics;
     }
 
     if (example is MotionBlurExample) {

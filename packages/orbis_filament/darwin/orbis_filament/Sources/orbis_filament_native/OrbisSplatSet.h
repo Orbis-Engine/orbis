@@ -62,6 +62,10 @@ class SplatSet {
 
   filament::Texture *_splats = nullptr;
   filament::Texture *_order = nullptr;
+  /// The higher spherical-harmonic bands, or a single texel standing in for
+  /// them when the cloud has none: a material's sampler has to be bound
+  /// whether or not the shader ever reads it.
+  filament::Texture *_harmonics = nullptr;
   filament::VertexBuffer *_corners = nullptr;
   filament::IndexBuffer *_indices = nullptr;
   filament::MaterialInstance *_instance = nullptr;
@@ -114,6 +118,10 @@ class SplatScene {
     std::unique_ptr<SplatSet> set;
     std::string path;
     int32_t revision = 0;
+    /// The spherical-harmonic degree this one was read at. Kept because
+    /// asking for a different one means reading the file again: what was
+    /// dropped on the way in is not on the GPU to be brought back.
+    uint32_t degree = 0;
     uint64_t seen = 0;
   };
 

@@ -112,7 +112,31 @@ void main() {
       expect(params.sublist(second + 12, second + 15), [4, 5, 6]);
       expect(params[second + 16], 0.5);
       expect(params[second + 17], 2);
-      expect(message['splatFlags'], [1, 0]);
+      // Sorted and read to degree two, then unsorted and read to degree two.
+      expect(message['splatFlags'], [5, 4]);
+    });
+  });
+
+  group('the flags', () {
+    test('carry the sort in the low bit and the degree above it', () {
+      expect(OrbisSplats(key: 1, path: 'a.ply').flags, 1 | (2 << 1));
+      expect(OrbisSplats(key: 1, path: 'a.ply', harmonics: 0).flags, 1);
+      expect(OrbisSplats(key: 1, path: 'a.ply', harmonics: 1).flags, 1 | (1 << 1));
+      expect(
+        OrbisSplats(key: 1, path: 'a.ply', sorted: false, harmonics: 3).flags,
+        3 << 1,
+      );
+    });
+
+    test('refuse a degree no capture is trained to', () {
+      expect(
+        () => OrbisSplats(key: 1, path: 'a.ply', harmonics: 4),
+        throwsA(isA<AssertionError>()),
+      );
+      expect(
+        () => OrbisSplats(key: 1, path: 'a.ply', harmonics: -1),
+        throwsA(isA<AssertionError>()),
+      );
     });
   });
 

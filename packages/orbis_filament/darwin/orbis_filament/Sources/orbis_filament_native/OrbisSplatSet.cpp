@@ -76,6 +76,58 @@ SplatSet::SplatSet(Engine &engine, Scene &scene, Material &material,
   for (uint32_t i = 0; i < _count; i++) given[i] = i;
   uploadOrder(given);
 
+  // The spherical-harmonic bands above the flat colour, when the cloud has
+  // any.
+  //
+  // Their own texture rather than more texels on the end of the splat one,
+  // for two reasons. A cloud without them — every `.splat`, every capture
+  // trained to degree nought, and any capture read with them turned off —
+  // pays one texel here and nothing else, and the splat texture it does read
+  // is laid out to the byte as it was before there were any bands. And the
+  // two are read at different rates: three texels a splat are fetched always,
+  // these only when there is a degree to evaluate.
+  std::vector<uint32_t> harmonics;
+  packSplatHarmonicTexels(cloud, harmonics);
+  const uint32_t degree = harmonics.empty() ? 0 : cloud.harmonicDegree;
+  // A sampler a material declares has to be bound whether or not the shader
+  // reads it, so degree nought still gets a texture: one texel, sixteen 128s,
+  // which is a coefficient of nothing in every channel.
+  if (degree == 0) harmonics.assign(4, 0x80808080u);
+  _harmonics =
+      Texture::Builder()
+          .width(degree == 0 ? 1 : kSplatTextureWidth)
+          .height(degree == 0
+                      ? 1
+                      : rowsFor(size_t(count) * splatHarmonicTexels(degree)))
+          .levels(1)
+          .sampler(Texture::Sampler::SAMPLER_2D)
+          .format(Texture::InternalFormat::RGBA32UI)
+          .build(engine);
+  auto *harmonicBytes = new uint32_t[harmonics.size()];
+  std::memcpy(harmonicBytes, harmonics.data(),
+              harmonics.size() * sizeof(uint32_t));
+  _harmonics->setImage(
+      engine, 0,
+      Texture::PixelBufferDescriptor(
+          harmonicBytes, harmonics.size() * sizeof(uint32_t),
+          Texture::PixelBufferDescriptor::PixelDataFormat::RGBA_INTEGER,
+          Texture::PixelBufferDescriptor::PixelDataType::UINT,
+          [](void *buffer, size_t, void *) {
+            delete[] static_cast<uint32_t *>(buffer);
+          }));
+  if (degree > 0) {
+    // What the bands cost, said out loud: a million splats at degree two is
+    // another thirty-two megabytes on the card, and the number anybody
+    // deciding whether to pay it wants is this one.
+    std::fprintf(stderr,
+                 "[orbis] splats: degree-%u colour on %u splats: %u bytes a "
+                 "splat, %.1f MB, band scales %.3f %.3f %.3f\n",
+                 degree, _count, splatHarmonicTexels(degree) * 16u,
+                 double(harmonics.size() * sizeof(uint32_t)) / (1024 * 1024),
+                 double(cloud.harmonicScale[0]), double(cloud.harmonicScale[1]),
+                 double(cloud.harmonicScale[2]));
+  }
+
   // Four corners a splat, each only saying which corner it is. The vertex's
   // own index says which splat, so these never change — a re-sort rewrites
   // the order texture and nothing else. Bytes, normalised, because ±1 and a
@@ -130,6 +182,12 @@ SplatSet::SplatSet(Engine &engine, Scene &scene, Material &material,
   _instance = material.createInstance();
   _instance->setParameter("splats", _splats, nearest);
   _instance->setParameter("order", _order, nearest);
+  _instance->setParameter("harmonics", _harmonics, nearest);
+  _instance->setParameter("harmonicDegree", int32_t(degree));
+  _instance->setParameter(
+      "harmonicScale",
+      float3{cloud.harmonicScale[0], cloud.harmonicScale[1],
+             cloud.harmonicScale[2]});
   _instance->setParameter("opacity", 1.0f);
   _instance->setParameter("brightness", 1.0f);
 
@@ -173,6 +231,7 @@ SplatSet::~SplatSet() {
   _engine.destroy(_instance);
   _engine.destroy(_splats);
   _engine.destroy(_order);
+  _engine.destroy(_harmonics);
   _engine.destroy(_corners);
   _engine.destroy(_indices);
 }
@@ -316,18 +375,27 @@ void SplatScene::apply(const std::vector<SplatRequest> &requests,
     // A file is read when its path changes; a cloud sent in memory is
     // rebuilt when its data arrives, which is only when its revision moved.
     const bool fromFile = !request.path.empty();
-    const bool wanted = fromFile ? (!kept.set || kept.path != request.path)
+    // Bit nought of the flags says whether the cloud is sorted; the two above
+    // it say how many spherical-harmonic bands to read, which is a property
+    // of the reading rather than of the drawing — so a cloud asked for at a
+    // different degree is read again, because what was left out on the way in
+    // is not on the card to be brought back.
+    const uint32_t degree = std::min<uint32_t>(uint32_t((request.flags >> 1) & 3),
+                                               kSplatMaxHarmonicDegree);
+    const bool wanted = fromFile ? (!kept.set || kept.path != request.path ||
+                                    kept.degree != degree)
                                  : (request.data != nullptr &&
                                     (!kept.set || kept.revision != request.revision));
     if (wanted) {
       SplatCloud cloud;
       std::string error;
       const bool read =
-          fromFile ? loadSplatFile(request.path, cloud, error)
+          fromFile ? loadSplatFile(request.path, degree, cloud, error)
                    : readSplatRecords(request.data, request.bytes, cloud, error);
       kept.set.reset();
       kept.path = request.path;
       kept.revision = request.revision;
+      kept.degree = degree;
       if (!read) {
         notes.emplace_back(fromFile ? request.path
                                     : "splats " + std::to_string(request.key),
@@ -335,9 +403,14 @@ void SplatScene::apply(const std::vector<SplatRequest> &requests,
         continue;
       }
       if (cloud.droppedHigherBands && fromFile) {
-        notes.emplace_back(request.path,
-                           "drawn with degree-0 colour only; the file's "
-                           "higher spherical-harmonic bands are ignored");
+        notes.emplace_back(
+            request.path,
+            cloud.harmonicDegree == 0
+                ? "drawn with degree-0 colour only; the file's higher "
+                  "spherical-harmonic bands were not read"
+                : "drawn to spherical-harmonic degree " +
+                      std::to_string(cloud.harmonicDegree) +
+                      "; the bands the file has above that were not read");
       }
       if (_material == nullptr) {
         _material = Material::Builder()

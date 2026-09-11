@@ -175,6 +175,21 @@ void main() {
       );
     });
 
+    test('the shader and the loader quantise harmonics the same way', () {
+      // A coefficient is stored as 128 + round(127 * value / scale) and read
+      // back as (byte - 128) / 127 * scale. Two numbers, written out in two
+      // languages, and a drift between them is not a crash or a refused
+      // message: it is a capture whose colours are quietly wrong from every
+      // direction but straight on.
+      final steps = RegExp(
+        r'constexpr float kSplatHarmonicSteps\s*=\s*([0-9.]+)f',
+      ).firstMatch(splatNative);
+      final decode = RegExp(r'-\s*128\.0\)\s*/\s*([0-9.]+)').firstMatch(material);
+      expect(steps, isNotNull);
+      expect(decode, isNotNull);
+      expect(double.parse(decode!.group(1)!), double.parse(steps!.group(1)!));
+    });
+
     test('the shader and the uploader agree on the texture width', () {
       final width = RegExp(
         r'constexpr uint32_t kSplatTextureWidth\s*=\s*(\d+)',
