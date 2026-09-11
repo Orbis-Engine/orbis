@@ -11,42 +11,56 @@ void main() {
       expect(OrbisRenderGraph.standard().passes.map((p) => p.effect), [null]);
     });
 
-    test('its graph is the world into a target and the blur onto the screen',
-        () {
-      final graph = const OrbisMotionBlur().graph();
-      expect(graph.problems, isEmpty);
-      final order = graph.schedule;
-      expect(order.map((p) => p.name), ['world', 'motion blur']);
-      expect(order.last.effect, OrbisEffect.motionBlur);
-      expect(order.last.into, isNull, reason: 'the blur draws the frame');
-      expect(order.last.reads, ['frame']);
-    });
+    test(
+      'its graph is the world into a target and the blur onto the screen',
+      () {
+        final graph = const OrbisMotionBlur().graph();
+        expect(graph.problems, isEmpty);
+        final order = graph.schedule;
+        expect(order.map((p) => p.name), ['world', 'motion blur']);
+        expect(order.last.effect, OrbisEffect.motionBlur);
+        expect(order.last.into, isNull, reason: 'the blur draws the frame');
+        expect(order.last.reads, ['frame']);
+      },
+    );
 
     test('its four dials cross in the order the renderer reads them', () {
       final packed = const OrbisMotionBlur(
         shutter: 1 / 30,
         maxPixels: 32,
         objects: false,
-        frameRate: 50,
+        samples: 9,
       ).graph().packedPasses;
-      final at = OrbisRenderGraph.passStride;
+      const at = OrbisRenderGraph.passStride;
       expect(packed[at + 8], closeTo(1 / 30, 1e-6), reason: 'shutter');
       expect(packed[at + 9], 32, reason: 'the clamp in pixels');
       expect(packed[at + 10], -1, reason: 'camera only');
-      expect(packed[at + 11], 50, reason: 'frame rate');
+      expect(packed[at + 11], 9, reason: 'taps');
       expect(packed[at + 12], OrbisEffect.motionBlur.index);
     });
 
-    test('a shutter left unset follows the camera, and says so with nought',
-        () {
+    test(
+      'a shutter left unset follows the camera, and says so with nought',
+      () {
+        const blur = OrbisMotionBlur();
+        expect(blur.dials.first, 0);
+        expect(blur.dials[2], 1, reason: 'objects blur by default');
+      },
+    );
+
+    test('a streak is speed times the time the shutter is open', () {
+      // Something crossing at 600 pixels a second: a thousandth of a second
+      // barely moves it, a thirtieth smears it twenty pixels, and the clamp
+      // stops a fast pan from turning the picture into its own average.
       const blur = OrbisMotionBlur();
-      expect(blur.dials.first, 0);
-      expect(blur.dials[2], 1, reason: 'objects blur by default');
-      // A 1/125 s shutter at sixty frames a second records a little under
-      // half of each frame's travel.
-      expect(blur.openFor(1 / 125), closeTo(0.48, 1e-9));
-      expect(const OrbisMotionBlur(shutter: 1 / 1000).openFor(1 / 30),
-          closeTo(0.06, 1e-9));
+      expect(blur.streak(600, cameraShutter: 1 / 1000), closeTo(0.6, 1e-9));
+      expect(blur.streak(600, cameraShutter: 1 / 30), closeTo(20, 1e-9));
+      expect(blur.streak(6000, cameraShutter: 1 / 30), 40);
+      expect(
+        const OrbisMotionBlur(shutter: 1 / 60).streak(600, cameraShutter: 1),
+        closeTo(10, 1e-9),
+        reason: 'a shutter of its own overrides the camera',
+      );
     });
 
     test('a target it reads has to keep its depth', () {

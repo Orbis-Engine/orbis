@@ -1,17 +1,23 @@
 // Every pixel's motion, in pixels, as far as the shutter saw it.
 //
-// Two sources, merged. Anything that stood still moved only because the
-// camera did, and that is rebuilt from depth: where the pixel is now, put back
-// into the world, and projected by last frame's camera. Anything that moved
-// on its own was drawn into the object velocity target by the velocity pass,
-// and is taken from there — but only if the object is actually what this
-// pixel shows, which is checked by distance, because that pass drew the
-// moving things alone and a wall in front of one never reached it.
+// Two sources, added together. Every pixel moved because the camera did, and
+// that part is rebuilt from depth: where the pixel is now, put back into the
+// world, and projected by last frame's camera. A pixel on an object that moved
+// on its own also carries that object's own motion, which the velocity pass
+// drew into the object target — but only if the object is actually what this
+// pixel shows, which is checked by distance, because that pass drew the moving
+// things alone and a wall standing in front of one never reached it.
+//
+// The two are measured over different spans — the camera between two drawn
+// frames, an object between two scenes the host published — so each arrives
+// already scaled to the shutter: the camera by `cameraScale` here, an object
+// by the renderer before its matrices were written. What comes out is a
+// distance travelled while the shutter was open, which is what a photograph
+// records, whatever rate anything was drawn or published at.
 //
 // What is written is McGuire et al.'s V: *half* the streak, since a point
-// contributes to the pixels X ± V, clamped to the filter's reach. Scaled by
-// how much of a frame the shutter was open for, which is the whole of the
-// photographic part — the rest is geometry.
+// smears over the pixels X ± V, held to the filter's reach. Blue is the
+// surface's distance, which the gather needs to decide what is in front.
 material {
     name : orbisMotionResolve,
     shadingModel : unlit,
@@ -23,8 +29,9 @@ material {
     parameters : [
         // The scene's depth: reversed, infinite far, so near/distance.
         { type : sampler2d, name : depth, precision : high },
-        // What the velocity pass drew: motion in texture units in RG, the
-        // surface's distance in B, nought where nothing moving was drawn.
+        // What the velocity pass drew: an object's own motion over the
+        // shutter in texture units in RG, the surface's distance in B, nought
+        // where nothing moving was drawn.
         { type : sampler2d, name : objects, precision : high },
         // Whether that target holds anything this frame.
         { type : float, name : useObjects },
@@ -33,11 +40,12 @@ material {
         // Last frame's clip space from this frame's view space, so that one
         // multiply carries a pixel from here to where the camera saw it then.
         { type : mat4, name : reproject, precision : high },
+        // The shutter over the time between the two frames: how much of the
+        // camera's frame-to-frame motion the picture records. Nought when the
+        // camera cannot be rebuilt from depth, or has not moved.
+        { type : float, name : cameraScale },
         // The picture's size in pixels.
         { type : float2, name : size },
-        // Shutter open time × frame rate: the part of a frame's travel the
-        // picture records.
-        { type : float, name : exposure },
         // Half the longest streak allowed, in pixels.
         { type : float, name : radius }
     ]
@@ -48,42 +56,47 @@ fragment {
         prepareMaterial(material);
 
         vec2 uv = getUV0();
-        ivec2 texel = ivec2(uv * materialParams.size);
+        ivec2 last = ivec2(materialParams.size) - 1;
+        ivec2 texel = clamp(ivec2(uv * materialParams.size), ivec2(0), last);
         float d = texelFetch(materialParams_depth, texel, 0).r;
 
-        // The pixel as a homogeneous point in view space. Written with the
-        // reciprocal distance as w, so that d = 0 — the sky, infinitely far —
-        // is a direction rather than a division by nought, and reprojects by
-        // the camera's turn alone, which is exactly how the sky moves.
         vec2 ndc = vec2(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y);
-        vec4 here = vec4(ndc.x * materialParams.tangents.x,
-                         ndc.y * materialParams.tangents.y,
-                         -1.0,
-                         d / materialParams.near);
-        vec4 then = materialParams.reproject * here;
-
         vec2 moved = vec2(0.0);
-        if (then.w > 1e-6) {
-            moved = (ndc - then.xy / then.w) * vec2(0.5, -0.5);
-        }
-
-        // Taken from the object instead where the object is what is seen.
-        // A relative tolerance, since a depth buffer's precision falls off
-        // with distance and the velocity target is half floats.
-        float distance = d > 0.0 ? materialParams.near / d : 1.0e5;
-        if (materialParams.useObjects > 0.5) {
-            vec4 object = texelFetch(materialParams_objects, texel, 0);
-            if (object.b > 0.0 &&
-                abs(object.b - distance) < 0.02 * distance + 0.02) {
-                moved = object.rg;
+        if (materialParams.cameraScale > 0.0) {
+            // The pixel as a homogeneous point in view space, written with
+            // the reciprocal distance as w so that d = 0 — the sky, infinitely
+            // far — is a direction rather than a division by nought, and
+            // reprojects by the camera's turn alone, which is exactly how the
+            // sky moves.
+            vec4 here = vec4(ndc.x * materialParams.tangents.x,
+                             ndc.y * materialParams.tangents.y,
+                             -1.0,
+                             d / materialParams.near);
+            vec4 then = materialParams.reproject * here;
+            if (then.w > 1e-6) {
+                moved = (ndc - then.xy / then.w) * vec2(0.5, -0.5) *
+                        materialParams.cameraScale;
             }
         }
 
-        // Half the streak, in pixels, clamped to the reach.
-        vec2 v = moved * materialParams.size * materialParams.exposure * 0.5;
-        float length = sqrt(dot(v, v));
-        if (length > materialParams.radius) {
-            v *= materialParams.radius / length;
+        // Added where the object is what is seen. A relative tolerance,
+        // because a depth buffer's precision falls off with distance and the
+        // velocity target is half floats.
+        float distance = d > 0.0 ? materialParams.near / d : 60000.0;
+        distance = min(distance, 60000.0);
+        if (materialParams.useObjects > 0.5) {
+            vec4 object = texelFetch(materialParams_objects, texel, 0);
+            if (object.b > 0.0 &&
+                abs(object.b - distance) < 0.03 * distance + 0.05) {
+                moved += object.rg;
+            }
+        }
+
+        // Half the streak, in pixels, held to the reach.
+        vec2 v = moved * materialParams.size * 0.5;
+        float reach = length(v);
+        if (reach > materialParams.radius) {
+            v *= materialParams.radius / reach;
         }
 
         material.baseColor = vec4(v, distance, 1.0);

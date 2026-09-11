@@ -28,6 +28,10 @@
 ///   ORBIS_BOUNCE_RADIUS    how far it looks, in metres
 ///   ORBIS_BOUNCE_THICKNESS how solid the depth buffer's surfaces are
 ///   ORBIS_BOUNCE_SLICES    how many directions each pixel fans along
+///   ORBIS_MOTION=0         turn the Motion blur example's blur off
+///   ORBIS_MOTION_OBJECTS=0 blur by the camera's motion only
+///   ORBIS_PAN=1            pan the Motion blur example's camera
+///   ORBIS_SHUTTER          its shutter, in seconds
 library;
 
 import 'dart:io';
@@ -318,6 +322,14 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;
       example.reach = _number('ORBIS_BOUNCE_RADIUS') ?? example.reach;
       if (Platform.environment['ORBIS_BOUNCE_OFF'] == '1') example.on = false;
+    }
+    if (example is MotionBlurExample) {
+      if (Platform.environment['ORBIS_MOTION'] == '0') example.on = false;
+      if (Platform.environment['ORBIS_MOTION_OBJECTS'] == '0') {
+        example.objects = false;
+      }
+      if (Platform.environment['ORBIS_PAN'] == '1') example.panning = true;
+      example.shutter = _number('ORBIS_SHUTTER') ?? example.shutter;
     }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;

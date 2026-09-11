@@ -173,14 +173,20 @@ enum OrbisEffect {
   /// carries its four dials in the order that class writes them.
   ///
   /// Four steps inside the renderer, all of them its own business rather
-  /// than passes in the graph: the objects that moved since last frame are
-  /// drawn again with a material that writes how far each pixel travelled;
-  /// that is merged with the camera's own motion, rebuilt from depth for
-  /// everything else; the largest motion in each tile of the screen is
+  /// than passes in the graph: the objects that moved since the scene was
+  /// last published are drawn again with a material that writes how far each
+  /// pixel travelled; that is added to the camera's own motion, rebuilt from
+  /// depth for every pixel; the largest motion in each tile of the screen is
   /// found; and each pixel gathers along the largest motion near it, weighted
   /// by depth so that a moving thing smears over what is behind it and not
   /// the other way round. The last two are McGuire, Hennessy, Bukowski and
   /// Osman, "A Reconstruction Filter for Plausible Motion Blur" (2012).
+  ///
+  /// Measured at 1600 by 1200 on a GPU shared with other work, against the
+  /// same graph running a pass that only copies: about **2 ms** more with a
+  /// fan and a plate moving under a still camera, and **4 to 5 ms** more
+  /// while the camera pans and every pixel gathers. A frame in which nothing
+  /// moved skips the three inner passes and copies.
   motionBlur('Motion blur');
 
   const OrbisEffect(this.label);
