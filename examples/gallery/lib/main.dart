@@ -64,7 +64,6 @@
 ///   ORBIS_SHADOW_LIGHT     which light the Shadows example casts with: Sun,
 ///                          Spot or Point
 ///   ORBIS_SHADOW_KIND      its edge: Sharp, Soft, Area or Variance
-///   ORBIS_SHADOW_OFF=1     no shadow pass at all
 ///   ORBIS_SHADOW_MAP       the map's size in pixels
 ///   ORBIS_SHADOW_CASCADES  how many cascades a sun's map is split into
 ///   ORBIS_SHADOW_SPLIT     place the splits by hand, the first at this
@@ -85,6 +84,10 @@
 ///   ORBIS_LENS             its lens warp, negative for pincushion
 ///   ORBIS_CHROMATIC        its chromatic split
 ///   ORBIS_WAVE             its wave's strength
+///   ORBIS_MOTION=0         turn the Motion blur example's blur off
+///   ORBIS_MOTION_OBJECTS=0 blur by the camera's motion only
+///   ORBIS_PAN=1            pan the Motion blur example's camera
+///   ORBIS_SHUTTER          its shutter, in seconds
 library;
 
 import 'dart:io';
@@ -410,9 +413,6 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
           orElse: () => shadows.kind,
         );
       }
-      if (Platform.environment['ORBIS_SHADOW_OFF'] == '1') {
-        shadows.enabled = false;
-      }
       shadows.mapSize = _number('ORBIS_SHADOW_MAP')?.round() ?? shadows.mapSize;
       shadows.cascades =
           _number('ORBIS_SHADOW_CASCADES')?.round() ?? shadows.cascades;
@@ -537,6 +537,15 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       if (Platform.environment['ORBIS_SPLAT_PILLAR'] == '0') {
         example.pillar = false;
       }
+    }
+
+    if (example is MotionBlurExample) {
+      if (Platform.environment['ORBIS_MOTION'] == '0') example.on = false;
+      if (Platform.environment['ORBIS_MOTION_OBJECTS'] == '0') {
+        example.objects = false;
+      }
+      if (Platform.environment['ORBIS_PAN'] == '1') example.panning = true;
+      example.shutter = _number('ORBIS_SHUTTER') ?? example.shutter;
     }
 
     _look.yaw = _number('ORBIS_YAW') ?? _look.yaw;

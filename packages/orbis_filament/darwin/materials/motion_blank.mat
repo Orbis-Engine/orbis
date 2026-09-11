@@ -1,0 +1,24 @@
+// Nought, over every pixel of the velocity target.
+//
+// The velocity pass draws only the objects that moved, so everywhere else has
+// to read as "nothing here". Filament's clear options belong to the swap chain
+// and are applied at the start of the frame, not to each target a view draws
+// into, so the emptying is done by drawing this first — it is the lowest
+// priority in the velocity scene — rather than by trusting whatever an
+// attachment held last frame.
+material {
+    name : orbisMotionBlank,
+    shadingModel : unlit,
+    vertexDomain : device,
+    depthWrite : false,
+    depthCulling : false,
+    culling : none,
+    requires : [ uv0 ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(0.0);
+    }
+}

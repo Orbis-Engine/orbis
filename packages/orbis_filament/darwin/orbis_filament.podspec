@@ -15,8 +15,9 @@ without a trip through the CPU.
   # per target under Sources — and CocoaPods is pointed at them rather than
   # keeping a second copy. Both build systems compile the same files.
   src = 'orbis_filament/Sources'
-  # Plain .cpp as well: the parts of the renderer with nothing Apple in them
-  # (splat loading and sorting, so far) are C++ so every port can take them.
+  # Plain C++ as well: the renderer's logic is moving out of Objective-C++
+  # into files that could be compiled anywhere, and a pattern that stopped at
+  # .mm would leave CocoaPods linking a renderer with half of it missing.
   s.source_files     = "#{src}/**/*.{h,m,mm,cpp,swift}"
   # The compiled material is an implementation detail and defines a symbol, so
   # it stays out of the umbrella header the module exposes.

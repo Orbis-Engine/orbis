@@ -73,6 +73,20 @@
   scene with no graph of its own has the passes put in for it, and neither
   costs anything while off.
 
+- **Motion blur, from a velocity buffer.** `OrbisMotionBlur().graph()` draws
+  the world into a target that keeps its depth and blurs it onto the screen
+  with the reconstruction filter of McGuire et al. (2012): the largest motion
+  in each tile, then a depth-aware gather, so a moving thing smears over what
+  is behind it and a still thing in front stays sharp. The camera's motion is
+  rebuilt from depth, and objects whose transform changed are drawn again to
+  record their own, so a spinning fan blurs while the wall behind it does not.
+  The renderer remembers both between frames, so a host that only resends its
+  scene gets it for free. The streak is photographic — speed times the
+  camera's shutter, measured on the clocks things actually moved on — and
+  lands within about six per cent of that: 1/1000 s barely blurs, 1/30 s
+  smears, and `maxPixels` caps a whipped camera. Off unless a graph asks for
+  it; a frame in which nothing moved costs a copy.
+
 - The plugin read a render graph of twelve or more passes out of step: it
   divided the pass list by twelve floats where a pass is thirteen.
 

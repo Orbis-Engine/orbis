@@ -70,6 +70,9 @@
 // Hook (screen effects): god rays and distortion live in plain C++, beside
 // this file, so the port to the renderer's C++ class carries them unchanged.
 #include "ScreenEffects.h"
+// Motion blur hook: the velocity pass, the tiles and the gather live in plain
+// C++ beside this file; the renderer holds one and tells it what moved.
+#include "OrbisMotionBlur.h"
 
 namespace orbis {
 
@@ -618,6 +621,10 @@ constexpr int kEffectSmaaWeights = 2;
 constexpr int kEffectSmaaBlend = 3;
 constexpr int kEffectBounce = 4;
 constexpr int kEffectCopy = 5;
+// Motion blur hook. Appended rather than inserted, so every effect before it
+// keeps its number: the effect crosses as its index, and an index that drifts
+// runs a different shader rather than failing. motion_blur_test checks it.
+constexpr int kEffectMotionBlur = 8;  // god rays are 6 and distortion 7, in ScreenEffects.h
 
 /// Where a material's texture says it comes from a pass rather than a file.
 static const char *const kTargetScheme = "orbis:target/";
@@ -1262,6 +1269,10 @@ class Renderer {
   /// Hook (screen effects): what the host said about god rays and
   /// distortion, turned into material parameters when their pass runs.
   orbis::ScreenEffects _screenEffects{};
+  /// Motion blur hook: what motion blur remembers between frames and the
+  /// passes it runs. Made the first time a graph asks for the effect, so a
+  /// renderer that never blurs allocates none of it.
+  std::unique_ptr<orbis::MotionBlur> _motionBlur{};
 
   /// SMAA's two precomputed tables, uploaded once.
   /// The world-space irradiance field: two atlases, written in turn.
