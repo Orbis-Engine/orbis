@@ -103,27 +103,39 @@ Proven on the iOS simulator, added since:
   derivatives `highp`. A real device would have hit the same panic, high end
   or not, so this was fixed for the standard surface too, not only the slim
   one.
+- That a scene a host publishes reaches the renderer on the simulator — it
+  always did. What actually reached the renderer was never in question:
+  temporary logging through `applyObjects` showed it running on every single
+  call, building the right number of objects and flipping
+  `_sceneIsOwnedByHost` correctly. The scene itself was the same one every
+  time, which is what looked like the startup placeholder: `dart:io`'s
+  `Platform.environment` comes back an empty map on the iOS simulator
+  regardless of how the process was launched — proved by writing its length
+  to a file mid-run (0) while that launch's own `SIMCTL_CHILD_`-prefixed
+  variables were visible to native `getenv` throughout. `examples/gallery`
+  reads `ORBIS_EXAMPLE` (and every other `ORBIS_*` switch, `ORBIS_SECONDS`
+  and `ORBIS_CIRCLING` included) through `Platform.environment`, so on iOS it
+  always fell back to the gallery's first example, and its clock and camera
+  orbit were never pinned either — which is also the likely explanation for
+  the exposure finding below: the same rotating cube and orbiting camera,
+  caught at whatever unpinned moment frame 60 happened to land on. Fixed in
+  `examples/gallery/lib/main.dart`, which now reads the real environment
+  through `dart:ffi` when `Platform.environment` has nothing, changing
+  nothing on a platform where it already did.
+- Correct exposure on the simulator, provisionally — every frame captured
+  while chasing the point above was very dark, roughly a few parts in 255
+  where the same content on macOS reads two hundred plus, but multiplying
+  the raw pixels by twenty recovered exactly the right geometry, shading
+  gradient and colour, which ruled out a shading fault. With the example
+  selection fixed, every frame captured since (several examples, both
+  platforms) has read at a normal brightness with no multiplying needed, so
+  this was likely the same root cause rather than a second fault — an
+  unpinned clock occasionally catching mostly a shadowed face or the dark
+  floor. Not chased further than that; a genuine exposure difference would
+  need catching in the wild again now that the clock actually holds still.
 
 Not proven:
 
-- That a scene a host publishes reaches the renderer on the simulator. Every
-  frame captured there so far — whichever `ORBIS_EXAMPLE` was asked for —
-  shows the same startup placeholder cube from a camera angle that does
-  change with the example, which reads as `applyObjects` (or whatever loads
-  its meshes) not completing on this platform while simpler per-frame calls
-  such as the camera do. Nothing on the native side gates this on feature
-  level or the surface chosen — `_sceneIsOwnedByHost` flips on unconditionally
-  at the end of `applyObjects` — so the gap is upstream of this branch's
-  changes, most likely in the plugin or asset loading `feat/ios-core` added,
-  neither of which this branch touched. Worth its own investigation.
-- Correct exposure on the simulator. Every frame captured is very dark —
-  roughly a few parts in 255 where the same content on macOS reads two
-  hundred plus — but multiplying the raw pixels by twenty recovers exactly
-  the right geometry, shading gradient and colour, which rules out a shading
-  fault and points at the exposure or the readback rather than the surface.
-  The sky, drawn separately from any lit surface, comes back at the same
-  brightness on both platforms, which is what first said this was not a
-  materials problem.
 - A frame from a real device. That needs a signing identity there is none of.
 - A Linux, Android or Windows build. Docker's daemon did not answer, so the
   core has not been compiled against a Linux sysroot or linked against the
