@@ -84,6 +84,14 @@ std::string OrbisString(NSString *string) {
   return _core->batchGroups();
 }
 
+- (void)setDepthPrepass:(BOOL)enabled {
+  _core->setDepthPrepass(enabled);
+}
+
+- (uint32_t)prepassObjects {
+  return _core->prepassObjects();
+}
+
 - (void)applyMaterials:(const int64_t *)keys
                  flags:(const int32_t *)flags
                 params:(const float *)params

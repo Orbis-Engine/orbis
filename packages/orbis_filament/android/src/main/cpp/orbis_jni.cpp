@@ -337,6 +337,14 @@ Java_dev_orbis_filament_OrbisNative_nativeSetBatching(JNIEnv *, jclass, jlong ha
 }
 
 JNIEXPORT jint JNICALL
+Java_dev_orbis_filament_OrbisNative_nativeSetDepthPrepass(JNIEnv *, jclass, jlong handleValue,
+        jboolean enabled) {
+  auto *handle = fromHandle(handleValue);
+  if (handle == nullptr) return ORBIS_ERROR_NULL;
+  return orbis_renderer_set_depth_prepass(handle->renderer, enabled == JNI_TRUE ? 1 : 0);
+}
+
+JNIEXPORT jint JNICALL
 Java_dev_orbis_filament_OrbisNative_nativeApplyMaterials(JNIEnv *env, jclass, jlong handleValue,
         jlongArray keys, jintArray flags, jfloatArray params, jintArray maps,
         jobjectArray texturePaths, jintArray textureSrgb, jintArray videos) {

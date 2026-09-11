@@ -78,6 +78,7 @@ namespace {
 #include "generated/video_add_material.h"
 #include "generated/mist_material.h"
 #include "generated/instanced_material.h"
+#include "generated/depth_material.h"
 #include "generated/shadowcatcher_material.h"
 #include "generated/sky_material.h"
 #include "generated/rain_material.h"
@@ -1023,6 +1024,10 @@ gltfio::FilamentInstance *Renderer::takeInstanceOf(Mesh *mesh) {
 
 /// Takes an object out of the scene, keeping whatever can be used again.
 void Renderer::recycle(Drawn &drawn) {
+  // Before anything else: the prepass entity is this object's and nothing
+  // else points at it. Its material is the shared depth-only instance, which
+  // is the engine's and stays.
+  dropPrepass(drawn);
   if (drawn.instance != nullptr) {
     // Back onto the materials the file brought with it, before it goes in the
     // pool. An instance pooled while still pointing at an overriding material
@@ -3739,6 +3744,10 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
   //    wears a named Orbis material is a different matter and does batch: it
   //    already shares that material's one instance with everything else made
   //    of it, so there is nothing to arrange and merging just happens.
+  // Counted up again from nothing as the objects are walked, the same way the
+  // batching numbers are: what is wanted is what this publish did, not what
+  // every publish since launch has done.
+  _prepassObjects = 0;
   _census.clear();
   if (_batching) {
     for (uint32_t i = 0; i < count; i++) {
@@ -3825,6 +3834,15 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
           drawn.instance != nullptr ? drawn.instance->getRoot() : drawn.entity;
       transformManager.setTransform(transformManager.getInstance(root),
                                     placement);
+      // The prepass entity stands exactly where the object does, or it would
+      // write depth for a shape that is somewhere else. Its own transform
+      // rather than a parenting, because a renderable built by Filament gets
+      // a root transform of its own and re-parenting it would be a second
+      // thing to keep right.
+      if (drawn.prepass) {
+        transformManager.setTransform(
+            transformManager.getInstance(drawn.prepass), placement);
+      }
     }
 
     // Motion blur hook: where this object stands in this publish and what it
@@ -3875,6 +3893,11 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
       drawn.surface = wearing;
       dress(drawn, wearing);
     }
+
+    // The depth-only twin: built, kept or dropped. After dressing, because
+    // whether the prepass covers this object depends on what it is made of
+    // now rather than on what it was made of when it arrived.
+    syncPrepass(drawn, flags[i], wearing);
 
     // Which layer decals see this object on. Its own instance says exactly;
     // a shared one is gathered and written once the loop is done.
@@ -4287,6 +4310,185 @@ uint32_t Renderer::batchedObjects() {
 
 uint32_t Renderer::batchGroups() {
   return _batchGroups;
+}
+
+/// Whether opaque objects are drawn into depth alone before they are shaded.
+///
+/// Filament has no depth-prepass API to ask for. It had one: the View setting
+/// was deprecated in 1.4.5 and the APIs removed in 1.5.0, and the paragraph
+/// still in Renderer.h describing a depth pre-pass stage is stale. What it
+/// has instead covers other ground — the structure pass is half-resolution by
+/// default, allocates its own mipmapped buffer and reaches the colour pass
+/// only as a sampler, while the colour pass always allocates and clears its
+/// own full-resolution depth; and TransparencyMode::TWO_PASSES_ONE_SIDE is a
+/// real per-object prepass but is gated to materials that are not opaque, so
+/// it cannot cover the geometry this is for.
+///
+/// So this is built out of render channels, which are public and documented:
+/// a second entity per covered object over the same vertex and index buffers,
+/// wearing the depth-only surface, on the channel below the one everything
+/// else draws on. A channel is the top three bits of Filament's sort key, so
+/// it beats pass, priority, Z-bucket and material — every prepass draw is
+/// issued before every shaded one. Both channels draw inside one RenderPass
+/// against one full-resolution depth attachment, so the prepass is visible to
+/// the colour draws with no extra FrameGraph pass and no second target.
+///
+/// What is deliberately *not* done: the colour draws keep the depth state
+/// they already had. Filament renders reversed-Z and its opaque draws already
+/// test GE, so a fragment the prepass has covered from in front fails GE and
+/// is rejected before it is shaded — which is the entire saving. Switching
+/// those draws to E would reject exactly the same fragments and gain nothing,
+/// while risking an object disappearing outright if the depth-only surface's
+/// vertex shader and the real surface's disagree about a position by one unit
+/// in the last place. Leaving the test alone also means a material instance
+/// shared between objects — some covered by the prepass, some not — cannot be
+/// made to hide the ones it does not cover.
+///
+/// Purely a flag, exactly like setBatching: the entities are built and torn
+/// down in applyObjects, on the next publish, because that is where the
+/// objects are known.
+void Renderer::setDepthPrepass(bool enabled) {
+  if (_disposed || _engine == nullptr) return;
+  _depthPrepass = enabled;
+}
+
+uint32_t Renderer::prepassObjects() {
+  return _prepassObjects;
+}
+
+/// The one surface every prepass entity wears.
+///
+/// Shared by all of them rather than one each: nothing is written through it
+/// that could differ between objects, because nothing it computes is kept.
+/// Colour write off is what makes this a depth pass rather than a wasted
+/// colour one; depth write and depth test on are what make it write anything.
+/// All three are rasteriser state and so belong on the instance — there is no
+/// .mat keyword for a depth function, and colour write set here rather than in
+/// the material is what lets the same compiled surface stay a normal one.
+MaterialInstance *Renderer::depthOnlyInstance() {
+  if (_depthOnly != nullptr) return _depthOnly;
+  if (_depthMaterial == nullptr) {
+    _depthMaterial = Material::Builder()
+                         .package(kdepthMaterial, kdepthMaterial_len)
+                         .build(*_engine);
+  }
+  _depthOnly = _depthMaterial->createInstance();
+  _depthOnly->setColorWrite(false);
+  _depthOnly->setDepthWrite(true);
+  _depthOnly->setDepthCulling(true);
+  // Pushed a hair further from the camera than the surface it stands in for.
+  //
+  // This is the one part of a duplicate-entity prepass that is not obvious,
+  // and leaving it out is visibly wrong. The prepass entity is a second piece
+  // of geometry in the same scene at the same place, so it is drawn into every
+  // depth-derived pass Filament runs — the structure buffer that screen-space
+  // contact shadows and ambient occlusion march along, which every object here
+  // receives. Coincident depth there is not harmless: the two entities are
+  // drawn by two different shaders, so their depths agree to within a unit in
+  // the last place rather than exactly, and wherever the prepass lands the
+  // nearer of the two every receiving surface finds an occluder immediately in
+  // front of itself and shades itself dark. Measured, before this offset: one
+  // per cent of the frame differed, in clusters, by up to 229 of 255 — surfaces
+  // self-shadowing, not rounding.
+  //
+  // Pushing it behind removes that whole class of interaction: it can never be
+  // the nearest thing at a pixel, so it occludes nothing in any pass, while
+  // still sitting far in front of anything genuinely hidden behind the surface
+  // — which is what the colour pass's existing reversed-Z test then rejects.
+  // Same call and the same sign convention as applyRasterState uses to settle
+  // which of two things sharing a plane is behind.
+  _depthOnly->setPolygonOffset(kPrepassDepthBias, kPrepassDepthBias * 1000.0f);
+  return _depthOnly;
+}
+
+/// Whether this object is one the prepass draws.
+///
+/// Three things have to hold, and each excluded case is excluded for its own
+/// reason rather than out of caution:
+///
+///  * It is drawn as the placeholder cube. A model out of a glTF file is not
+///    covered, because Filament's public RenderableManager offers no way to
+///    ask a primitive which vertex and index buffers it draws — setGeometryAt
+///    exists, the matching getter does not — so a second renderable over the
+///    same geometry cannot be built through the public API at all. Such an
+///    object draws exactly as it always did; it simply gets no help.
+///  * It is visible. A hidden object writes no colour, and filling depth for
+///    one would hide whatever stands behind it.
+///  * Its surface is opaque. A masked surface punches its own pixels out by
+///    alpha and a blended one never owns its pixels, so depth written for
+///    either would be depth in the wrong place. Asked of Filament rather than
+///    tracked here, so a material that changes its blend mode cannot leave a
+///    stale answer behind.
+bool Renderer::prepassCovers(int32_t flags, int32_t material,
+                             const Drawn &drawn) {
+  if (!drawn.entity || drawn.instance != nullptr) return false;
+  if ((flags & kVisible) == 0) return false;
+  const MaterialInstance *worn =
+      (material >= 0 && material < static_cast<int32_t>(_materialOrder.size()))
+          ? _materialOrder[material]
+          : drawn.material;
+  if (worn == nullptr) return false;
+  return worn->getMaterial()->getBlendingMode() == BlendingMode::OPAQUE;
+}
+
+/// Builds, keeps or drops this object's prepass entity.
+///
+/// Called for every object on every publish, so that turning the prepass on
+/// or off, hiding an object, or changing what it is made of all take effect
+/// on the next scene rather than each needing a message of its own.
+void Renderer::syncPrepass(Drawn &drawn, int32_t flags, int32_t material) {
+  if (!_depthPrepass || !prepassCovers(flags, material, drawn)) {
+    dropPrepass(drawn);
+    return;
+  }
+
+  if (!drawn.prepass) {
+    drawn.prepass = utils::EntityManager::get().create();
+    RenderableManager::Builder(1)
+        .boundingBox({{-1, -1, -1}, {1, 1, 1}})
+        .material(0, depthOnlyInstance())
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
+                  _indexBuffer, 0, 36)
+        // Neither casts nor receives: this entity exists for one depth buffer
+        // in one pass. A second caster over the same geometry would double the
+        // shadow pass's work to produce an identical map.
+        .castShadows(false)
+        .receiveShadows(false)
+        .channel(kPrepassChannel)
+        .build(*_engine, drawn.prepass);
+    _scene->addEntity(drawn.prepass);
+
+    // Straight onto the object's own placement, which the transform block
+    // above has already written for this publish. Waiting for the next move
+    // would leave the prepass standing at the origin — writing depth across
+    // the middle of the scene — until the object happened to shift.
+    auto &transforms = _engine->getTransformManager();
+    transforms.setTransform(transforms.getInstance(drawn.prepass),
+                            drawn.transform);
+  }
+
+  // The same layer as the object, so a pass that narrows the view to some
+  // layers gets a prepass for exactly the objects it is going to draw, and
+  // none for the objects it is not.
+  auto &renderables = _engine->getRenderableManager();
+  auto renderable = renderables.getInstance(drawn.prepass);
+  if (renderable) {
+    renderables.setLayerMask(renderable, 0xFF, layerBitOf(flags));
+  }
+  _prepassObjects++;
+}
+
+/// Takes an object's prepass entity out of the scene.
+///
+/// Safe on an object that has none, which is every object while the prepass
+/// is off. The material is not destroyed here: it is the one shared instance,
+/// which belongs to the renderer and outlives every object wearing it.
+void Renderer::dropPrepass(Drawn &drawn) {
+  if (!drawn.prepass) return;
+  _scene->remove(drawn.prepass);
+  _engine->destroy(drawn.prepass);
+  utils::EntityManager::get().destroy(drawn.prepass);
+  drawn.prepass = utils::Entity();
 }
 
 /// Drops the geometry of any file no object names any more.
@@ -6204,9 +6406,11 @@ void Renderer::drawAtTime(double time) {
     // Objects and groups say what was merged to get there: [batchedObjects]
     // renderables became [batchGroups] chunks, each of up to sixty-four.
     orbis::log("[orbis] frame %d: cpu %.2f ms, gpu %.2f ms (median of recent), "
-          "batching %s, %zu renderables, %u objects in %u groups",
+          "batching %s, prepass %s over %u, %zu renderables, "
+          "%u objects in %u groups",
           _frameCount, cpuMilliseconds(), gpuMilliseconds(),
-          _batching ? "on" : "off", _scene->getRenderableCount(),
+          _batching ? "on" : "off", _depthPrepass ? "on" : "off",
+          _prepassObjects, _scene->getRenderableCount(),
           _batchedObjects, _batchGroups);
     _surface->writeFrame(_presentedIndex);
   }
@@ -6352,6 +6556,17 @@ void Renderer::dispose() {
   if (_decalBlankPictures != nullptr) _engine->destroy(_decalBlankPictures);
   _decalData = _decalPictures = _decalBlankPictures = nullptr;
   if (_blankExternal != nullptr) _engine->destroy(_blankExternal);
+  // The instance before the material it came from: destroying a material
+  // while an instance of it is still alive is a precondition failure rather
+  // than an error code, and takes the process with it.
+  if (_depthOnly != nullptr) {
+    _engine->destroy(_depthOnly);
+    _depthOnly = nullptr;
+  }
+  if (_depthMaterial != nullptr) {
+    _engine->destroy(_depthMaterial);
+    _depthMaterial = nullptr;
+  }
   for (Material *surface : _surfaces) {
     if (surface != nullptr) _engine->destroy(surface);
   }

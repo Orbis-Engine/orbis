@@ -70,6 +70,19 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) uint32_t batchedObjects;
 @property(nonatomic, readonly) uint32_t batchGroups;
 
+/// Whether opaque objects are drawn into depth alone before they are shaded.
+///
+/// Each covered object gets a second entity over the same vertex and index
+/// buffers, wearing a depth-only surface, on the render channel below the one
+/// everything else draws on — so the whole prepass has filled the depth
+/// buffer before the first shaded pixel. Set before `applyObjects`, which is
+/// where those entities are built.
+- (void)setDepthPrepass:(BOOL)enabled;
+
+/// How many objects the last `applyObjects` gave a prepass entity to. Nought
+/// while the prepass is off.
+@property(nonatomic, readonly) uint32_t prepassObjects;
+
 /// States what every material in the scene is made of.
 ///
 /// Published whole each frame like everything else, and keyed the same way:

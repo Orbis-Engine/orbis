@@ -326,6 +326,12 @@ int orbis_renderer_set_batching(orbis_renderer *renderer, int enabled) {
                  [&](orbis::Renderer &core) { core.setBatching(enabled != 0); });
 }
 
+int orbis_renderer_set_depth_prepass(orbis_renderer *renderer, int enabled) {
+  return guarded(renderer, [&](orbis::Renderer &core) {
+    core.setDepthPrepass(enabled != 0);
+  });
+}
+
 int orbis_renderer_apply_materials(orbis_renderer *renderer, uint32_t count,
                                    const int64_t *keys, const int32_t *flags,
                                    const float *params, size_t param_floats,

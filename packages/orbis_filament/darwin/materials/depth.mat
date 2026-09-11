@@ -1,0 +1,36 @@
+// A surface that exists only to write depth.
+//
+// What a depth prepass draws with. The point of a prepass is to settle which
+// surface wins each pixel before anything is shaded, so the material doing
+// the settling must itself shade as close to nothing as a material can: no
+// lights, no maps, no parameters, no interpolants. Colour write is turned off
+// on the instance rather than here, because that is rasteriser state and
+// belongs to the instance — the same place `depthWrite` and `depthCulling`
+// are set. See Renderer::depthOnlyInstance.
+//
+// Why not reuse unlit: unlit carries a base colour map, a screen-mapping
+// branch and an emissive term, and its fragment shader runs for every covered
+// pixel whether or not the colour it computes is written anywhere. On a
+// tile-based GPU that is invisible; on an immediate-mode one it is precisely
+// the cost a prepass was meant to remove, paid twice.
+material {
+    name : orbisDepth,
+    shadingModel : unlit,
+    blending : opaque,
+    // Whatever the real surface culls, the nearest face of a closed shape is
+    // the same face either way, so the depth written is the same. Left at
+    // Filament's default rather than made double-sided, so a back face never
+    // writes depth in front of the front face it belongs behind.
+    doubleSided : false,
+    depthWrite : true,
+    depthCulling : true,
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        // Never written anywhere: the instance has colour write off. Said
+        // because a material must assign it.
+        material.baseColor = vec4(1.0);
+    }
+}

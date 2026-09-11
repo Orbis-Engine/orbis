@@ -201,6 +201,12 @@ int orbis_renderer_apply_objects(orbis_renderer *renderer, uint32_t count,
 
 int orbis_renderer_set_batching(orbis_renderer *renderer, int enabled);
 
+/* Whether opaque objects are drawn into depth alone before being shaded.
+ * Off unless asked for; see OrbisScene.depthPrepass on the Dart side for
+ * what it costs and where it pays. Set before apply_objects, which is where
+ * the second entity per object is built. */
+int orbis_renderer_set_depth_prepass(orbis_renderer *renderer, int enabled);
+
 /* `count` materials of ORBIS_STRIDE_MATERIAL floats and
  * ORBIS_STRIDE_MATERIAL_MAPS map indices each. Maps index `texture_paths`,
  * and `texture_srgb` has one entry per path. `videos` has one per material. */

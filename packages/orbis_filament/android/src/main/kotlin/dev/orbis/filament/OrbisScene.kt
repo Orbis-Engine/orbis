@@ -84,6 +84,7 @@ internal class OrbisScene private constructor(private val args: Map<String, Any?
     val skyEnabled: Boolean = args["skyEnabled"] as? Boolean ?: false
     val skyParams: FloatArray = args.floats("skyParams")
     val batching: Boolean = args["batching"] as? Boolean ?: false
+    val depthPrepass: Boolean = args["depthPrepass"] as? Boolean ?: false
 
     val postParams: FloatArray = args.floats("postParams")
     val pipelineParams: FloatArray = args.floats("pipelineParams")
@@ -134,6 +135,7 @@ internal class OrbisScene private constructor(private val args: Map<String, Any?
         OrbisNative.nativeSetRenderGraph(handle, graphPasses, graphTargets, graphTargetNames.toTypedArray())
 
         OrbisNative.nativeSetBatching(handle, batching)
+        OrbisNative.nativeSetDepthPrepass(handle, depthPrepass)
         OrbisNative.nativeSetGodRays(handle, godRayParams, distortionParams)
 
         OrbisNative.nativeApplyVideos(handle, videoKeys, videoFlags, videoParams, videoPaths.toTypedArray())

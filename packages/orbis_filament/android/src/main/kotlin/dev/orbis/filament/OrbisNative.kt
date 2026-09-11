@@ -82,6 +82,8 @@ internal object OrbisNative {
 
     external fun nativeSetBatching(handle: Long, enabled: Boolean): Int
 
+    external fun nativeSetDepthPrepass(handle: Long, enabled: Boolean): Int
+
     external fun nativeApplyMaterials(
         handle: Long,
         keys: LongArray,

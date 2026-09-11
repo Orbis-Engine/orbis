@@ -361,6 +361,13 @@ struct Drawn {
   utils::Entity entity;
   filament::MaterialInstance *material = nullptr;
 
+  /// A second entity over the same geometry that writes depth and no colour,
+  /// on the channel below the one everything else draws on, so that it has
+  /// filled the depth buffer before any shading happens. Null unless the
+  /// depth prepass is on and this object is one it covers; see
+  /// Renderer::syncPrepass for which objects those are.
+  utils::Entity prepass;
+
   /// The mesh path: an instance borrowed from a loaded glTF file.
   filament::gltfio::FilamentInstance *instance = nullptr;
 
@@ -668,6 +675,32 @@ constexpr int32_t kVisible = 4;
 constexpr uint8_t kVisibleLayer = 0x01;
 constexpr uint8_t kHiddenLayer = 0x80;
 constexpr uint8_t kAllLayers = 0x7F;
+
+/// Which render channel the depth prepass draws on.
+///
+/// A channel is the top three bits of Filament's sort key, so everything in
+/// a lower channel is drawn before anything in a higher one, whatever else
+/// the key says. Everything this renderer builds sits on Filament's default
+/// channel of 2 and is left there; the prepass goes on 1, immediately below,
+/// so it has filled the depth buffer before the first shaded pixel and
+/// nothing else had to move to make room. Not 0, which is no better placed
+/// and is one of the two channels Filament forbids to screen-space
+/// refraction — leaving it free costs nothing and keeps that door open.
+constexpr uint8_t kPrepassChannel = 1;
+
+/// How far behind the real surface the prepass writes its depth.
+///
+/// Not a fudge factor: a prepass entity is real geometry in the scene, so it
+/// is drawn into the structure buffer that contact shadows and ambient
+/// occlusion march along as well as into the colour pass's depth. Sitting
+/// exactly on the surface it stands in for, it occludes that surface in those
+/// passes; sitting behind it, it can never be the nearest thing at a pixel and
+/// so occludes nothing anywhere — while still standing far in front of
+/// anything genuinely hidden, which is all the colour pass's depth test needs.
+/// The slope term goes with the constant one, as it does in applyRasterState,
+/// or a surface seen nearly edge-on needs an offset so large that it separates
+/// visibly when seen face-on.
+constexpr float kPrepassDepthBias = 1.0f;
 constexpr int32_t kLayerShift = 8;
 constexpr int32_t kLayerMask = 0x07;
 
@@ -938,6 +971,8 @@ class Renderer {
   void setBatching(bool enabled);
   uint32_t batchedObjects();
   uint32_t batchGroups();
+  void setDepthPrepass(bool enabled);
+  uint32_t prepassObjects();
   void applyMaterials(const int64_t *keys, const int32_t *flags,
                       const float *params, const int32_t *maps,
                       const std::vector<std::string> &texturePaths,
@@ -1053,6 +1088,10 @@ class Renderer {
   void morph(const Drawn &drawn, const float *weights, size_t count);
   void applyFlags(int32_t flags, const Drawn &drawn);
   void build(Drawn &drawn, const std::string &path);
+  bool prepassCovers(int32_t flags, int32_t material, const Drawn &drawn);
+  void syncPrepass(Drawn &drawn, int32_t flags, int32_t material);
+  void dropPrepass(Drawn &drawn);
+  filament::MaterialInstance *depthOnlyInstance();
   void clearPopulation(Grown &grown);
   filament::InstanceBuffer *identityInstances();
   void growPopulation(Grown &grown, uint32_t count, const float *bounds, int32_t flags);
@@ -1196,6 +1235,21 @@ class Renderer {
   /// reconcileBatchGroups for how a group becomes renderables.
   bool _batching{};
   orbis::BatchCensus _census{};
+
+  /// Whether opaque objects are drawn twice: once into depth alone, then
+  /// once shaded. Off by default — see OrbisScene.depthPrepass (Dart side)
+  /// for the measurements that decided that.
+  bool _depthPrepass{};
+
+  /// The one instance every prepass entity wears: unlit, opaque, colour
+  /// write off. Shared rather than one each, because nothing is written
+  /// through it that could differ between objects. Built on first use and
+  /// destroyed with the engine.
+  filament::MaterialInstance *_depthOnly{};
+
+  /// How many objects the last publish gave a prepass entity to. Nought
+  /// while the prepass is off, and always at most the object count.
+  uint32_t _prepassObjects{};
 
   /// Shared material instances for the placeholder cube, one per colour,
   /// claimed by a BatchGroup rather than by an individual object now that
@@ -1527,6 +1581,11 @@ class Renderer {
   /// Drawn many times over from one submission. Built the first time a scene
   /// has a population in it, because most have none.
   Material *_instancedMaterial{};
+
+  /// The depth-only surface the prepass draws with, built the first time a
+  /// scene asks for a prepass and never rebuilt. Its one instance is
+  /// _depthOnly.
+  Material *_depthMaterial{};
   std::unordered_map<int32_t, Grown> _populations{};
   uint64_t _populationGeneration{};
 

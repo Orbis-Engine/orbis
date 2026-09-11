@@ -303,6 +303,9 @@ private final class Viewport {
     // Before the objects, because it is while they are reconciled that it is
     // decided which of them share what they are made of.
     renderer.setBatching(scene.batching)
+    // Before the objects as well, and for the same reason: it is while they
+    // are reconciled that each one's depth-only twin is built or dropped.
+    renderer.setDepthPrepass(scene.depthPrepass)
     // What the god-ray and distortion passes read. After the graph, which
     // decides whether those passes exist at all.
     let godRays = scene.godRayParams.isEmpty ? [Float(0)] : scene.godRayParams
@@ -602,6 +605,10 @@ private struct Scene {
   /// the wire and off when absent, so a host that has never heard of it
   /// draws exactly as it did.
   let batching: Bool
+
+  /// Whether opaque objects are drawn into depth alone before being shaded.
+  /// Optional on the wire and off when absent, for the same reason.
+  let depthPrepass: Bool
 
   /// Everything done to the image after the scene is drawn.
   ///
@@ -952,6 +959,7 @@ private struct Scene {
     self.viewHeight = Float(viewHeight)
     self.skyParams = skyParams
     self.batching = arguments["batching"] as? Bool ?? false
+    self.depthPrepass = arguments["depthPrepass"] as? Bool ?? false
 
     // Absent when a scene has none, which is every scene that never uses
     // them — so this stays optional rather than being required of everybody.
