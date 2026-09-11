@@ -33,6 +33,18 @@
 ///                          the walk, and prints what the volumes resolved to
 ///   ORBIS_VOLUMES_OFF=1    the same place with the volumes left out
 ///   ORBIS_VOLUME_BLEND     how far outside the hall its look reaches, metres
+///   ORBIS_GODRAYS          how strong the god rays are; over any example
+///                          but God rays itself, turns them on
+///   ORBIS_SUN_BEARING      the God rays sun's bearing in degrees, 180
+///                          behind the camera
+///   ORBIS_SUN_ALTITUDE     and its height above the horizon
+///   ORBIS_COVER            the God rays sky's cloud cover, 0 to 1
+///   ORBIS_GODRAY_SAMPLES / _DECAY / _DENSITY   the rest of its settings
+///   ORBIS_SHOCKWAVE=0      leave the Distortion example's wave out
+///   ORBIS_HAZE=0           and its heat haze
+///   ORBIS_LENS             its lens warp, negative for pincushion
+///   ORBIS_CHROMATIC        its chromatic split
+///   ORBIS_WAVE             its wave's strength
 library;
 
 import 'dart:io';
@@ -228,8 +240,15 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
   /// The scene as the example built it, put through whatever effect the
   /// environment asked for.
   OrbisScene _underEffect(OrbisScene scene) {
+    // God rays over an example that never asked for any — the Day and night
+    // sky, the Weather's cloud. The God rays example takes the same switch
+    // as its own strength instead.
+    final rays = _number('ORBIS_GODRAYS');
+    final lit = rays != null && _example is! GodRaysExample
+        ? scene.copyWith(godRays: OrbisGodRays(strength: rays))
+        : scene;
     final graph = _effectGraph();
-    return graph == null ? scene : scene.copyWith(graph: graph);
+    return graph == null ? lit : lit.copyWith(graph: graph);
   }
 
   /// One model, one light, and whatever graph was asked for.
@@ -318,6 +337,24 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
       example.intensity = _number('ORBIS_FIELD') ?? example.intensity;
       example.retention = _number('ORBIS_RETENTION') ?? example.retention;
       if (Platform.environment['ORBIS_FIELD_OFF'] == '1') example.on = false;
+    }
+    if (example is GodRaysExample) {
+      example.strength = _number('ORBIS_GODRAYS') ?? example.strength;
+      example.bearing = _number('ORBIS_SUN_BEARING') ?? example.bearing;
+      example.altitude = _number('ORBIS_SUN_ALTITUDE') ?? example.altitude;
+      example.cover = _number('ORBIS_COVER') ?? example.cover;
+      example.samples = _number('ORBIS_GODRAY_SAMPLES') ?? example.samples;
+      example.decay = _number('ORBIS_GODRAY_DECAY') ?? example.decay;
+      example.density = _number('ORBIS_GODRAY_DENSITY') ?? example.density;
+    }
+    if (example is DistortionExample) {
+      if (Platform.environment['ORBIS_SHOCKWAVE'] == '0') {
+        example.shockwave = false;
+      }
+      if (Platform.environment['ORBIS_HAZE'] == '0') example.haze = false;
+      example.lens = _number('ORBIS_LENS') ?? example.lens;
+      example.chromatic = _number('ORBIS_CHROMATIC') ?? example.chromatic;
+      example.strength = _number('ORBIS_WAVE') ?? example.strength;
     }
     if (example is BounceExample) {
       example.strength = _number('ORBIS_BOUNCE') ?? example.strength;

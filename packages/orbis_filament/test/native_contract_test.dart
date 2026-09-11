@@ -73,6 +73,60 @@ void main() {
       });
     });
   });
+
+  _screenEffects(swift);
+}
+
+/// God rays and distortion keep their numbers in their own plain C++ header
+/// rather than in the renderer, so they are checked against that.
+void _screenEffects(String swift) {
+  final screen = _read(
+    'darwin/orbis_filament/Sources/orbis_filament_native/ScreenEffects.h',
+  );
+
+  group('god rays and distortion', () {
+    test('agree on how wide a row is', () {
+      expect(_swiftValue(swift, 'godRayStride'), OrbisGodRays.stride);
+      expect(_swiftValue(swift, 'distortionStride'), OrbisDistortion.stride);
+      expect(_nativeValue(screen, 'kGodRayStride'), OrbisGodRays.stride);
+      expect(_nativeValue(screen, 'kDistortionStride'), OrbisDistortion.stride);
+      expect(
+        _nativeValue(screen, 'kDistortionCapacity'),
+        OrbisDistortion.capacity,
+      );
+    });
+
+    test('agree on what the numbers mean', () {
+      // An effect index out of step runs the wrong shader over the frame;
+      // a kind out of step bends it the wrong way.
+      expect(_nativeInt(screen, 'kEffectGodRays'), OrbisEffect.godRays.index);
+      expect(
+        _nativeInt(screen, 'kEffectDistortion'),
+        OrbisEffect.distortion.index,
+      );
+      expect(
+        _nativeInt(screen, 'kDistortionShockwave'),
+        OrbisDistortionKind.shockwave.index,
+      );
+      expect(
+        _nativeInt(screen, 'kDistortionHaze'),
+        OrbisDistortionKind.haze.index,
+      );
+      expect(
+        _nativeInt(screen, 'kDistortionLens'),
+        OrbisDistortionKind.lens.index,
+      );
+    });
+  });
+}
+
+/// `constexpr int kName = 6;`
+int _nativeInt(String source, String name) {
+  final found = RegExp(
+    r'constexpr int ' + name + r'\s*=\s*(\d+)',
+  ).firstMatch(source);
+  expect(found, isNotNull, reason: 'the renderer no longer declares $name');
+  return int.parse(found!.group(1)!);
 }
 
 /// `private static let name = 12`, whatever the access level.

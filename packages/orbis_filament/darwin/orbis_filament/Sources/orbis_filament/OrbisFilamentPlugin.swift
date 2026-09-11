@@ -285,10 +285,28 @@ private final class Viewport {
       graphTargets.withUnsafeBufferPointer { targetPointer in
         renderer.setRenderGraph(
           passPointer.baseAddress!,
-          count: UInt32(scene.graphPasses.count / 12),
+          // The stride, not a literal: this said twelve after a pass grew to
+          // thirteen floats, which reads the rows out of step from the
+          // twelfth pass on.
+          count: UInt32(scene.graphPasses.count / Scene.passStride),
           targets: targetPointer.baseAddress!,
-          targetCount: UInt32(scene.graphTargets.count / 6),
+          targetCount: UInt32(scene.graphTargets.count / Scene.targetStride),
           names: scene.graphTargetNames)
+      }
+    }
+
+    // What the god-ray and distortion passes read. After the graph, which
+    // decides whether those passes exist at all.
+    let godRays = scene.godRayParams.isEmpty ? [Float(0)] : scene.godRayParams
+    let distortions =
+      scene.distortionParams.isEmpty ? [Float(0)] : scene.distortionParams
+    godRays.withUnsafeBufferPointer { rayPointer in
+      distortions.withUnsafeBufferPointer { bendPointer in
+        renderer.setGodRays(
+          rayPointer.baseAddress!,
+          count: UInt(scene.godRayParams.count),
+          distortions: bendPointer.baseAddress!,
+          distortionCount: UInt(scene.distortionParams.count))
       }
     }
 
@@ -566,6 +584,11 @@ private struct Scene {
   let graphTargets: [Float]
   let graphTargetNames: [String]
 
+  /// God rays and screen distortion: one row of settings, and every
+  /// distortion end to end. Both empty when the scene has none.
+  let godRayParams: [Float]
+  let distortionParams: [Float]
+
   /// The application's own clock, in seconds, when this scene was worked out.
   let at: Double
   let orthographic: Bool
@@ -598,6 +621,11 @@ private struct Scene {
   fileprivate static let environmentStride = 4
   fileprivate static let passStride = 13
   fileprivate static let targetStride = 6
+  /// God rays and one distortion. Must match OrbisGodRays.stride and
+  /// OrbisDistortion.stride, and kGodRayStride and kDistortionStride in
+  /// ScreenEffects.h.
+  fileprivate static let godRayStride = 12
+  fileprivate static let distortionStride = 12
   private static let materialStride = 37
   private static let materialMaps = 7
   private static let videoStride = 4
@@ -729,6 +757,18 @@ private struct Scene {
       self.graphTargets = []
       self.graphTargetNames = []
     }
+
+    // Optional like the graph, and checked the same way: both are walked as
+    // pointers in C++. A row of god-ray settings that is not whole is no god
+    // rays; distortions are kept to whole rows.
+    let godRayParams =
+      (arguments["godRayParams"] as? FlutterStandardTypedData)?.floats ?? []
+    self.godRayParams =
+      godRayParams.count == Scene.godRayStride ? godRayParams : []
+    let distortionParams =
+      (arguments["distortionParams"] as? FlutterStandardTypedData)?.floats ?? []
+    self.distortionParams =
+      distortionParams.count % Scene.distortionStride == 0 ? distortionParams : []
 
     // Materials are optional the same way, so a host that never names one
     // sends nothing rather than an empty array of everything. What arrives
