@@ -85,13 +85,64 @@ serve and the only one that runs without a signing identity:
   created on the simulator's GPU. `flutter build ios --simulator` and a run
   are now a CI job beside the macOS one.
 
+Proven on the iOS simulator, added since:
+
+- A frame. The slim surface (see "Materials and feature levels" below) is
+  what let this happen at all: below it, the engine aborted before a
+  triangle was drawn. `tool/ci_draw_frame_ios.sh` boots, installs, launches
+  and waits for the same "written" line the macOS script does, and is a CI
+  job on `iPhone 17 Pro`, `iPhone 16` and whatever else `ORBIS_SIM_DEVICE`
+  names.
+- Along the way, a latent bug the feature level precondition had always
+  masked: decalImages, the one sampler read with `textureGrad` rather than
+  `texture`, took Filament's default mobile precision, and the derivatives a
+  material hands `textureGrad` compiled to Metal's `half2` there — which
+  `metal::gradient2d` has no constructor for, only `float2`. Desktop Metal's
+  default is already full precision, which is why nothing had ever shown
+  this. Both `lit.mat` and `lit_slim.mat` now mark that sampler and its
+  derivatives `highp`. A real device would have hit the same panic, high end
+  or not, so this was fixed for the standard surface too, not only the slim
+  one.
+
 Not proven:
 
-- A frame on iOS. The simulator stops at the feature level above; a device
-  needs a signing identity there is none of.
+- That a scene a host publishes reaches the renderer on the simulator. Every
+  frame captured there so far — whichever `ORBIS_EXAMPLE` was asked for —
+  shows the same startup placeholder cube from a camera angle that does
+  change with the example, which reads as `applyObjects` (or whatever loads
+  its meshes) not completing on this platform while simpler per-frame calls
+  such as the camera do. Nothing on the native side gates this on feature
+  level or the surface chosen — `_sceneIsOwnedByHost` flips on unconditionally
+  at the end of `applyObjects` — so the gap is upstream of this branch's
+  changes, most likely in the plugin or asset loading `feat/ios-core` added,
+  neither of which this branch touched. Worth its own investigation.
+- Correct exposure on the simulator. Every frame captured is very dark —
+  roughly a few parts in 255 where the same content on macOS reads two
+  hundred plus — but multiplying the raw pixels by twenty recovers exactly
+  the right geometry, shading gradient and colour, which rules out a shading
+  fault and points at the exposure or the readback rather than the surface.
+  The sky, drawn separately from any lit surface, comes back at the same
+  brightness on both platforms, which is what first said this was not a
+  materials problem.
+- A frame from a real device. That needs a signing identity there is none of.
 - A Linux, Android or Windows build. Docker's daemon did not answer, so the
   core has not been compiled against a Linux sysroot or linked against the
   Linux release.
+
+Found on macOS while chasing the above: Panel shadows and Irradiance field
+are not frame-for-frame reproducible even on the standard surface, unmodified,
+at the commit this branch started from. Launching the identical `.app` twice
+in a row gave three different frames for Irradiance field and two for Panel
+shadows across three launches total — both examples carry something that
+accumulates over a run (the field's own two atlases; the PCSS search's
+blocker average), and whatever it depends on is not fully pinned by
+`ORBIS_SECONDS`/`ORBIS_CIRCLING`. Lights and Decals, which carry no such
+accumulation, were bit-for-bit reproducible on every rebuild this branch's
+work involved, source-unchanged or not — that is the pair this branch's own
+"no regression" claim rests its evidence on. A precision fix briefly kept in
+`lit.mat` (see its git history) looked like it broke Panel shadows' parity
+for exactly this reason before this was understood; reverted once the real
+cause was found run-to-run on the unmodified commit itself.
 - Any backend but Metal drawing a frame. This Mac has no Vulkan driver, and
   its OpenGL is 4.1, feature level 1, below the standard surface; a headless
   OpenGL swap chain there also needs a main-thread run loop.

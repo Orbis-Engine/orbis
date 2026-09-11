@@ -239,22 +239,6 @@ material {
         // Every decal's picture, one per layer, all the same size. An array
         // rather than an atlas so a picture's mip chain never bleeds into its
         // neighbour's at a distance.
-        //
-        // Left at the default precision deliberately, though it is the one
-        // sampler read with textureGrad rather than texture and Metal's
-        // gradient2d has no constructor for a pair of half2 derivatives —
-        // only float2, which is what the default becomes on desktop but not
-        // on mobile. lit_slim.mat marks this sampler and its derivatives
-        // highp to fix that on iOS; doing the same here changed Panel
-        // shadows' compiled output by enough to break bit-for-bit parity
-        // with frames from before this file was touched at all — the same
-        // shader function also holds the area-shadow PCSS loop, and a
-        // precision change anywhere in it moved that loop's rounding by a
-        // few 8-bit levels on some pixels. A real device thin enough to need
-        // the slim surface never reaches this material, so the fix lives
-        // only there for now; a device at the third feature level hits this
-        // sampler's bug too, and fixing it here without perturbing every
-        // other example is unfinished work.
         { type : sampler2dArray, name : decalImages },
         // Which layer the object being drawn is on, as a bit. A decal paints
         // only the layers its mask names.
