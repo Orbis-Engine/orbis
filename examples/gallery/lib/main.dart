@@ -64,7 +64,6 @@
 ///   ORBIS_SHADOW_LIGHT     which light the Shadows example casts with: Sun,
 ///                          Spot or Point
 ///   ORBIS_SHADOW_KIND      its edge: Sharp, Soft, Area or Variance
-///   ORBIS_SHADOW_OFF=1     no shadow pass at all
 ///   ORBIS_SHADOW_MAP       the map's size in pixels
 ///   ORBIS_SHADOW_CASCADES  how many cascades a sun's map is split into
 ///   ORBIS_SHADOW_SPLIT     place the splits by hand, the first at this
@@ -413,9 +412,6 @@ class _StageState extends State<_Stage> with SingleTickerProviderStateMixin {
           (one) => one.label == kind,
           orElse: () => shadows.kind,
         );
-      }
-      if (Platform.environment['ORBIS_SHADOW_OFF'] == '1') {
-        shadows.enabled = false;
       }
       shadows.mapSize = _number('ORBIS_SHADOW_MAP')?.round() ?? shadows.mapSize;
       shadows.cascades =
