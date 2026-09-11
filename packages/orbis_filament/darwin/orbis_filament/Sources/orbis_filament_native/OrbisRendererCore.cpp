@@ -3842,11 +3842,27 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
   // So it is not "nothing to merge" and it is not "something merged" either;
   // both fail in some scenes and succeed in others, and the one thing every
   // black frame has in common is that Orbis's post-processing ran (the same
-  // scenes draw with ORBIS_POST=0). It is inside Filament, there is no public
-  // way to ask beforehand which scene is which, and it has not been traced
-  // further. Hence: this stays behind an opt-in that defaults to off, the
-  // guard keeps a scene with nothing to batch running exactly as it would
-  // unbatched, and a scene that opts in has to be looked at.
+  // scenes draw with ORBIS_POST=0).
+  //
+  // Traced since, and it is a bug in Filament rather than in how this asks for
+  // the merging. RenderPass::instanceify() merges neighbouring commands whose
+  // primitive info compares equal, and it was applying that test to custom
+  // commands too. A custom command is not a draw: only its key is written, so
+  // its info is whatever the command arena last held — usually a stale copy of
+  // a real draw. When that stale copy matched the draw beside it, the custom
+  // command was swallowed into the draw's instanced run and never ran. The one
+  // most exposed is the colour-grading subpass, sorted last; lose it and the
+  // tone-mapped attachment stays at its clear value, which is the black frame.
+  // Which scenes it hits depends on what happened to be left in the arena,
+  // which is why it looked scene-dependent and unrelated to what was merged.
+  //
+  // The fix is one predicate in Filament (Orbis-Engine/orbis-filament,
+  // "Keep custom commands out of automatic instancing"), and against a
+  // Filament built with it all five scenes above come back bit-identical
+  // merged and unmerged. It is not in any Filament release, so it only applies
+  // to a build made from that fork via ORBIS_FILAMENT_SRC — and since the
+  // default SDK here is the stock release, the default below stays off. It can
+  // become on once the fix is in a Filament this package ships against.
   //
   // ORBIS_FORCE_INSTANCING=1 raises the flag whenever batching is on, grouped
   // or not, which reproduces the black frame in one run and is how this gets

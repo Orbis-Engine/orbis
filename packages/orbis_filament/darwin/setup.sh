@@ -47,6 +47,14 @@ fetch() {
 # driver Filament does not ship — because that lives inside Filament and
 # nowhere else. So the fork is wired up and the fast path stays the default
 # until something actually requires the slow one.
+#
+# SDK_ID is what the two stamps further down record as the SDK they were made
+# from. A release is named by its version. A source build carries the same
+# version number however often it is rebuilt, so it is named by what was
+# built — matc and every archive, by size and time. Without that, switching to
+# a source build, or rebuilding one with a change, kept the framework and the
+# materials made from the previous SDK, and nothing said so.
+SDK_ID="$FILAMENT_VERSION"
 if [ -n "${ORBIS_FILAMENT_SRC:-}" ]; then
   BUILT="$ORBIS_FILAMENT_SRC/out/release/filament"
   if [ ! -d "$BUILT/lib" ]; then
@@ -58,10 +66,16 @@ if [ -n "${ORBIS_FILAMENT_SRC:-}" ]; then
   mkdir -p "$SDK_DIR"
   rm -rf "${SDK_DIR:?}/filament"
   ln -s "$BUILT" "$SDK_DIR/filament"
+  SDK_ID="$FILAMENT_VERSION source $(cd "$BUILT" &&
+    stat -f '%N %z %m' bin/matc lib/arm64/*.a | shasum | cut -c1-12)"
   # iOS still comes from the release. A desktop build carries no iOS slices,
   # and pretending otherwise fails at link time rather than here.
   fetch "$IOS_SDK_DIR" ios
 else
+  # A source build leaves the mac SDK as a link to itself. Back on the
+  # release, that link would pass for a fetched SDK, and the source build's
+  # archives would be packaged under the release's name.
+  if [ -L "$SDK_DIR/filament" ]; then rm "$SDK_DIR/filament"; fi
   fetch "$SDK_DIR" mac
   fetch "$IOS_SDK_DIR" ios
 fi
@@ -169,7 +183,7 @@ done
 # choice, so an existing checkout's stamp still matches and nothing rebuilds.
 MATC_FLAGS="${MATC_API# } -p all"
 MATC_STAMP="$GENERATED/.matc"
-MATC_WANT="$FILAMENT_VERSION $MATC_FLAGS"
+MATC_WANT="$SDK_ID $MATC_FLAGS"
 STALE=""
 if [ "$(cat "$MATC_STAMP" 2>/dev/null || true)" != "$MATC_WANT" ]; then
   STALE=1
@@ -262,7 +276,7 @@ DESKTOP_ONLY=(bluegl bluevk)
 # libraries went into it. Then the package is silently the old one and the
 # failure arrives as a linker error naming a symbol that is present in the
 # SDK and absent from the framework.
-WANT="$FILAMENT_VERSION macos+ios+simulator ${LIBS[*]} ${DESKTOP_ONLY[*]}"
+WANT="$SDK_ID macos+ios+simulator ${LIBS[*]} ${DESKTOP_ONLY[*]}"
 
 if [ "$(cat "$STAMP" 2>/dev/null || true)" != "$WANT" ]; then
   echo "orbis_filament: packaging Filament as a framework"
