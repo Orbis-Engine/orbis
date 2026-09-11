@@ -189,6 +189,21 @@ void Renderer::startWithWidth(uint32_t width, uint32_t height) {
   ASSERT_PRECONDITION(_engine != nullptr, "%s is unavailable.",
                       orbis::backendName(candidates.front()));
 
+  // Diagnostic only, and unrelated to OrbisScene.batching: Orbis's own
+  // batching draws manually-instanced groups (see reconcileBatchGroups) and
+  // never touches this flag. Filament's *automatic* instancing — merging
+  // draw commands after the fact, in RenderPass::instanceify() — is broken on
+  // stock Filament 1.76: instanceify() compares a custom command's stale
+  // leftover state as though it were a draw, and can fold the colour-grading
+  // subpass into a neighbouring instanced run so it never executes, which
+  // brings a frame back entirely black. ORBIS_FORCE_INSTANCING=1 raises this
+  // flag anyway, so that bug can still be reproduced or measured against on
+  // demand — a later Filament re-checked, or the two merge strategies
+  // compared — without anything in this renderer asking for it on its own.
+  if (getenv("ORBIS_FORCE_INSTANCING") != nullptr) {
+    _engine->setAutomaticInstancingEnabled(true);
+  }
+
   // Raised after the fact rather than in the builder for the same reason:
   // this one clamps to what is supported instead of refusing, so a device
   // that cannot manage it keeps the surfaces it can compile rather than
@@ -1036,8 +1051,6 @@ void Renderer::recycle(Drawn &drawn) {
     _engine->destroy(drawn.material);
     drawn.material = nullptr;
   }
-  // Borrowed, so only forgotten. The pool lets it go once nobody asks.
-  drawn.pooled = nullptr;
 }
 
 /// Empties the scene of everything a host put in it.
@@ -3674,11 +3687,8 @@ void Renderer::dress(Drawn &drawn, int32_t index) {
   auto renderable = renderableManager.getInstance(drawn.entity);
   if (!renderable) return;
   // No material named: back to the object's own instance, which is what its
-  // colour is written into — or, batched, to the one surface every cube of
-  // that exact colour shares.
-  MaterialInstance *chosen = instance != nullptr ? instance
-                             : drawn.pooled != nullptr ? drawn.pooled
-                                                       : drawn.material;
+  // colour is written into.
+  MaterialInstance *chosen = instance != nullptr ? instance : drawn.material;
   if (chosen != nullptr) {
     renderableManager.setMaterialInstanceAt(renderable, 0, chosen);
   }
@@ -3704,6 +3714,15 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
   // uniforms for every object wearing it, so the best it can say is all of
   // their layers at once.
   std::unordered_map<MaterialInstance *, int32_t> decalWearers;
+
+  // Which objects a group's worth of merging was found for, in the order
+  // they arrive — reconciled into BatchGroups once every object below has
+  // been sorted into one or left out. Keyed the same way the census keys
+  // them, so a group here is exactly a key the census counted four or more
+  // eligible objects under.
+  std::unordered_map<orbis::BatchKey, std::vector<uint32_t>, orbis::BatchKeyHash>
+      groupIndices;
+
   // Who is like whom, counted before anything is built, because whether one
   // object batches depends on how many others share its key.
   //
@@ -3751,6 +3770,33 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
     if (drawn.seen == generation) {
       notes["keys"] = "Two objects in this scene are sharing one key, so "
                        "only one of them is drawn.";
+      continue;
+    }
+
+    // Manually instanced: this object is drawn as a slot in a shared group
+    // renderable rather than as one of its own, and takes no further part in
+    // this loop — reconcileBatchGroups, once every object here has been
+    // sorted into a group or left out of one, does the rest.
+    //
+    // A named mesh is left out even where the census counts it as eligible:
+    // gltfio gives every copy of a model its own hierarchy of entities, one
+    // renderable per primitive, and merging that needs a manually-instanced
+    // renderable per primitive per chunk rather than the single one built
+    // below for the placeholder cube. Nothing here needs it yet — every
+    // scene this renderer is proven against draws the placeholder cube — and
+    // such an object still draws correctly on its own, just unmerged, so
+    // leaving it out costs a saving rather than a picture.
+    if (_batching && meshIndex < 0 && _census.batches(i)) {
+      if (drawn.entity || drawn.instance != nullptr) {
+        // Was its own renderable last publish; not any more.
+        recycle(drawn);
+        drawn = Drawn{};
+      }
+      drawn.seen = generation;
+      groupIndices[orbis::BatchCensus::keyFor(meshIndex, materials[i],
+                                              colours + i * 3, flags[i],
+                                              materials[i] < 0)]
+          .push_back(i);
       continue;
     }
 
@@ -3825,25 +3871,7 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
                         wearing < static_cast<int32_t>(_materialRebuilt.size()) &&
                         _materialRebuilt[wearing];
 
-    // Batched: what it would otherwise wear alone, it now shares. An object
-    // wearing a named material already shares that material's one instance
-    // with everything else made of it, so there is nothing to do for it —
-    // it merges once the engine is told to merge.
-    MaterialInstance *pooled = nullptr;
-    if (_census.batches(i) && wearing < 0 && drawn.material != nullptr) {
-      pooled = _colourPool.take(colours + i * 3, generation,
-                                [this](const float *colour) {
-        MaterialInstance *made = surfaceAt(0)->createInstance();
-        setDefaultsOn(made);
-        made->setParameter("baseColor",
-                           float4{colour[0], colour[1], colour[2], 1.0f});
-        return made;
-      });
-    }
-    const bool regrouped = pooled != drawn.pooled;
-    drawn.pooled = pooled;
-
-    if (wearing != drawn.surface || remade || regrouped) {
+    if (wearing != drawn.surface || remade) {
       drawn.surface = wearing;
       dress(drawn, wearing);
     }
@@ -3870,6 +3898,18 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
     morphAt += shapes;
   }
 
+  // Every group the census found this time contributes its layer too, the
+  // same way an unbatched object above already does — once per group rather
+  // than once per member, since every member of a group is on one layer by
+  // construction.
+  for (const auto &group : groupIndices) {
+    const orbis::BatchKey &key = group.first;
+    if (key.surface >= 0 &&
+        key.surface < static_cast<int32_t>(_materialOrder.size())) {
+      decalWearers[_materialOrder[key.surface]] |= int32_t(layerBitOf(key.flags));
+    }
+  }
+
   // Only the lit surface paints decals, so only it has the parameter; the
   // unlit and video ones would refuse it. Compared first, because a uniform
   // write dirties the instance's whole block.
@@ -3892,62 +3932,20 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
     it = _drawn.erase(it);
   }
 
+  // Every group's chunks brought up to date with this publish — rebuilt if
+  // its membership moved, written into if only a transform or the material
+  // did, torn down if nobody asked for it this time — and this publish's
+  // batching stats read off what was actually built. Before the colour pool
+  // is swept: a group claims a colour-pool instance the same way an
+  // unbatched placeholder cube does, and a group that only wrote a transform
+  // this time still needs its colour kept rather than reclaimed.
+  reconcileBatchGroups(groupIndices, keys, transforms, colours, generation);
+
   // Shared surfaces nobody asked for this time. After every object has been
-  // re-dressed and every departed one recycled, so nothing still wears them.
+  // re-dressed, every departed one recycled and every group reconciled, so
+  // nothing still wears them.
   _colourPool.sweep(generation,
                     [this](MaterialInstance *spent) { _engine->destroy(spent); });
-  _batchedObjects = _batching ? _census.batchedObjects() : 0;
-  _batchGroups = _batching ? _census.batchGroups() : 0;
-
-  // Filament's merging, only over a scene that has actually been made to
-  // share something. Both halves of that are needed and neither is enough:
-  // Orbis pooling material instances saves a few uniform writes and merges
-  // nothing, and this flag without the pooling has nothing alike to merge.
-  //
-  // The flag is engine-wide, and on Filament 1.76 it is not safe. Raised over
-  // some scenes it makes the frame come back *entirely* black — every channel
-  // nought across all 1,920,000 pixels of the dump, sky included — while the
-  // same scene with it lowered is correct. Measured, with post-processing on:
-  //
-  //   three thousand crates, one directional light   correct, bit-identical
-  //   the same crates, nothing grouped               correct, bit-identical
-  //   the thousand objects, nothing grouped          black
-  //   Panel shadows, nothing grouped                 black
-  //   48 crossing slabs sharing one material         black
-  //
-  // So it is not "nothing to merge" and it is not "something merged" either;
-  // both fail in some scenes and succeed in others, and the one thing every
-  // black frame has in common is that Orbis's post-processing ran (the same
-  // scenes draw with ORBIS_POST=0).
-  //
-  // Traced since, and it is a bug in Filament rather than in how this asks for
-  // the merging. RenderPass::instanceify() merges neighbouring commands whose
-  // primitive info compares equal, and it was applying that test to custom
-  // commands too. A custom command is not a draw: only its key is written, so
-  // its info is whatever the command arena last held — usually a stale copy of
-  // a real draw. When that stale copy matched the draw beside it, the custom
-  // command was swallowed into the draw's instanced run and never ran. The one
-  // most exposed is the colour-grading subpass, sorted last; lose it and the
-  // tone-mapped attachment stays at its clear value, which is the black frame.
-  // Which scenes it hits depends on what happened to be left in the arena,
-  // which is why it looked scene-dependent and unrelated to what was merged.
-  //
-  // The fix is one predicate in Filament (Orbis-Engine/orbis-filament,
-  // "Keep custom commands out of automatic instancing"), and against a
-  // Filament built with it all five scenes above come back bit-identical
-  // merged and unmerged. It is not in any Filament release, so it only applies
-  // to a build made from that fork via ORBIS_FILAMENT_SRC — and since the
-  // default SDK here is the stock release, the default below stays off. It can
-  // become on once the fix is in a Filament this package ships against.
-  //
-  // ORBIS_FORCE_INSTANCING=1 raises the flag whenever batching is on, grouped
-  // or not, which reproduces the black frame in one run and is how this gets
-  // re-checked against a later Filament.
-  static const bool forced = getenv("ORBIS_FORCE_INSTANCING") != nullptr;
-  const bool merging = _batching && (_batchGroups > 0 || forced);
-  if (merging != _engine->isAutomaticInstancingEnabled()) {
-    _engine->setAutomaticInstancingEnabled(merging);
-  }
 
   sweepUnnamedMeshes();
 
@@ -3955,23 +3953,269 @@ void Renderer::applyObjects(const int64_t *keys, const float *transforms, const 
   _sceneIsOwnedByHost = true;
 }
 
-/// Whether identical objects are merged into instanced draws.
+/// Grows a running world-space min/max to include the exact box the
+/// placeholder cube — [-1, 1] on every local axis — covers once `transform`
+/// is applied.
 ///
-/// Two halves, and both are needed. Filament's own automatic instancing
-/// merges consecutive draws that use the same geometry and the same material
-/// instance, carrying each copy's transform in a per-instance block — and
-/// `applyObjects` is what makes identical objects actually share an instance.
-/// Either without the other does nothing.
+/// The exact bound for an affine-transformed box, not an approximation: on
+/// each world axis, the half-extent is the sum of the absolute values of
+/// that axis's row across the rotation and scale, because whichever of the
+/// eight local corners has the matching sign on every term is the farthest
+/// one out along that axis. Cheap enough to do for every member of a chunk
+/// whenever one of them moves, and worth doing exactly — a chunk is already
+/// culled coarser than an unbatched object, one box for up to sixty-four
+/// members rather than one each (see BatchGroup's own comment), and a loose
+/// bound on top of that would be a second, needless way for batched and
+/// unbatched to cull differently.
+static inline void expandBoxByTransform(const mat4f &m, float3 &least,
+                                        float3 &most) {
+  const float3 centre{m[3].x, m[3].y, m[3].z};
+  const float3 half{std::fabs(m[0].x) + std::fabs(m[1].x) + std::fabs(m[2].x),
+                    std::fabs(m[0].y) + std::fabs(m[1].y) + std::fabs(m[2].y),
+                    std::fabs(m[0].z) + std::fabs(m[1].z) + std::fabs(m[2].z)};
+  least = min(least, centre - half);
+  most = max(most, centre + half);
+}
+
+/// Makes every batch group's Filament state agree with what this publish's
+/// census found, and writes this publish's batching stats.
 ///
-/// Engine-wide in Filament; every viewport here has its own engine, so it is
-/// this viewport's setting and nobody else's.
+/// `groups` is this publish's membership, one list of object indices per key
+/// that reached the threshold, in the order the objects arrived. Reconciling
+/// a group against it is one of three things, cheapest first:
+///
+///  * Nothing to do with its chunks at all, if the exact members in the
+///    exact order are what it was already built from — checked by comparing
+///    `indices` against the group's own memberKeys, which is what "nothing
+///    changed" is judged against. The colour pool still has to be asked for
+///    the group's material, though, whether or not anything else moved: an
+///    instance not claimed this publish is swept below as if nobody wanted
+///    it.
+///  * A write into chunks that already exist, if the membership matches but
+///    a transform or the material has: updateBatchGroup.
+///  * A rebuild, if the membership does not match: one joined, one left, or
+///    two swapped places. rebuildBatchGroup sizes new chunks to fit and
+///    writes every slot once.
+///
+/// A group nobody asks for this time — every member left the scene, moved
+/// out of eligibility, or changed key — is torn down once every live group
+/// has had its turn, the same order the colour pool is swept in and for the
+/// same reason: nothing still standing on a chunk should have it destroyed
+/// from under it.
+void Renderer::reconcileBatchGroups(
+    const std::unordered_map<orbis::BatchKey, std::vector<uint32_t>,
+                              orbis::BatchKeyHash> &groups,
+    const int64_t *keys, const float *transforms, const float *colours,
+    uint64_t generation) {
+  if (groups.empty() && _groups.empty()) {
+    _batchedObjects = 0;
+    _batchGroups = 0;
+    return;
+  }
+
+  uint32_t batchedObjects = 0;
+  uint32_t chunkCount = 0;
+
+  for (const auto &entry : groups) {
+    const orbis::BatchKey &key = entry.first;
+    const std::vector<uint32_t> &indices = entry.second;
+    BatchGroup &group = _groups[key];
+    group.seen = generation;
+    batchedObjects += uint32_t(indices.size());
+
+    // The material every chunk in this group wears, asked for on every
+    // publish the group is alive whether or not anything else about it
+    // moved: a colour pool instance is swept the moment a publish does not
+    // ask for it (see the end of applyObjects), and a group that only wrote
+    // a transform this time still needs its colour kept.
+    const bool named = key.surface >= 0 &&
+                       key.surface < static_cast<int32_t>(_materialOrder.size());
+    MaterialInstance *material =
+        named ? _materialOrder[key.surface]
+              : _colourPool.take(colours + indices[0] * 3, generation,
+                                 [this](const float *colour) {
+        MaterialInstance *made = surfaceAt(0)->createInstance();
+        setDefaultsOn(made);
+        made->setParameter("baseColor",
+                           float4{colour[0], colour[1], colour[2], 1.0f});
+        return made;
+      });
+
+    const bool sameMembers =
+        !group.chunks.empty() && indices.size() == group.memberKeys.size() &&
+        std::equal(indices.begin(), indices.end(), group.memberKeys.begin(),
+                  [&](uint32_t index, int64_t was) {
+                    return keys[index] == was;
+                  });
+
+    if (sameMembers) {
+      updateBatchGroup(group, indices, transforms, material);
+    } else {
+      rebuildBatchGroup(group, key, indices, keys, transforms, material);
+    }
+    chunkCount += uint32_t(group.chunks.size());
+  }
+
+  for (auto it = _groups.begin(); it != _groups.end();) {
+    if (it->second.seen == generation) {
+      ++it;
+      continue;
+    }
+    destroyBatchGroup(it->second);
+    it = _groups.erase(it);
+  }
+
+  _batchedObjects = batchedObjects;
+  _batchGroups = chunkCount;
+}
+
+/// Rebuilds one group's chunks from nothing: new InstanceBuffers, sized to
+/// fit `indices`, and every slot written once. Called whenever the group did
+/// not already hold this publish's exact members in this publish's exact
+/// order — a new group, or an old one that gained, lost or reordered a
+/// member.
+void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
+                                 const std::vector<uint32_t> &indices,
+                                 const int64_t *keys, const float *transforms,
+                                 MaterialInstance *material) {
+  destroyBatchGroup(group);
+  group.material = material;
+  group.memberKeys.resize(indices.size());
+
+  const bool castShadows = (key.flags & kCastsShadows) != 0;
+  const bool receiveShadows = (key.flags & kReceivesShadows) != 0;
+
+  for (size_t at = 0; at < indices.size(); at += kInstancesPerDraw) {
+    const uint32_t members =
+        uint32_t(std::min(size_t(kInstancesPerDraw), indices.size() - at));
+
+    BatchChunk chunk;
+    chunk.count = members;
+
+    float3 least{std::numeric_limits<float>::max()};
+    float3 most{std::numeric_limits<float>::lowest()};
+    for (uint32_t slot = 0; slot < members; slot++) {
+      const uint32_t index = indices[at + slot];
+      group.memberKeys[at + slot] = keys[index];
+      std::memcpy(&chunk.transforms[slot], transforms + size_t(index) * 16,
+                 sizeof(mat4f));
+      expandBoxByTransform(chunk.transforms[slot], least, most);
+    }
+
+    chunk.buffer = filament::InstanceBuffer::Builder(members)
+                       .localTransforms(chunk.transforms.data())
+                       .build(*_engine);
+
+    chunk.entity = utils::EntityManager::get().create();
+    RenderableManager::Builder(1)
+        .boundingBox(Box{(least + most) * 0.5f, (most - least) * 0.5f})
+        .material(0, material)
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
+                  _indexBuffer, 0, 36)
+        .instances(members, chunk.buffer)
+        .receiveShadows(receiveShadows)
+        .castShadows(castShadows)
+        .build(*_engine, chunk.entity);
+    _scene->addEntity(chunk.entity);
+
+    group.chunks.push_back(chunk);
+  }
+}
+
+/// Writes into a group's existing chunks without touching their layout:
+/// every member named in `indices` is still exactly the member the chunk at
+/// its position holds, in the same order, so only what actually changed — a
+/// transform, or the material every chunk wears — is written.
+void Renderer::updateBatchGroup(BatchGroup &group,
+                                const std::vector<uint32_t> &indices,
+                                const float *transforms,
+                                MaterialInstance *material) {
+  auto &renderables = _engine->getRenderableManager();
+
+  if (material != group.material) {
+    group.material = material;
+    for (auto &chunk : group.chunks) {
+      auto instance = renderables.getInstance(chunk.entity);
+      if (instance) renderables.setMaterialInstanceAt(instance, 0, material);
+    }
+  }
+
+  for (size_t at = 0; at < indices.size(); at += kInstancesPerDraw) {
+    BatchChunk &chunk = group.chunks[at / kInstancesPerDraw];
+    bool moved = false;
+
+    for (uint32_t slot = 0; slot < chunk.count; slot++) {
+      const uint32_t index = indices[at + slot];
+      mat4f placement;
+      std::memcpy(&placement, transforms + size_t(index) * 16, sizeof(mat4f));
+      if (std::memcmp(&placement, &chunk.transforms[slot], sizeof(mat4f)) == 0) {
+        continue;
+      }
+      chunk.transforms[slot] = placement;
+      chunk.buffer->setLocalTransforms(&placement, 1, slot);
+      moved = true;
+    }
+
+    if (!moved) continue;
+
+    float3 least{std::numeric_limits<float>::max()};
+    float3 most{std::numeric_limits<float>::lowest()};
+    for (uint32_t slot = 0; slot < chunk.count; slot++) {
+      expandBoxByTransform(chunk.transforms[slot], least, most);
+    }
+    auto instance = renderables.getInstance(chunk.entity);
+    if (instance) {
+      renderables.setAxisAlignedBoundingBox(
+          instance, Box{(least + most) * 0.5f, (most - least) * 0.5f});
+    }
+  }
+}
+
+/// Takes a group's chunks apart. Order matters, as it does for a
+/// population's book: a renderable holds its InstanceBuffer, so the
+/// renderable goes first — destroying the buffer first trips a Filament
+/// precondition, which is fatal rather than an error code. The material is
+/// never destroyed here: it is borrowed, from _materialOrder or from the
+/// colour pool, and each already owns its own lifetime.
+void Renderer::destroyBatchGroup(BatchGroup &group) {
+  for (auto &chunk : group.chunks) {
+    if (chunk.entity) {
+      _scene->remove(chunk.entity);
+      _engine->destroy(chunk.entity);
+      utils::EntityManager::get().destroy(chunk.entity);
+    }
+    if (chunk.buffer != nullptr) _engine->destroy(chunk.buffer);
+  }
+  group.chunks.clear();
+  group.memberKeys.clear();
+  group.material = nullptr;
+}
+
+/// Whether identical objects are drawn as manually-instanced groups instead
+/// of one renderable each. See OrbisBatching.h for how a scene is divided
+/// into groups and reconcileBatchGroups for how a group becomes renderables.
+///
+/// Not Filament's own automatic instancing, and deliberately so.
+/// setAutomaticInstancingEnabled turns on RenderPass::instanceify(), which
+/// merges draw commands after the fact by comparing them — and on stock
+/// Filament 1.76 it compares a custom command's stale leftover state as
+/// though it were a draw, and can fold the colour-grading subpass into a
+/// neighbouring instanced run so it never executes: the whole frame comes
+/// back black, on some scenes and not others depending on what was left in
+/// the command arena. A fix exists on Orbis's own Filament fork, in no
+/// release. Manual instancing — one renderable built with
+/// RenderableManager::Builder::instances(count, InstanceBuffer*), exactly
+/// the feature OrbisPopulation already draws forests with — never reaches
+/// instanceify() at all, so the bug is sidestepped rather than depended on
+/// being fixed. See ORBIS_FORCE_INSTANCING in startWithWidth for reproducing
+/// it on demand, now that nothing here asks for it on its own.
+///
+/// Purely a flag: the work of building or tearing down groups happens in
+/// applyObjects, on the next publish, because that is where the census
+/// already runs and where a scene's objects are known.
 void Renderer::setBatching(bool enabled) {
   if (_disposed || _engine == nullptr) return;
-  if (enabled == _batching) return;
   _batching = enabled;
-  // Switched off at once; switched on only by `applyObjects`, and only once
-  // it has found something to merge.
-  if (!enabled) _engine->setAutomaticInstancingEnabled(false);
 }
 
 uint32_t Renderer::batchedObjects() {
@@ -5845,11 +6089,12 @@ void Renderer::drawAtTime(double time) {
     // because CI reads the first two "[orbis] frame" lines — this one and the
     // surface's "-> path" — and a third line in between would push the path
     // out of the log it prints. Renderables are what Filament culls and sorts
-    // one at a time; the groups are what the batched objects are left costing
-    // per pass if every group merges whole. Filament merges only draws that
-    // land next to each other once it has sorted them, so the true count sits
-    // between the groups and the objects: this is the ceiling on the saving,
-    // not a measurement of it.
+    // one at a time — every group's chunks among them — so with batching on
+    // this is the count *after* merging, not before it: exact, because a
+    // manually-instanced chunk is one renderable whether or not anything in
+    // it is visible, unlike the old count-then-hope of automatic instancing.
+    // Objects and groups say what was merged to get there: [batchedObjects]
+    // renderables became [batchGroups] chunks, each of up to sixty-four.
     orbis::log("[orbis] frame %d: cpu %.2f ms, gpu %.2f ms (median of recent), "
           "batching %s, %zu renderables, %u objects in %u groups",
           _frameCount, cpuMilliseconds(), gpuMilliseconds(),

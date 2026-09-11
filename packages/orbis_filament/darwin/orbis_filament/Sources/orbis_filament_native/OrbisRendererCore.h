@@ -20,6 +20,7 @@
 // video — is asked of OrbisPlatform.h, and where a frame is presented is
 // OrbisSurface's business, as it was before.
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -200,6 +201,63 @@ struct Grown {
   uint64_t seen = 0;
 };
 
+/// One manually-instanced renderable inside a batch group: up to
+/// kInstancesPerDraw members sharing a single InstanceBuffer of their own
+/// transforms.
+///
+/// This is Filament's manual instancing — RenderableManager::Builder::
+/// instances(count, InstanceBuffer*) — not its automatic kind, and the
+/// difference is the whole reason batching exists as a separate feature from
+/// setAutomaticInstancingEnabled. See BatchGroup below for why.
+///
+/// The chunk's own entity is never given a transform: it stays at Filament's
+/// default identity, so "each local transform is relative to the transform
+/// of the associated renderable" — the InstanceBuffer's own contract —
+/// reduces to "each transform is the member's own, absolute, world
+/// transform." `transforms` mirrors what the buffer holds, kept here because
+/// InstanceBuffer has no getter and a chunk's bounding box has to be
+/// rebuilt from somewhere when one member moves.
+struct BatchChunk {
+  utils::Entity entity;
+  filament::InstanceBuffer *buffer = nullptr;
+  std::array<filament::math::mat4f, kInstancesPerDraw> transforms{};
+
+  /// How many of the kInstancesPerDraw slots are actually in use. Every
+  /// chunk but a group's last is full; a group of one hundred is two chunks,
+  /// sixty-four and thirty-six.
+  uint32_t count = 0;
+};
+
+/// One group the census (OrbisBatching.h) found four or more of: a mesh, a
+/// material and a set of shadow/layer flags shared by every member, drawn as
+/// a handful of BatchChunks instead of one renderable per member.
+///
+/// Kept between publishes, keyed by the same BatchKey the census groups
+/// objects by, so that a publish where nothing about a group's *membership*
+/// changed costs a compare-and-write per member rather than a rebuild — see
+/// reconcileBatchGroups. `memberKeys` is what "nothing changed" is judged
+/// against: the exact object keys the group was built from last time, in the
+/// order they arrived. Same keys, same order, is the only case cheap enough
+/// to be worth detecting; anything else — one joined, one left, two swapped
+/// places — rebuilds the group's chunks from nothing.
+///
+/// Everything that is per-renderable in Filament is therefore shared by the
+/// whole group rather than decided per member: the material instance, the
+/// shadow and layer flags (already guaranteed identical within a group by
+/// the census's own key), and culling — every chunk is culled as one box,
+/// the union of its members', so one visible member draws every other member
+/// of its chunk too. See the doc comment on OrbisScene.batching (Dart side)
+/// for why that is an acceptable trade rather than a silent one.
+struct BatchGroup {
+  std::vector<BatchChunk> chunks;
+  std::vector<int64_t> memberKeys;
+
+  /// Borrowed — from _materialOrder for a named material, from the colour
+  /// pool for the placeholder cube — and never destroyed by this group.
+  filament::MaterialInstance *material = nullptr;
+  uint64_t seen = 0;
+};
+
 /// A number that puts nearby places near each other.
 ///
 /// The bits of three coordinates interleaved, so sorting by it walks the world
@@ -318,12 +376,6 @@ struct Drawn {
   /// clearing the override puts the model back the way the file had it.
   /// Empty while nothing has been overridden, which is the usual case.
   std::vector<filament::MaterialInstance *> ownMaterials;
-
-  /// The shared surface a batched placeholder cube is wearing, or null for
-  /// its own. Borrowed from the colour pool rather than owned: the cube's own
-  /// [material] is kept, and its colour kept written, so leaving a batch is
-  /// a pointer swapped back and nothing rebuilt.
-  filament::MaterialInstance *pooled = nullptr;
 
   /// The publish that last mentioned this object. Anything not stamped by the
   /// current one has left the scene.
@@ -1011,6 +1063,18 @@ class Renderer {
   void refreshShadowOptions();
   void pumpVideos();
   void dress(Drawn &drawn, int32_t index);
+  void reconcileBatchGroups(
+      const std::unordered_map<orbis::BatchKey, std::vector<uint32_t>,
+                                orbis::BatchKeyHash> &groups,
+      const int64_t *keys, const float *transforms, const float *colours,
+      uint64_t generation);
+  void rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
+                         const std::vector<uint32_t> &indices,
+                         const int64_t *keys, const float *transforms,
+                         MaterialInstance *material);
+  void updateBatchGroup(BatchGroup &group, const std::vector<uint32_t> &indices,
+                        const float *transforms, MaterialInstance *material);
+  void destroyBatchGroup(BatchGroup &group);
   void sweepUnnamedMeshes();
   void writeLight(const Lit &lit);
   void buildDecalData();
@@ -1090,15 +1154,31 @@ class Renderer {
   uint64_t _objectGeneration{};
   uint64_t _lightGeneration{};
 
-  /// Whether identical objects are merged into instanced draws. See
-  /// OrbisBatching.h for what that means here and why it is mostly a question
-  /// of what objects are made of.
+  /// Whether identical objects are drawn as manually-instanced groups. See
+  /// OrbisBatching.h for how a scene is divided into groups and
+  /// reconcileBatchGroups for how a group becomes renderables.
   bool _batching{};
   orbis::BatchCensus _census{};
+
+  /// Shared material instances for the placeholder cube, one per colour,
+  /// claimed by a BatchGroup rather than by an individual object now that
+  /// batching builds one renderable per group instead of dressing objects
+  /// one at a time. Still exactly the pool an unbatched, named-material
+  /// object never touches.
   orbis::ColourPool<filament::MaterialInstance> _colourPool{};
 
-  /// What the last publish batched: objects in a group large enough to merge,
-  /// and how many groups. Nought while batching is off.
+  /// Every group large enough to batch, from the last publish that had any,
+  /// keyed the same way the census keys objects. Kept rather than rebuilt
+  /// from nothing each publish, so moving one member of a group of three
+  /// thousand costs one instance write rather than three thousand.
+  std::unordered_map<orbis::BatchKey, BatchGroup, orbis::BatchKeyHash> _groups{};
+
+  /// What the last publish batched: objects in a group large enough to
+  /// merge, and how many chunks — manually-instanced renderables, each of up
+  /// to kInstancesPerDraw members — those groups came to once built. Exact,
+  /// not a ceiling: a chunk is one renderable whether or not every member in
+  /// it is visible, so unlike Filament's automatic instancing there is no
+  /// "if it manages to merge" left to measure. Nought while batching is off.
   uint32_t _batchedObjects{};
   uint32_t _batchGroups{};
 
