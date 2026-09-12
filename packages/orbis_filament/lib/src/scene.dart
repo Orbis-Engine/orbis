@@ -1194,35 +1194,37 @@ class OrbisScene {
   /// caster among them, and on forty-eight overlapping slabs sharing one
   /// material. Where a batched group also casts shadows — crates in a
   /// pattern, one in five, is the case this was measured on — the frame is
-  /// close but not bit-identical: with the clock pinned, 2.97% of pixels
-  /// differ, by 2.6 parts in 255 on average and 68 at the worst, along the
-  /// edges of shadows rather than scattered across every silhouette or
-  /// missing from a whole object. Two runs of the same frame are
-  /// bit-identical, so that is a real difference and not noise. Turning the
-  /// shadow pass off makes it vanish, which is what places it there.
+  /// close but not bit-identical: with the clock pinned, 2.29% of pixels
+  /// differ, by 2.7 parts in 255 on average, along the edges of shadows
+  /// rather than scattered across every silhouette or missing from a whole
+  /// object. Two runs of the same frame are bit-identical, so that is a real
+  /// difference and not noise. Turning the shadow pass off makes it vanish,
+  /// which is what places it there.
   ///
-  /// It is *not* the group's bounding box, and not how Filament fits its
-  /// cascades. That was the explanation this comment used to give, and it is
-  /// wrong. A group's box is the union of its members', so the test is to
-  /// shrink the group: sixty-four members to a chunk differ by 2.97% of
-  /// pixels, thirty-two by 2.96%, and one member to a chunk — where every
-  /// number a cascade is fitted from is identical to the unbatched frame,
-  /// the same box, the same renderable count, the same culling — still by
-  /// 2.75%. Nine tenths of the difference survives the thing that was
-  /// supposed to cause it. Squaring every crate to the axes, so no transform
-  /// can round differently, leaves 3.28%. Sorting a chunk's members to
-  /// tighten its box, and giving a chunk every per-renderable shadow setting
-  /// an individual object would have had, were both tried and neither moved
-  /// the result — which reads as evidence for this conclusion rather than
-  /// against it. What is left needs batched *casters*: batch the same crates
-  /// with nothing in the scene casting, so the shadow pass still runs and
-  /// still fits itself to the receivers, and the frame is bit-identical. The
-  /// receiver side contributes nothing. So it is something in how an
-  /// instanced caster is drawn into the shadow map, and it is not yet named.
+  /// **It is the group's box, and now only the group's box.** This comment
+  /// used to say the difference was 2.97%, and that the bounding box had been
+  /// ruled out because shrinking a group to one member still left 2.75%
+  /// behind. The test was sound and the conclusion was wrong, because the
+  /// thing it was compared against was itself wrong: the placeholder cube
+  /// declared a box that did not contain it — Filament's `Box` is a centre
+  /// and a half-extent, and the declaration was a {min,max} pair — so the
+  /// *unbatched* side was fitting its shadows from the wrong volume, and no
+  /// amount of shrinking a chunk could reveal that. With the declaration
+  /// corrected, one member to a chunk differs by 0.02%: four hundred and
+  /// sixty-three pixels, the last of the float rounding in recovering a
+  /// chunk's half-extent from the union of its members'. The two paths agree.
   ///
-  /// So this stays off by default: the difference is far above the noise,
-  /// which with a pinned clock is exactly nothing. Turning it on is safe in
-  /// the sense that mattered most: it no longer touches the Filament feature
+  /// What is left at sixty-four members is the grouping, behaving as a union
+  /// of boxes should: a chunk's box is looser along the light axis than any
+  /// member's, so the shadow camera fits a deeper volume and the map's texels
+  /// land differently. It saturates immediately — eight members to a chunk
+  /// measures 2.24% against sixty-four's 2.29% — so no chunk size buys the
+  /// difference back while still batching anything.
+  ///
+  /// So this stays off by default, but the trade is now a named one: a
+  /// bounded difference at the edges of shadows, against three thousand
+  /// renderables where fifty-one would do. Turning it on is safe in the
+  /// sense that mattered most: it no longer touches the Filament feature
   /// that used to blacken a frame outright (see below), so the worst this
   /// can now do is a scattering of pixels near a shadow's edge, never a
   /// black screen. A scene where nothing batched casts a shadow stays

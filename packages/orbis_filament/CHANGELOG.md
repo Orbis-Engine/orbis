@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.23.0
+
+- **The placeholder cube's bounding box now contains the cube.** Filament's
+  `Box` is a centre and a half-extent. The declaration read
+  `{{-1,-1,-1},{1,1,1}}`, which is a {min,max} pair written into it, and
+  describes a cube centred on (-1,-1,-1) that stops at the origin. The
+  geometry spans -1..+1 about the origin, so the box never contained the thing
+  it stood for, and the error grew with the object's scale: a floor slab at
+  scale 30 declared a box thirty metres from the floor. A caster's world box is
+  the only input to the directional shadow camera's fit — `ShadowMap` takes the
+  near plane from the casters and the far plane and x-y focus from the
+  receivers — so every scene drawing the placeholder cube fitted its shadow map
+  to the wrong volume. Reference frames across the gallery move as a result,
+  with the clock pinned: 9.72% of pixels in A thousand objects, 2.76% in
+  Batching unbatched, 0.54% in Shadows, and none at all in Panel shadows, whose
+  rectangular light does not use that fit. Nothing is culled differently in any
+  of them — every pixel that moves is a shading or shadow change, not an object
+  appearing or disappearing — though the box was a culling hazard too, since
+  Filament culls from the same box it fits shadows from.
+
+- **What instance batching still costs, measured against a correct baseline.**
+  Three thousand crates batched, against the same crates drawn one by one,
+  differ by 2.29% of pixels at the default sixty-four members to a chunk, 2.24%
+  at eight, and 0.02% at one — four hundred and sixty-three pixels in a
+  1600x1200 frame, which is the last of the float rounding in recovering a
+  chunk's half-extent from the union of its members'. Before the box was fixed
+  the same three measurements were 2.97%, 2.96% and 2.75%: what survived
+  shrinking the group was the unbatched side's wrong box, which is why
+  shrinking never disposed of it. What remains is the grouping itself, and it
+  behaves as a union of boxes should — a chunk's box is looser along the light
+  axis than any member's, so the shadow camera fits a deeper volume and the
+  map's texels land differently. It saturates at once: eight members to a chunk
+  is already as loose as sixty-four, so no chunk size buys the difference back
+  while still batching anything. Batching stays off by default here, but the
+  trade is now a named one rather than an open question.
+
 ## 0.22.0
 
 - **A rectangular light's shadow now actually falls.** The depth map it drew
@@ -67,29 +103,17 @@
   average, 68 at the worst — all of it along the edges of shadows. With the
   shadow pass off the two frames are identical, which is what places it there.
 
-  **It is not the group's bounding box, and not how Filament fits its
-  cascades.** That was the standing explanation and it is wrong. A group's box
-  is the union of its members', so the test is to shrink the group: sixty-four
-  members to a chunk differ by 2.97% of pixels, thirty-two by 2.96%, and one
-  member to a chunk — where every number a cascade is fitted from is identical
-  to the unbatched frame, the same box, the same renderable count, the same
-  culling — still by 2.75%. Nine tenths of the difference survives the thing
-  that was supposed to cause all of it. Two further checks agree: the
-  world-space caster and receiver volumes are identical either way, because a
-  chunk's box is the exact union of its members' and a union of unions is the
-  same union; and squaring every crate to the axes, so no transform can round
-  differently, leaves 3.28%. What remains needs batched *casters*: batch the
-  same three thousand crates with nothing in the scene casting, so the shadow
-  pass still runs and still fits itself to the receivers, and the frame is
-  bit-identical — which disposes of the receiver side, and with it the idea
-  that a batched row is admitted to the receiver bounds whole. So it is
-  something in how an instanced caster is drawn into the shadow map, and it is
-  not yet named. The fix that was expected to work, handing Filament the
-  shadow scene bounds from the embedder, would have addressed about a
-  fourteenth of the difference, and was not made. The frame's stats report how
-  many objects were batched and into how many groups. A depth prepass was
-  measured and not built: on Apple's tile-based GPUs there is no overdraw cost
-  for it to remove.
+  Most of that turned out to be a fault on the *unbatched* side rather than in
+  the batching, and is fixed in 0.23.0: the placeholder cube declared a
+  bounding box that did not contain it, so an unbatched crate's shadows were
+  fitted from the wrong volume and the batched path — which works a chunk's box
+  out from its members' transforms — was the one that was right. That is why
+  shrinking a group to one member never disposed of the difference, and why
+  this entry's reasoning from that test was wrong. 0.23.0 carries the
+  measurements against a corrected baseline. The frame's stats report how many
+  objects were batched and into how many groups. A depth prepass was measured
+  and not built: on Apple's tile-based GPUs there is no overdraw cost for it to
+  remove.
 
 - **God rays and screen distortion.** `OrbisScene.godRays` adds shafts of light
   from the scene's own directional light, by Mitchell's screen-space light
