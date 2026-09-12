@@ -314,3 +314,73 @@ jobs:
       - name: Build the gallery APK
         working-directory: orbis/examples/gallery
         run: flutter build apk --debug --target-platform=android-arm64
+
+  # The renderer once more, linked for Windows -- the plugin's Win32 bridge
+  # over the same portable core every job above builds for somewhere else.
+  #
+  # This job is not a check on the Windows plugin so much as the only
+  # compiler it has. There is no Windows machine behind this work: every line
+  # under packages/orbis_filament/windows/ was written against the embedder's
+  # own headers and Filament's published release and has never been built
+  # anywhere else. So a green run here claims exactly what it does and no
+  # more -- that the plugin, the portable core and Filament's Windows
+  # archives compile, link and bundle together.
+  #
+  # x64 only, because Google publishes no arm64 Windows release of Filament;
+  # the plugin's CMakeLists refuses that target by name rather than failing
+  # at the link.
+  renderer-windows:
+    name: Renderer (Windows build)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orbis
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      # The Windows release is a 769 MB download and a fixed version, so it is
+      # well worth keeping between runs -- it is by some way the largest of
+      # the four platforms' SDKs. Keyed on setup.sh, so changing which
+      # Filament version it names fetches a fresh copy rather than building
+      # against a stale cache that happens to still be there.
+      - name: Cache Filament SDK
+        uses: actions/cache@v4
+        with:
+          path: orbis/packages/orbis_filament/windows/third_party
+          key: filament-windows-${{ runner.os }}-${{ hashFiles('orbis/packages/orbis_filament/windows/setup.sh') }}
+
+      # Through bash explicitly. setup.sh is the same shape as the other three
+      # platforms' and is a shell script; the bash Git for Windows installs is
+      # what runs it, both here and from the plugin's own CMakeLists at
+      # configure time, so this step also proves that path works before the
+      # build depends on it.
+      - name: Fetch Filament and compile materials
+        shell: bash
+        run: bash orbis/packages/orbis_filament/windows/setup.sh
+
+      - name: Build the gallery for Windows
+        working-directory: orbis/examples/gallery
+        run: flutter build windows --debug
+
+      # Running it as well as building it, for the reason the macOS job does:
+      # a Filament precondition aborts at runtime in a build that compiled
+      # perfectly.
+      - name: Draw a frame
+        # Not a gate, deliberately, and for a sharper reason than the iOS
+        # job's: GitHub's windows-latest runners have no GPU at all, so there
+        # is no Vulkan driver to answer and the OpenGL behind it is a software
+        # path well below the standard surface's feature level. The expected
+        # outcome here is that the renderer declines to start, which the
+        # script reports rather than fails on. The build step above is the
+        # gate; this one should become one again on a runner that can draw.
+        continue-on-error: true
+        shell: bash
+        working-directory: orbis/examples/gallery
+        env:
+          ORBIS_DUMP_FRAME: 30
+        run: ../../tool/ci_draw_frame_windows.sh build/windows/x64/runner/Debug
