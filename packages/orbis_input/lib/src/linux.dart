@@ -383,9 +383,24 @@ class _LinuxDevice implements PadDevice {
     return (buttons: buttons, axes: axes);
   }
 
+  /// Whether the native memory has already been given back.
+  ///
+  /// Separate from [_alive], which says whether the pad is still there — a
+  /// device can stop being alive several ways (unplugged mid-read, dropped by
+  /// a rescan) without anything having been freed yet, so one flag cannot
+  /// answer both questions.
+  bool _closed = false;
+
   @override
   void close() {
-    if (!_alive && _fd < 0) return;
+    // Idempotent, because being closed twice is the ordinary path rather than
+    // a mistake: a rescan closes a device that has gone, and the poll that
+    // notices the same absence closes it again on the way to reporting the
+    // disconnection. Guarding on liveness instead let both through and freed
+    // the same two buffers twice, which libc catches as a double free and
+    // takes the process down with.
+    if (_closed) return;
+    _closed = true;
     _alive = false;
     _libc.close(_fd);
     calloc.free(_buffer);
