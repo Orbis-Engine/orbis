@@ -18,6 +18,7 @@ PACKAGES=(
   packages/orbis_codegen
   packages/orbis_core
   packages/orbis_effect
+  packages/orbis_input
   packages/orbis_light
   packages/orbis_mesh
   packages/orbis_native
