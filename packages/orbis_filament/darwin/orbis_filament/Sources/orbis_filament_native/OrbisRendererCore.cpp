@@ -204,6 +204,26 @@ void Renderer::startWithWidth(uint32_t width, uint32_t height) {
     _engine->setAutomaticInstancingEnabled(true);
   }
 
+  // Diagnostic only, both of them, and both default to what a release build
+  // already does. ORBIS_BATCH_CHUNK caps how many members share one instanced
+  // draw, so a batched frame can be compared against an unbatched one with
+  // the group size taken out of the question — at one member a chunk is one
+  // crate, culled and fitted from exactly the numbers an unbatched crate
+  // would be. ORBIS_BATCH_BOX=exact then builds that one-member chunk's
+  // bounding box the way Filament builds an unbatched object's. See
+  // rebuildBatchGroup for what the difference between the two is.
+  if (const char *chunk = getenv("ORBIS_BATCH_CHUNK")) {
+    const int wanted = atoi(chunk);
+    if (wanted > 0) {
+      _chunkSize = uint32_t(std::min<int>(wanted, int(kInstancesPerDraw)));
+    }
+  }
+  const char *boxMode = getenv("ORBIS_BATCH_BOX");
+  _exactChunkBox = boxMode != nullptr && strcmp(boxMode, "exact") == 0;
+  _objectChunkBox = boxMode != nullptr && strcmp(boxMode, "object") == 0;
+  const char *rootMode = getenv("ORBIS_BATCH_ROOT");
+  _rootTransformChunks = rootMode != nullptr && strcmp(rootMode, "transform") == 0;
+
   // Raised after the fact rather than in the builder for the same reason:
   // this one clamps to what is supported instead of refusing, so a device
   // that cannot manage it keeps the surfaces it can compile rather than
@@ -3977,6 +3997,32 @@ static inline void expandBoxByTransform(const mat4f &m, float3 &least,
   most = max(most, centre + half);
 }
 
+/// The world box Filament would work out for one member on its own, from the
+/// same object-space box an unbatched crate declares.
+///
+/// expandBoxByTransform above takes the member's box to be a unit cube
+/// centred on the origin: it reads the centre straight off the translation
+/// column. The placeholder cube does not declare that box. It declares
+/// `{{-1,-1,-1},{1,1,1}}` — Filament's Box is a centre and a half-extent, so
+/// that is a cube centred on (-1,-1,-1), reaching from (-2,-2,-2) to the
+/// origin. Filament transforms it with Box::transform, centre = m*c + t and
+/// half-extent = abs(m)*h, which for a crate at 0.4 scale puts the box about
+/// two thirds of a metre away from where a chunk puts it. Diagnostic:
+/// ORBIS_BATCH_BOX=object builds a chunk's box this way instead.
+static inline void expandBoxByObjectBox(const mat4f &m, const float3 &c,
+                                        const float3 &h, float3 &least,
+                                        float3 &most) {
+  const float3 centre{m[0].x * c.x + m[1].x * c.y + m[2].x * c.z + m[3].x,
+                      m[0].y * c.x + m[1].y * c.y + m[2].y * c.z + m[3].y,
+                      m[0].z * c.x + m[1].z * c.y + m[2].z * c.z + m[3].z};
+  const float3 half{
+      std::fabs(m[0].x) * h.x + std::fabs(m[1].x) * h.y + std::fabs(m[2].x) * h.z,
+      std::fabs(m[0].y) * h.x + std::fabs(m[1].y) * h.y + std::fabs(m[2].y) * h.z,
+      std::fabs(m[0].z) * h.x + std::fabs(m[1].z) * h.y + std::fabs(m[2].z) * h.z};
+  least = min(least, centre - half);
+  most = max(most, centre + half);
+}
+
 /// Orders `indices` so that members near each other in the world are near
 /// each other in the list, and therefore end up sharing a chunk — the same
 /// technique sortPopulation uses, for the same reason (see mortonOf).
@@ -4139,9 +4185,9 @@ void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
   const bool receiveShadows = (key.flags & kReceivesShadows) != 0;
   const uint8_t layer = layerBitOf(key.flags);
 
-  for (size_t at = 0; at < indices.size(); at += kInstancesPerDraw) {
+  for (size_t at = 0; at < indices.size(); at += _chunkSize) {
     const uint32_t members =
-        uint32_t(std::min(size_t(kInstancesPerDraw), indices.size() - at));
+        uint32_t(std::min(size_t(_chunkSize), indices.size() - at));
 
     BatchChunk chunk;
     chunk.count = members;
@@ -4153,16 +4199,63 @@ void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
       group.slotOf[keys[index]] = uint32_t(at) + slot;
       std::memcpy(&chunk.transforms[slot], transforms + size_t(index) * 16,
                  sizeof(mat4f));
-      expandBoxByTransform(chunk.transforms[slot], least, most);
+      if (_objectChunkBox) {
+        expandBoxByObjectBox(chunk.transforms[slot], float3{-1, -1, -1},
+                             float3{1, 1, 1}, least, most);
+      } else {
+        expandBoxByTransform(chunk.transforms[slot], least, most);
+      }
     }
 
+    // Diagnostic (ORBIS_BATCH_ROOT=transform, one-member chunks only): put the
+    // member's placement on the chunk renderable's own transform and leave the
+    // instance buffer at identity — which is exactly where an unbatched
+    // object's placement lives. In principle it draws the same crate in the
+    // same place; in arithmetic it takes a different route to the model
+    // matrix. A renderable's transform is narrowed to float once, from the
+    // double product of the world origin and the object's own transform
+    // (FScene::prepare). An instance's model matrix is that already-narrowed
+    // root multiplied again, in float, by the instance's float transform
+    // (FInstanceBuffer::prepare). The two agree by algebra and can disagree in
+    // the last place — and a shadow map is a threshold test, so a last-place
+    // disagreement in a caster's depth is a flipped comparison at the edges.
+    const bool rootPlacement = _rootTransformChunks && members == 1;
+    const mat4f identity;
     chunk.buffer = filament::InstanceBuffer::Builder(members)
-                       .localTransforms(chunk.transforms.data())
+                       .localTransforms(rootPlacement ? &identity
+                                                      : chunk.transforms.data())
                        .build(*_engine);
+
+    // What a chunk hands Filament is a *world-space* box on a renderable that
+    // never gets a transform, where an unbatched object hands over its
+    // object-space box and lets Filament transform it (Box::transform, which
+    // is centre = m*c + t and half-extent = abs(m) * h). For one member the
+    // two are the same box by algebra and not by arithmetic: least and most
+    // are centre-half and centre+half, each rounded, so recovering the
+    // half-extent as (most-least)*0.5f lands a unit in the last place away
+    // from abs(m)*h. Every crate in the Batching example misses by that much.
+    // It matters because a caster's world box is what the shadow camera is
+    // fitted from — near plane from the casters' near, far plane and the x-y
+    // focus from their volume (Filament's ShadowMap::computeLightFrustumBounds)
+    // — so a last-place difference in the box moves the whole map slightly.
+    // ORBIS_BATCH_BOX=exact takes that difference out, for measuring against.
+    Box box{(least + most) * 0.5f, (most - least) * 0.5f};
+    if (_exactChunkBox && members == 1) {
+      const mat4f &m = chunk.transforms[0];
+      box = Box{float3{m[3].x, m[3].y, m[3].z},
+                float3{std::fabs(m[0].x) + std::fabs(m[1].x) + std::fabs(m[2].x),
+                       std::fabs(m[0].y) + std::fabs(m[1].y) + std::fabs(m[2].y),
+                       std::fabs(m[0].z) + std::fabs(m[1].z) + std::fabs(m[2].z)}};
+    }
+    // With the placement on the renderable's own transform, the box has to be
+    // the object-space one an unbatched crate declares: Filament transforms a
+    // renderable's box by that renderable's transform, so handing it a
+    // world-space box here would place the box twice.
+    if (rootPlacement) box = Box{{-1, -1, -1}, {1, 1, 1}};
 
     chunk.entity = utils::EntityManager::get().create();
     RenderableManager::Builder(1)
-        .boundingBox(Box{(least + most) * 0.5f, (most - least) * 0.5f})
+        .boundingBox(box)
         .material(0, material)
         .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
                   _indexBuffer, 0, 36)
@@ -4172,6 +4265,11 @@ void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
         .screenSpaceContactShadows(receiveShadows)
         .layerMask(0xFF, layer)
         .build(*_engine, chunk.entity);
+    if (rootPlacement) {
+      auto &tcm = _engine->getTransformManager();
+      tcm.create(chunk.entity);
+      tcm.setTransform(tcm.getInstance(chunk.entity), chunk.transforms[0]);
+    }
     _scene->addEntity(chunk.entity);
 
     group.chunks.push_back(chunk);
@@ -4203,8 +4301,8 @@ void Renderer::updateBatchGroup(BatchGroup &group,
 
   for (uint32_t index : indices) {
     const uint32_t slot = group.slotOf[keys[index]];
-    const uint32_t chunkAt = slot / kInstancesPerDraw;
-    const uint32_t offset = slot % kInstancesPerDraw;
+    const uint32_t chunkAt = slot / _chunkSize;
+    const uint32_t offset = slot % _chunkSize;
     BatchChunk &chunk = group.chunks[chunkAt];
 
     mat4f placement;
