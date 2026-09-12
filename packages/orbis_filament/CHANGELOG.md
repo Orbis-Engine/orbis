@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.23.0
+
+- **A display's own half of the quality question.** `OrbisDisplay` states a
+  panel's size and shape — `OrbisDisplay.handheld` is a Steam Deck's 1280 by
+  800, which is 16:10 rather than the 16:9 most code assumes — and
+  `OrbisPipeline.forDisplay` moves the three dials that depend on how many
+  pixels there are rather than on how fast the machine is: the shadow map,
+  which is only as useful as the screen pixels it is stretched over; the floor
+  under adaptive resolution, since half scale on a small panel is far softer
+  than half scale on a large one; and multisampling, which the machines behind
+  panels this size pay for in bandwidth. It measures nothing about the machine
+  and adds no rung between the four `OrbisDetail` already has.
+
 ## 0.22.0
 
 - **A rectangular light's shadow now actually falls.** The depth map it drew

@@ -293,6 +293,52 @@ class OrbisLighting {
   double clusterFar;
 }
 
+/// The screen a frame is being drawn for.
+///
+/// Only what the display itself settles, which is less than a quality preset
+/// and is deliberately all this claims to be. How many pixels there are, and
+/// what shape they are in, are facts about the panel; how hard to push the
+/// machine behind it is not, and nothing here pretends to know that.
+///
+/// [handheld] is a Steam Deck: 1280 by 800, which is 16:10 rather than the
+/// 16:9 almost everything assumes, and a little over a million pixels — half a
+/// 1080p frame and a quarter of a 1440p one.
+class OrbisDisplay {
+  const OrbisDisplay({
+    required this.width,
+    required this.height,
+    this.detail = OrbisDetail.medium,
+  });
+
+  /// A Steam Deck's own screen.
+  static const OrbisDisplay handheld = OrbisDisplay(width: 1280, height: 800);
+
+  /// The panel's size in pixels.
+  final int width;
+  final int height;
+
+  /// Which of the four named settings suits it.
+  final OrbisDetail detail;
+
+  /// Width over height. Worth reading rather than assuming: a camera framed
+  /// for 16:9 and shown on a 16:10 panel is either stretched or cropped, and
+  /// both are somebody's bug report.
+  double get aspect => height == 0 ? 1 : width / height;
+
+  /// How many pixels a frame covers.
+  int get pixels => width * height;
+
+  OrbisDisplay copyWith({int? width, int? height, OrbisDetail? detail}) =>
+      OrbisDisplay(
+        width: width ?? this.width,
+        height: height ?? this.height,
+        detail: detail ?? this.detail,
+      );
+
+  @override
+  String toString() => 'OrbisDisplay(${width}x$height, ${detail.label})';
+}
+
 /// How a frame gets drawn.
 ///
 /// One pipeline, not a choice of them. Every frame goes the same way: shadow
@@ -359,6 +405,48 @@ class OrbisPipeline {
           precise: true,
         );
     }
+  }
+
+  /// The pipeline at a named setting, with the two dials a display's own size
+  /// genuinely decides moved to suit it.
+  ///
+  /// Three changes, and only three, because only three of these dials depend
+  /// on how many pixels there are rather than on how fast the machine is.
+  ///
+  /// **The shadow map is matched to the frame, not left at a default.** A
+  /// shadow map's usefulness is relative to how many screen pixels it is
+  /// stretched over, so the 2048-pixel map that a 1440p frame needs is paying
+  /// for resolution a 1280-by-800 one cannot show. Above a megapixel and a
+  /// half this leaves the named setting alone; below it the map comes down one
+  /// step, and the cascades with it.
+  ///
+  /// **The floor under adaptive resolution rises on a small panel.** Half
+  /// scale on a 1440p frame is still 1280 by 720 of real pixels; half scale on
+  /// a 1280-by-800 one is 640 by 400, which is visibly soft rather than
+  /// slightly soft. So the floor is 0.7 here, and the frame gives up a little
+  /// less of itself to hold its rate.
+  ///
+  /// **Multisampling comes off below a certain size.** Not because a small
+  /// panel needs less anti-aliasing — it needs more — but because the machines
+  /// driving panels this size are the ones whose memory bandwidth
+  /// multisampling spends, and the post-process kind costs almost nothing by
+  /// comparison.
+  ///
+  /// What this deliberately does **not** do: measure the machine, know
+  /// anything about the GPU, target a frame rate, or offer a rung between the
+  /// four [OrbisDetail] has. It is the display's half of the question only.
+  factory OrbisPipeline.forDisplay(OrbisDisplay display) {
+    final pipeline = OrbisPipeline.at(display.detail);
+    final small = display.pixels <= 1500000;
+    if (!small) return pipeline;
+
+    pipeline.shadows.mapSize = (pipeline.shadows.mapSize ~/ 2).clamp(512, 4096);
+    if (pipeline.shadows.cascades > 2) pipeline.shadows.cascades -= 1;
+    if (pipeline.samples > 1) pipeline.samples = 1;
+    if (pipeline.resolution.adaptive) {
+      pipeline.resolution.minScale = 0.7;
+    }
+    return pipeline;
   }
 
   final OrbisShadows shadows;

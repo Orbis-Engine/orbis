@@ -172,4 +172,91 @@ void main() {
       expect(packed[1], kind.index);
     }
   });
+
+  test('a handheld is 1280 by 800, and that is not 16:9', () {
+    const deck = OrbisDisplay.handheld;
+    expect(deck.width, 1280);
+    expect(deck.height, 800);
+    expect(deck.pixels, 1024000);
+    expect(deck.aspect, closeTo(1.6, 1e-9), reason: '16:10, not 16:9');
+    expect(
+      deck.aspect,
+      isNot(closeTo(16 / 9, 1e-3)),
+      reason: 'a camera framed for 16:9 is stretched or cropped here',
+    );
+  });
+
+  test('a small panel gets a shadow map matched to it', () {
+    // A shadow map is only as useful as the screen pixels it is stretched
+    // over, so the map a 1440p frame needs is resolution a Deck cannot show.
+    final named = OrbisPipeline.at(OrbisDetail.high);
+    final deck = OrbisPipeline.forDisplay(
+      const OrbisDisplay(width: 1280, height: 800, detail: OrbisDetail.high),
+    );
+    expect(named.shadows.mapSize, 2048);
+    expect(deck.shadows.mapSize, 1024);
+    expect(deck.shadows.cascades, named.shadows.cascades - 1);
+  });
+
+  test('the map never falls below the lowest setting the engine has', () {
+    // Low is already at 512, and halving it again would invent a rung.
+    final deck = OrbisPipeline.forDisplay(
+      const OrbisDisplay(width: 1280, height: 800, detail: OrbisDetail.low),
+    );
+    expect(deck.shadows.mapSize, 512);
+    expect(deck.shadows.cascades, 1, reason: 'one cascade stays one');
+  });
+
+  test('the floor under a shrinking frame rises on a small panel', () {
+    // Half scale at 1440p is still 1280 by 720 of real pixels; half scale at
+    // 1280 by 800 is 640 by 400, which is soft rather than slightly soft.
+    final deck = OrbisPipeline.forDisplay(
+      const OrbisDisplay(width: 1280, height: 800, detail: OrbisDetail.low),
+    );
+    expect(deck.resolution.adaptive, isTrue);
+    expect(deck.resolution.minScale, closeTo(0.7, 1e-9));
+    expect(OrbisPipeline.at(OrbisDetail.low).resolution.minScale, 0.5);
+  });
+
+  test('multisampling comes off, since bandwidth is what it costs', () {
+    for (final detail in [OrbisDetail.high, OrbisDetail.ultra]) {
+      expect(OrbisPipeline.at(detail).samples, 4);
+      expect(
+        OrbisPipeline.forDisplay(
+          OrbisDisplay(width: 1280, height: 800, detail: detail),
+        ).samples,
+        1,
+        reason: '${detail.label} on a handheld',
+      );
+    }
+  });
+
+  test('a large display is left exactly as the named setting had it', () {
+    // The profile is the display's half of the question only. A full-sized
+    // screen settles nothing, so nothing is changed.
+    for (final detail in OrbisDetail.values) {
+      final named = OrbisPipeline.at(detail);
+      final big = OrbisPipeline.forDisplay(
+        OrbisDisplay(width: 2560, height: 1440, detail: detail),
+      );
+      expect(big.shadows.mapSize, named.shadows.mapSize);
+      expect(big.shadows.cascades, named.shadows.cascades);
+      expect(big.samples, named.samples);
+      expect(big.resolution.minScale, named.resolution.minScale);
+    }
+  });
+
+  test('nothing appears or disappears on a handheld', () {
+    // The same promise the four named settings make: a scene authored once is
+    // the same scene here, drawn with smaller numbers.
+    for (final detail in OrbisDetail.values) {
+      final deck = OrbisPipeline.forDisplay(
+        OrbisDisplay(width: 1280, height: 800, detail: detail),
+      );
+      expect(deck.shadows.enabled, isTrue);
+      expect(deck.culling, isTrue);
+      expect(deck.refraction, isTrue);
+      expect(deck.packed, hasLength(OrbisPipeline.stride));
+    }
+  });
 }
