@@ -94,12 +94,15 @@ bool ReadBool(const EncodableMap* map, const char* key) {
 double ReadNumber(const EncodableMap* map, const char* key, double fallback) {
   const EncodableValue* value = Lookup(map, key);
   if (value == nullptr) return fallback;
+  // `narrow` and `wide`, not `small` and `large`: <windows.h> reaches this
+  // translation unit through orbis_viewport.h in the same target and drags in
+  // rpcndr.h, which defines `small` as a macro for `char`.
   if (const auto* real = std::get_if<double>(value)) return *real;
-  if (const auto* small = std::get_if<int32_t>(value)) {
-    return static_cast<double>(*small);
+  if (const auto* narrow = std::get_if<int32_t>(value)) {
+    return static_cast<double>(*narrow);
   }
-  if (const auto* large = std::get_if<int64_t>(value)) {
-    return static_cast<double>(*large);
+  if (const auto* wide = std::get_if<int64_t>(value)) {
+    return static_cast<double>(*wide);
   }
   return fallback;
 }

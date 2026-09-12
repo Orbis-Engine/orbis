@@ -121,8 +121,27 @@ add_library(${PLUGIN_NAME} SHARED
 # MSVC_RUNTIME_LIBRARY is deliberately left at CMake's default to agree with
 # flutter_wrapper_plugin, and FILAMENT_LIB_DIR above selects the matching
 # flavour of the archives instead.
+# C++20, not the 17 every other platform's build asks for, and not a
+# preference -- MSVC refuses to compile this target below it, for two separate
+# reasons found by building it:
+#
+#   - Designated initializers (`{ .engine = ..., .gltfPath = ... }`) are a
+#     C++20 feature that GCC and Clang have always accepted as an extension in
+#     C++17, so they are already in Filament's own headers (DriverEnums.h,
+#     Box.h) and in OrbisRendererCore.cpp. MSVC does not: it says
+#     "error C7555: use of designated initializers requires at least
+#     '/std:c++20'" and stops. That is what makes this the smallest possible
+#     fix -- raising the standard here changes no shared source at all, where
+#     rewriting those initialisers would change the core for every platform.
+#   - /std:c++20 turns on /permissive- (asked for explicitly below anyway),
+#     and with it MSVC's two-phase name lookup. Without that, `friend class
+#     TPanic;` inside `class PreconditionPanic final : public
+#     TPanic<PreconditionPanic>` in Filament's utils/Panic.h resolves to the
+#     class template rather than the base's injected-class-name, and is
+#     rejected with "error C2990: non-class template has already been
+#     declared as a class template".
 set_target_properties(${PLUGIN_NAME} PROPERTIES
-  CXX_STANDARD 17
+  CXX_STANDARD 20
   CXX_STANDARD_REQUIRED ON
   CXX_VISIBILITY_PRESET hidden)
 
@@ -133,14 +152,37 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE
   NOMINMAX
   # The renderer defines M_PI itself when the platform does not, but several
   # of Filament's headers expect the usual constants to be there.
-  _USE_MATH_DEFINES)
+  _USE_MATH_DEFINES
+  # OrbisSplats.h's sortableBits() type-puns a float through
+  # __builtin_memcpy, which is GCC and Clang's spelling and not a function
+  # MSVC has: "error C3861: '__builtin_memcpy': identifier not found".
+  #
+  # Fixed here rather than in that header deliberately. The header is shared
+  # C++ compiled by all five platforms and is being worked on elsewhere, so a
+  # one-word edit there would be both a cross-platform change and a merge
+  # conflict, to buy nothing this does not. std::memcpy is what the builtin
+  # compiles to in a constant-foldable context anyway, and /FI below
+  # guarantees it is declared. If the splat header ever spells this
+  # portably, this define and that /FI can go.
+  __builtin_memcpy=std::memcpy)
 
 # /EHsc because exceptions are on (see above); /bigobj because
 # OrbisRendererCore.cpp instantiates enough of Filament's templates to pass
 # the object format's default section limit; /w because this target is held
 # to Filament's warning policy rather than the application's, exactly as the
 # GTK plugin holds the core apart from its own -Wall -Wextra.
-target_compile_options(${PLUGIN_NAME} PRIVATE /EHsc /bigobj /w)
+#
+# /permissive- states what /std:c++20 already implies, so the two-phase
+# lookup Panic.h depends on does not quietly depend on a compiler default.
+# /Zc:__cplusplus makes MSVC report the standard it is actually compiling,
+# which is what any header that gates on __cplusplus reads. /FIcstring
+# force-includes <cstring> into every translation unit, so the
+# __builtin_memcpy define above always has std::memcpy in scope --
+# OrbisSplats.h includes <cstdint> and <vector> but not <cstring>, and
+# relying on it arriving transitively is the kind of thing that works until
+# it does not.
+target_compile_options(${PLUGIN_NAME} PRIVATE
+  /EHsc /bigobj /w /permissive- /Zc:__cplusplus /FIcstring)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${FILAMENT_DIR}/include"

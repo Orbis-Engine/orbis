@@ -37,12 +37,16 @@ bool ReadInt(const EncodableValue* args, const char* key, int64_t* out) {
   if (map == nullptr) return false;
   const auto found = map->find(EncodableValue(std::string(key)));
   if (found == map->end()) return false;
-  if (const auto* small = std::get_if<int32_t>(&found->second)) {
-    *out = *small;
+  // `narrow` and `wide`, not `small` and `large`: <windows.h> drags in
+  // rpcndr.h, which defines `small` as a macro for `char`. A local of that
+  // name compiles on every other platform and turns into `const auto* char`
+  // here, which is exactly as confusing to read as it sounds.
+  if (const auto* narrow = std::get_if<int32_t>(&found->second)) {
+    *out = *narrow;
     return true;
   }
-  if (const auto* large = std::get_if<int64_t>(&found->second)) {
-    *out = *large;
+  if (const auto* wide = std::get_if<int64_t>(&found->second)) {
+    *out = *wide;
     return true;
   }
   return false;
