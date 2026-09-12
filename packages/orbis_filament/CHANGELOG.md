@@ -13,19 +13,23 @@
   near plane from the casters and the far plane and x-y focus from the
   receivers — so every scene drawing the placeholder cube fitted its shadow map
   to the wrong volume. Reference frames across the gallery move as a result,
-  with the clock pinned: 9.72% of pixels in A thousand objects, 2.76% in
-  Batching unbatched, 0.54% in Shadows, and none at all in Panel shadows, whose
-  rectangular light does not use that fit. Nothing is culled differently in any
+  with the clock pinned and the noise floor measured at exactly zero: 2.75% of
+  pixels in Batching unbatched, 0.54% in Shadows, 0.49% in A thousand objects
+  and 0.23% in Meshes. Panel shadows moves on 69% of its pixels but by a single
+  level on almost every one of them, with the frame's mean unchanged to three
+  decimal places — that is the dither re-rolling under a shift smaller than one
+  quantisation step, not something to see. Nothing is culled differently in any
   of them — every pixel that moves is a shading or shadow change, not an object
   appearing or disappearing — though the box was a culling hazard too, since
   Filament culls from the same box it fits shadows from.
 
 - **What instance batching still costs, measured against a correct baseline.**
   Three thousand crates batched, against the same crates drawn one by one,
-  differ by 2.29% of pixels at the default sixty-four members to a chunk, 2.24%
-  at eight, and 0.02% at one — four hundred and sixty-three pixels in a
-  1600x1200 frame, which is the last of the float rounding in recovering a
-  chunk's half-extent from the union of its members'. Before the box was fixed
+  differ by 2.27% of pixels at the default sixty-four members to a chunk, 2.22%
+  at eight, and 0.0055% at one — a hundred and six pixels in a 1600x1200 frame,
+  every one of them differing by exactly one level, which is the last of the
+  float rounding in recovering a chunk's half-extent from the union of its
+  members'. Before the box was fixed
   the same three measurements were 2.97%, 2.96% and 2.75%: what survived
   shrinking the group was the unbatched side's wrong box, which is why
   shrinking never disposed of it. What remains is the grouping itself, and it

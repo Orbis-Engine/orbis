@@ -1194,8 +1194,8 @@ class OrbisScene {
   /// caster among them, and on forty-eight overlapping slabs sharing one
   /// material. Where a batched group also casts shadows — crates in a
   /// pattern, one in five, is the case this was measured on — the frame is
-  /// close but not bit-identical: with the clock pinned, 2.29% of pixels
-  /// differ, by 2.7 parts in 255 on average, along the edges of shadows
+  /// close but not bit-identical: with the clock pinned, 2.27% of pixels
+  /// differ, by 2.6 parts in 255 on average, along the edges of shadows
   /// rather than scattered across every silhouette or missing from a whole
   /// object. Two runs of the same frame are bit-identical, so that is a real
   /// difference and not noise. Turning the shadow pass off makes it vanish,
@@ -1210,15 +1210,16 @@ class OrbisScene {
   /// and a half-extent, and the declaration was a {min,max} pair — so the
   /// *unbatched* side was fitting its shadows from the wrong volume, and no
   /// amount of shrinking a chunk could reveal that. With the declaration
-  /// corrected, one member to a chunk differs by 0.02%: four hundred and
-  /// sixty-three pixels, the last of the float rounding in recovering a
-  /// chunk's half-extent from the union of its members'. The two paths agree.
+  /// corrected, one member to a chunk differs by 0.0055%: a hundred and six
+  /// pixels, every one of them by a single level, which is the float rounding
+  /// left in recovering a chunk's half-extent from the union of its members'.
+  /// The two paths agree.
   ///
   /// What is left at sixty-four members is the grouping, behaving as a union
   /// of boxes should: a chunk's box is looser along the light axis than any
   /// member's, so the shadow camera fits a deeper volume and the map's texels
   /// land differently. It saturates immediately — eight members to a chunk
-  /// measures 2.24% against sixty-four's 2.29% — so no chunk size buys the
+  /// measures 2.22% against sixty-four's 2.27% — so no chunk size buys the
   /// difference back while still batching anything.
   ///
   /// So this stays off by default, but the trade is now a named one: a
