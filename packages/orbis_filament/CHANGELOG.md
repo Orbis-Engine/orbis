@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.23.0
+
+- **The renderer draws on Linux.** A GTK plugin under `linux/` puts the same
+  portable core the Apple and Android builds compile behind Flutter's Linux
+  embedder, speaking the same `orbis_filament` channel with the same method
+  names and wire shapes — so `OrbisView` and every other Dart caller work
+  there unchanged, and no shared C++ was touched to get it. `OrbisView` now
+  lists Linux among the platforms it draws on rather than showing its notice.
+  The backend is Filament's own choice off Apple: Vulkan where a driver
+  answers, OpenGL behind it, with the materials compiled for both.
+
+  A frame reaches Flutter through an `FlPixelBufferTexture` — the renderer
+  draws into an offscreen readable swap chain, the frame is read back with
+  the C ABI's capture calls, and Flutter copies those bytes into a texture of
+  its own. That is a whole copy per frame, which macOS, iOS and Android all
+  avoid, and it is deliberate: the copy-free route on this embedder
+  (`FlTextureGL`) needs a GL texture living in Flutter's own context, and the
+  embedder exposes no way to obtain that context — only a way to be running
+  inside it for the length of one callback. `linux/orbis_viewport.h` records
+  the technique that would exploit that, and what else it would depend on.
+
 ## 0.22.0
 
 - **A rectangular light's shadow now actually falls.** The depth map it drew

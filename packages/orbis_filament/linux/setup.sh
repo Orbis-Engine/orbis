@@ -208,14 +208,18 @@ compile() {
   fi
   # shellcheck disable=SC2086 -- the flags are ours and are meant to split.
   "$MATC" $MATC_FLAGS -o "/tmp/orbis_linux_$name.filamat" "$input"
-  # xxd is not on a minimal Linux image the way it is on macOS; this is the
-  # same C array from od, which coreutils always carries.
+  # The same two declarations `xxd -i` writes and the other two setup.sh
+  # rename to, because the renderer names both: the array, and the `_len`
+  # beside it that every Material::Builder call passes as the package size.
+  # Written with od rather than xxd only because a minimal Linux image has
+  # coreutils and need not have xxd -- the output is what matters, and it is
+  # the same.
   {
     echo "unsigned char k${name}Material[] = {"
     od -An -v -tx1 "/tmp/orbis_linux_$name.filamat" \
       | sed -e 's/[0-9a-f][0-9a-f]/0x&,/g' -e 's/^ */  /'
     echo "};"
-    echo "unsigned int k${name}MaterialSize = $(wc -c < "/tmp/orbis_linux_$name.filamat");"
+    echo "unsigned int k${name}Material_len = $(wc -c < "/tmp/orbis_linux_$name.filamat" | tr -d ' ');"
   } > "$header"
   rm -f "/tmp/orbis_linux_$name.filamat" "/tmp/orbis_linux_src_$name.mat"
 }

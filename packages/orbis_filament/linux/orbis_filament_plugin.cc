@@ -13,6 +13,16 @@
 // gave it -- `viewports` here is exactly `viewports` on the Kotlin side and
 // `Viewport`'s dictionary on the Swift one.
 
+// The plugin's own GObject. Declared here rather than in the public header
+// because nothing outside this file names the type: the registrant Flutter
+// generates calls one function, and that is the whole of what
+// include/orbis_filament/orbis_filament_plugin.h has to offer.
+G_DECLARE_FINAL_TYPE(OrbisFilamentPlugin,
+                     orbis_filament_plugin,
+                     ORBIS,
+                     FILAMENT_PLUGIN,
+                     GObject)
+
 struct _OrbisFilamentPlugin {
   GObject parent_instance;
   FlMethodChannel* channel;
