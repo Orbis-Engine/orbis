@@ -20,8 +20,23 @@ packages/orbis_filament/darwin/third_party/
 packages/orbis_filament/darwin/orbis_filament/third_party/
 packages/orbis_filament/darwin/orbis_filament/Sources/orbis_filament_native/generated/
 
+# Staged by packages/orbis_filament/linux/setup.sh: the Filament Linux
+# release, either fetched here or symlinked from the project's own cache.
+# The materials it compiles land in darwin/'s generated/ directory, which is
+# already ignored above -- see that script for why the three platforms share
+# one.
+packages/orbis_filament/linux/third_party/
+
 # Flutter
 .flutter-plugins-dependencies
+**/linux/flutter/ephemeral/
+# Written by the Flutter tool from the resolved plugin list on every build,
+# exactly as macOS's GeneratedPluginRegistrant.swift above is, and ignored
+# here for the same reason: it is output, and a machine that resolves a
+# different set of plugins otherwise shows it as a change nobody made.
+**/linux/flutter/generated_plugin_registrant.cc
+**/linux/flutter/generated_plugin_registrant.h
+**/linux/flutter/generated_plugins.cmake
 **/macos/Pods/
 **/macos/Podfile.lock
 **/macos/Flutter/ephemeral/

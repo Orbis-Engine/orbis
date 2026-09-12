@@ -34,3 +34,11 @@ flutter:
       android:
         package: dev.orbis.filament
         pluginClass: OrbisFilamentPlugin
+      # Linux reaches the same portable core through the same C ABI, behind
+      # Flutter's GTK embedder. `pluginClass` here names a C function rather
+      # than a class: the generated registrant calls
+      # orbis_filament_plugin_register_with_registrar and includes
+      # <orbis_filament/orbis_filament_plugin.h>, which is why linux/include
+      # carries that one public header.
+      linux:
+        pluginClass: OrbisFilamentPlugin

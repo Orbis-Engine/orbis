@@ -250,14 +250,21 @@ class _OrbisViewState extends State<OrbisView> {
     // Android's implementation is the same renderer and the same channel
     // protocol behind a Kotlin/JNI plugin instead of Swift's, presenting
     // into a Flutter SurfaceProducer texture rather than a CVPixelBuffer —
-    // see packages/orbis_filament/android/.
+    // see packages/orbis_filament/android/. Linux is the same again behind
+    // a GTK plugin, presenting into an FlPixelBufferTexture — the one
+    // presentation path on that embedder that does not need Flutter's own
+    // GL context, which it offers no public way to obtain; see
+    // packages/orbis_filament/linux/.
     const drawable = {
       TargetPlatform.macOS,
       TargetPlatform.iOS,
       TargetPlatform.android,
+      TargetPlatform.linux,
     };
     if (!drawable.contains(defaultTargetPlatform)) {
-      return const _Notice('Orbis renders on macOS, iOS and Android so far.');
+      return const _Notice(
+        'Orbis renders on macOS, iOS, Android and Linux so far.',
+      );
     }
 
     return LayoutBuilder(
