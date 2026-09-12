@@ -1173,7 +1173,18 @@ void Renderer::build(Drawn &drawn, const std::string &path) {
 
   drawn.entity = utils::EntityManager::get().create();
   RenderableManager::Builder(1)
-      .boundingBox({{-1, -1, -1}, {1, 1, 1}})
+      // Filament's Box is a centre and a half-extent, not a minimum and a
+      // maximum. This used to say {{-1,-1,-1},{1,1,1}}, which reads as a
+      // {min,max} pair and declares a cube centred on (-1,-1,-1) reaching the
+      // origin — a box that does not contain the geometry it stands for, since
+      // kPositions spans -1..+1 about the origin. Filament fits the directional
+      // shadow camera to the casters' world boxes (ShadowMap::visitScene, then
+      // computeLightFrustumBounds) and culls from the same box, so a box in the
+      // wrong place moved every shadow in every scene that draws the
+      // placeholder cube. The batched path works its own world box out from the
+      // members' transforms and was always right; this is what makes the two
+      // agree, and agree on the correct answer rather than in the middle.
+      .boundingBox({{0, 0, 0}, {1, 1, 1}})
       .material(0, drawn.material)
       .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _vertexBuffer,
                 _indexBuffer, 0, 36)
@@ -3997,18 +4008,23 @@ static inline void expandBoxByTransform(const mat4f &m, float3 &least,
   most = max(most, centre + half);
 }
 
-/// The world box Filament would work out for one member on its own, from the
-/// same object-space box an unbatched crate declares.
+/// The world box Filament works out for one member on its own, from the same
+/// object-space box an unbatched crate declares.
 ///
-/// expandBoxByTransform above takes the member's box to be a unit cube
-/// centred on the origin: it reads the centre straight off the translation
-/// column. The placeholder cube does not declare that box. It declares
-/// `{{-1,-1,-1},{1,1,1}}` — Filament's Box is a centre and a half-extent, so
-/// that is a cube centred on (-1,-1,-1), reaching from (-2,-2,-2) to the
-/// origin. Filament transforms it with Box::transform, centre = m*c + t and
-/// half-extent = abs(m)*h, which for a crate at 0.4 scale puts the box about
-/// two thirds of a metre away from where a chunk puts it. Diagnostic:
-/// ORBIS_BATCH_BOX=object builds a chunk's box this way instead.
+/// This is here to hold the two paths against each other. expandBoxByTransform
+/// above takes the member's box to be the unit cube centred on the origin: it
+/// reads the centre straight off the translation column. That is only right
+/// while the declared box says the same thing, and for a long time it did not
+/// — the placeholder cube declared `{{-1,-1,-1},{1,1,1}}`, which in Filament's
+/// {centre, half-extent} Box is a cube centred on (-1,-1,-1) reaching the
+/// origin, about two thirds of a metre from where a chunk put it for a crate
+/// at 0.4 scale. With the declaration corrected to `{{0,0,0},{1,1,1}}` (see
+/// Renderer::build) this computes what expandBoxByTransform computes, bit for
+/// bit: c is zero, so the centre is the translation column, and h is one, so
+/// the half-extent is the same sum of absolute values in the same order.
+/// Diagnostic: ORBIS_BATCH_BOX=object builds a chunk's box this way instead,
+/// so a frame that moves when it is set means the two have drifted apart
+/// again.
 static inline void expandBoxByObjectBox(const mat4f &m, const float3 &c,
                                         const float3 &h, float3 &least,
                                         float3 &most) {
@@ -4200,7 +4216,7 @@ void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
       std::memcpy(&chunk.transforms[slot], transforms + size_t(index) * 16,
                  sizeof(mat4f));
       if (_objectChunkBox) {
-        expandBoxByObjectBox(chunk.transforms[slot], float3{-1, -1, -1},
+        expandBoxByObjectBox(chunk.transforms[slot], float3{0, 0, 0},
                              float3{1, 1, 1}, least, most);
       } else {
         expandBoxByTransform(chunk.transforms[slot], least, most);
@@ -4251,7 +4267,7 @@ void Renderer::rebuildBatchGroup(BatchGroup &group, const orbis::BatchKey &key,
     // the object-space one an unbatched crate declares: Filament transforms a
     // renderable's box by that renderable's transform, so handing it a
     // world-space box here would place the box twice.
-    if (rootPlacement) box = Box{{-1, -1, -1}, {1, 1, 1}};
+    if (rootPlacement) box = Box{{0, 0, 0}, {1, 1, 1}};
 
     chunk.entity = utils::EntityManager::get().create();
     RenderableManager::Builder(1)
