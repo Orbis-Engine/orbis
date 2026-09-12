@@ -180,10 +180,44 @@ for api in ${ORBIS_MATC_BACKENDS//,/ }; do
   esac
 done
 # The default comes out as exactly the flags this used before there was a
-# choice, so an existing checkout's stamp still matches and nothing rebuilds.
+# choice.
 MATC_FLAGS="${MATC_API# } -p all"
+
+# Which matc compiles them: ORBIS_MATC, a path to one, defaulting to the matc
+# that ships beside the very libraries this package is about to link.
+#
+# That default is right whenever the engine at runtime is that same Filament,
+# and wrong exactly when it is not — and nothing downstream can tell. matc
+# bakes a *variant table* into the blob and the engine picks shaders out of it
+# by variant key, so the two are one interface, and it is an interface with no
+# version of its own to check. MATERIAL_VERSION stayed at 76 when Filament
+# moved directional lighting out of the variant key and into a specialization
+# constant (upstream #10390, in the fork since it merged orbis-main). So a
+# blob from a matc before that change loads with no complaint in an engine
+# from after it, and then every directional light silently stops being drawn:
+# the engine asks for the variant with the DIR bit cleared, and in the older
+# blob that is precisely the shader compiled without the sun in it. Ambient
+# still works, because the image-based half is outside that guard, so the
+# frame looks lit until something turns the ambient off.
+#
+# That is what native/web/build.sh hit: it links a Filament built from the
+# fork, and compiled its materials with the release tarball's matc. Anything
+# that brings its own Filament has to bring the matc that goes with it, and
+# now has a way to say so.
+MATC="${ORBIS_MATC:-$FILAMENT/bin/matc}"
+if [ ! -x "$MATC" ]; then
+  echo "orbis_filament: no matc at $MATC" >&2
+  exit 1
+fi
+
 MATC_STAMP="$GENERATED/.matc"
-MATC_WANT="$SDK_ID $MATC_FLAGS"
+# ...and *which* matc built them, by size and modification time — the same
+# trick SDK_ID uses above, for the same reason. Two matc binaries can carry
+# the same version number and still emit different variant tables, and with
+# only the version in the stamp, switching between them left every material
+# exactly as it was and nothing said so. A new field, so the first run after
+# this lands recompiles once in every checkout; that is the point of it.
+MATC_WANT="$SDK_ID $MATC_FLAGS matc $(stat -f '%z %m' "$MATC")"
 STALE=""
 if [ "$(cat "$MATC_STAMP" 2>/dev/null || true)" != "$MATC_WANT" ]; then
   STALE=1
@@ -218,7 +252,7 @@ compile() {
   # time; the alternative is two sets of headers and an #if choosing between
   # them in the renderer.
   # shellcheck disable=SC2086 — the flags are ours and are meant to split.
-  "$FILAMENT/bin/matc" $MATC_FLAGS -o "/tmp/orbis_$name.filamat" "$input"
+  "$MATC" $MATC_FLAGS -o "/tmp/orbis_$name.filamat" "$input"
   (cd /tmp && xxd -i "orbis_$name.filamat") \
     | sed "s/orbis_${name}_filamat/k${name}Material/g" > "$header"
   rm -f "/tmp/orbis_$name.filamat" "/tmp/orbis_src_$name.mat"

@@ -73,20 +73,38 @@ directly afterwards with `ninja libfilament-iblprefilter.a` in
 
 ```sh
 cd "$ROOT/.worktrees/orbis-web-core"   # made by .worktrees/new_worktree.sh web-core
-ORBIS_MATC_BACKENDS=opengl bash packages/orbis_filament/darwin/setup.sh
 source "$ORBIS_CACHE/emsdk/emsdk_env.sh"
 export EMSDK="$ORBIS_CACHE/emsdk"
 export ORBIS_FILAMENT_WASM_SRC="$ROOT/.worktrees/filament-web"
 bash packages/orbis_filament/native/web/build.sh
 ```
 
-The first line matters: the renderer's compiled materials
-(`generated/*_material.h`) carry shaders only for the backends
-`ORBIS_MATC_BACKENDS` named, and the default is `metal` alone. WebGL 2 is
-Filament's OpenGL backend, so this build needs `opengl` compiled in — `-p
-all` (setup.sh's own default) already includes the ESSL/mobile shader
-variant WebGL 2 needs, the same flag every other platform's materials use,
-so nothing else about material compilation changes for the web.
+`build.sh` compiles the materials itself now, and that used to be a separate
+line here — `ORBIS_MATC_BACKENDS=opengl bash .../darwin/setup.sh` — run by
+hand before it. Two reasons it moved, and only the first was ever written
+down.
+
+The written one: the renderer's compiled materials (`generated/*_material.h`)
+carry shaders only for the backends `ORBIS_MATC_BACKENDS` named, and the
+default is `metal` alone. WebGL 2 is Filament's OpenGL backend, so this build
+needs `opengl` compiled in.
+
+The one that cost a fortnight of believing this build was lit: run by hand,
+that line used the **release tarball's** matc, while everything below links
+the **fork's** wasm archives. matc bakes a variant table into the blob and
+the engine picks shaders out of it by variant key — one interface, with no
+version between the two halves to catch a mismatch, since `MATERIAL_VERSION`
+stayed at 76 across the change that broke it. The fork has since moved
+directional lighting out of the variant key into a specialization constant
+(upstream #10390): it asks for the variant with the `DIR` bit cleared, which
+in a tarball-matc blob is exactly the shader compiled *without* the sun in
+it. Every directional light contributed nothing, in silence, and the frame
+still looked lit because the image-based half is outside that guard. Turning
+the ambient off turned the scene black.
+
+So the matc now comes out of `$ORBIS_FILAMENT_WASM_SRC` beside the archives
+(`out/cmake-release/tools/matc/matc`, which `./build.sh -p wasm release`
+builds on its way through), and `build.sh` refuses to start without it.
 
 ### 4. A frame in the browser
 

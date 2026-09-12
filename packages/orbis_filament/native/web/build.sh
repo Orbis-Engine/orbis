@@ -23,7 +23,9 @@
 #   - Every generated material header needs an opengl variant: WebGL 2 is
 #     Filament's OpenGL backend, and matc's blob carries only the backends
 #     it was told to (packages/orbis_filament/darwin/setup.sh,
-#     ORBIS_MATC_BACKENDS).
+#     ORBIS_MATC_BACKENDS). This script now compiles them itself, with the
+#     matc belonging to the Filament it links — see the materials section
+#     below for why that is not merely tidier.
 #
 #   build.sh                 builds ./build and host/orbis_renderer.{js,wasm}
 #
@@ -56,6 +58,41 @@ DARWIN=../../darwin
 SRC="$DARWIN/orbis_filament/Sources/orbis_filament_native"
 OUT="${ORBIS_BUILD_DIR:-build}"
 mkdir -p "$OUT" host
+
+# ---- The materials, compiled by *this* Filament's own matc ----
+#
+# Done here rather than left to the reader, and that is the whole fix for a
+# defect this build shipped with: matc and the engine are one interface. The
+# blob carries a variant table and the engine indexes it by variant key, with
+# no version between them that would catch a mismatch — see darwin/setup.sh's
+# ORBIS_MATC comment for the mechanism. Compiling with the release tarball's
+# matc while linking the fork's archives below drew every scene with ambient
+# light alone: the sun, and every other directional light, contributed
+# nothing, silently, because this fork strips the DIR variant bit the
+# tarball's matc had compiled the sun into.
+#
+# So the materials now come from the same tree the archives come from. A
+# build that links this Filament can no longer be handed materials made by
+# another one, which is what the README used to ask for by hand.
+#
+# This runs darwin/setup.sh, so it wants a Mac: that script also packages the
+# Apple xcframework. The web build has only ever been run on one, and the
+# README's recipe already called it by hand; if this build is ever wanted on
+# Linux, that is the seam to split, not this choice of matc.
+MATC=""
+for candidate in \
+    "$FIL_SRC/out/cmake-release/tools/matc/matc" \
+    "$FIL_SRC/out/prebuilt-tools-release/tools/matc/matc"; do
+  if [ -x "$candidate" ]; then MATC="$candidate"; break; fi
+done
+if [ -z "$MATC" ]; then
+  echo "native/web/build.sh: no host matc inside $FIL_SRC. Its own" >&2
+  echo "  ./build.sh -p wasm release builds one on the way through —" >&2
+  echo "  look for out/cmake-release/tools/matc/matc." >&2
+  exit 1
+fi
+echo "native/web/build.sh: compiling materials with $MATC"
+ORBIS_MATC="$MATC" ORBIS_MATC_BACKENDS=opengl bash "$DARWIN/setup.sh"
 
 # ---- Headers ----
 #
