@@ -54,6 +54,32 @@ same front door is what the other platforms will be.
 
 Not here: rumble, motion sensors, touchpads, and pointer lock.
 
+## Checking it
+
+The parsing, the mapping, the shaping and the hot-plug run under
+`tool/check.sh` on any machine, against recorded byte streams — which is where
+the bugs are: a read that lands mid-record, a capability word whose top bit is
+set, the kernel admitting it dropped events.
+
+The read path itself needs a gamepad, and there was none, so Linux is asked to
+invent one. `/dev/uinput` takes the same description a driver would give and
+creates a real event device; the backend then finds it, classifies it from
+sysfs, asks the driver for its axis ranges and reads it, exactly as it would
+hardware.
+
+```sh
+./tool/check_input_linux.sh
+```
+
+The recipe, including the two things about containers that are not obvious —
+a `/dev` that no node ever appears in, and why this needs `--privileged` — is
+in that script's header.
+
+What it does not prove is any real driver's behaviour. The records come
+through the kernel, but the pad they describe is one this repository made up,
+so a pad whose driver reports something unusual is still unexercised — and no
+physical controller, and no Steam Deck, has run this.
+
 ## Status
 
 Pre-alpha. Nothing here is API-stable, and the version is bumped for every
