@@ -2,6 +2,28 @@
 
 ## 0.22.0
 
+- **Direct light reaches the web build again.** The renderer core in a browser
+  drew every scene by ambient light alone: the sun, and every other
+  directional light, contributed nothing, and no note, log or error said so.
+  The cause was not the slim lit surface the web runs on — that surface gives
+  up area-light shadows and the irradiance field, and nothing else — but which
+  matc compiled the materials. `native/web/build.sh` links a Filament built
+  from the fork, while the README had you compile the materials beforehand by
+  hand with the release tarball's matc, and those two halves are one
+  interface: matc bakes a variant table into the blob, the engine indexes it
+  by variant key, and `MATERIAL_VERSION` stayed at 76 across the change that
+  parted them. The fork has moved directional lighting out of the variant key
+  and into a specialization constant (upstream #10390), so it asks for the
+  variant with the `DIR` bit cleared — which in a tarball-matc blob is exactly
+  the shader compiled without the sun in it. Ambient survived because the
+  image-based half sits outside that guard, which is why the frame still
+  looked lit. `build.sh` now compiles the materials itself with the matc that
+  sits beside the archives it links, and refuses to start without one;
+  `setup.sh` takes `ORBIS_MATC` and records which matc built the headers in
+  its stamp, so two compilers carrying the same version number no longer look
+  identical to it. Apple and Android were never affected: each compiles and
+  runs against the same v1.76.0 release, so the two halves cannot drift.
+
 - **A rectangular light's shadow now actually falls.** The depth map it drew
   was compared in the wrong units — Filament renders reversed-Z with the far
   plane at infinity, and the projection a camera hands out is neither — and
@@ -155,7 +177,9 @@
   changed — against a Filament built for the web, and a small host page draws
   the headless program's scene into a `<canvas>` through the ABI alone. WebGL 2
   is feature level 1, so the slim surface is chosen and the renderer's notes
-  say so. Not yet wired into the Flutter plugin.
+  say so. Not yet wired into the Flutter plugin. The frame this first drew was
+  lit by ambient alone — see the first entry above for why, and for what
+  building it now takes.
 
 - `OrbisScene.copyWith` keeps `probes` and `field`, which it used to drop
   silently.
