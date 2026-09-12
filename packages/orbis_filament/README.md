@@ -16,7 +16,11 @@ dependencies:
       path: packages/orbis_filament
 ```
 
-Needs Flutter. Runs macOS — the renderer draws there and nowhere else yet.
+Needs Flutter. Draws on macOS, iOS, Android and Windows. One renderer serves
+all four through a C ABI, behind a Swift plugin on the Apple platforms, a
+Kotlin/JNI one on Android and a Win32 one on Windows; each hands a frame to
+Flutter the way its embedder can take one, which is without a copy everywhere
+but Windows (see `windows/orbis_viewport.h` for why).
 
 ## Status
 

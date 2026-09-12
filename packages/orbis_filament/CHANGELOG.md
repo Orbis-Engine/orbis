@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.24.0
+
+- **The renderer draws on Windows.** A Win32 plugin under `windows/` puts the
+  same portable core the Apple, Android and Linux builds compile behind
+  Flutter's Windows embedder, speaking the same `orbis_filament` channel with
+  the same method names and wire shapes — so `OrbisView` and every other Dart
+  caller work there unchanged, and no shared C++ was touched to get it.
+  `OrbisView` now lists Windows among the platforms it draws on rather than
+  showing its notice. The backend is Filament's own choice off Apple: Vulkan
+  where a driver answers, OpenGL behind it, with the materials compiled for
+  both.
+
+  A frame reaches Flutter through a `flutter::PixelBufferTexture` — the
+  renderer draws into an offscreen readable swap chain, the frame is read back
+  with the C ABI's capture calls, and Flutter copies those bytes into a texture
+  of its own. That is a whole copy per frame, which macOS, iOS and Android all
+  avoid, and it is deliberate. The copy-free route on this embedder is a GPU
+  surface, and both of its flavours are closed today: the `D3d11Texture2D` one
+  only accepts a texture made on ANGLE's own D3D device, which the embedder
+  does not expose, and the `DxgiSharedHandle` one — which does cross devices,
+  and is the route this should eventually take — currently crashes under
+  Impeller, which is on by default in the Flutter this package resolves
+  against. `windows/orbis_viewport.h` records what getting off the copy would
+  need, in order.
+
+  The frame loop runs on the platform thread, where the method calls also
+  arrive, so the renderer is driven from one thread as the C ABI asks: there is
+  no GLib main loop to hang a timeout on, so a message-only window carries a
+  `WM_TIMER` that the runner's own message pump delivers.
+
+  Unverified: everything at runtime. There is no Windows machine behind this,
+  so CI is the only compiler — a green Windows job means it compiles, links and
+  bundles, and nothing yet proves a frame, because GitHub's Windows runners
+  have no GPU.
+
 ## 0.22.0
 
 - **A rectangular light's shadow now actually falls.** The depth map it drew

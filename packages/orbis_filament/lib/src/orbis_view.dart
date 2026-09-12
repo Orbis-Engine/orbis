@@ -250,14 +250,20 @@ class _OrbisViewState extends State<OrbisView> {
     // Android's implementation is the same renderer and the same channel
     // protocol behind a Kotlin/JNI plugin instead of Swift's, presenting
     // into a Flutter SurfaceProducer texture rather than a CVPixelBuffer —
-    // see packages/orbis_filament/android/.
+    // see packages/orbis_filament/android/. Windows is the same again behind
+    // a Win32 plugin, presenting into a PixelBufferTexture — the copy-free
+    // route there needs a DXGI shared handle, which currently crashes under
+    // Impeller; see packages/orbis_filament/windows/.
     const drawable = {
       TargetPlatform.macOS,
       TargetPlatform.iOS,
       TargetPlatform.android,
+      TargetPlatform.windows,
     };
     if (!drawable.contains(defaultTargetPlatform)) {
-      return const _Notice('Orbis renders on macOS, iOS and Android so far.');
+      return const _Notice(
+        'Orbis renders on macOS, iOS, Android and Windows so far.',
+      );
     }
 
     return LayoutBuilder(

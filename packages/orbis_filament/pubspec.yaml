@@ -2,7 +2,7 @@ name: orbis_filament
 description: >-
   Filament rendering for Orbis, composited by Flutter. Renders into
   IOSurface-backed pixel buffers the texture registry adopts without a readback.
-version: 0.22.0
+version: 0.24.0
 publish_to: none
 
 environment:
@@ -33,4 +33,14 @@ flutter:
         pluginClass: OrbisFilamentPlugin
       android:
         package: dev.orbis.filament
+        pluginClass: OrbisFilamentPlugin
+      # Windows reaches the same portable core through the same C ABI, behind
+      # Flutter's Windows embedder. `pluginClass` here names neither a class
+      # nor a snake-cased function but the stem both are derived from: the
+      # generated registrant includes
+      # <orbis_filament/orbis_filament_plugin.h> — the class snake-cased —
+      # and calls OrbisFilamentPluginRegisterWithRegistrar — the class with a
+      # suffix. That is why windows/include carries that one public header
+      # and why the exported symbol is spelled the way it is.
+      windows:
         pluginClass: OrbisFilamentPlugin
