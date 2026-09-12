@@ -1197,6 +1197,18 @@ class Renderer {
   bool _batching{};
   orbis::BatchCensus _census{};
 
+  /// Diagnostic only (ORBIS_BATCH_CHUNK, ORBIS_BATCH_BOX): how many members
+  /// share one instanced draw, and whether a one-member chunk's bounding box
+  /// is built the way Filament builds an unbatched object's. The defaults are
+  /// what a release build does — kInstancesPerDraw members and the union box
+  /// — so neither switch changes anything unless it is set. Both exist to
+  /// measure what a batched shadow caster does differently from an unbatched
+  /// one; see rebuildBatchGroup.
+  uint32_t _chunkSize{kInstancesPerDraw};
+  bool _exactChunkBox{};
+  bool _objectChunkBox{};
+  bool _rootTransformChunks{};
+
   /// Shared material instances for the placeholder cube, one per colour,
   /// claimed by a BatchGroup rather than by an individual object now that
   /// batching builds one renderable per group instead of dressing objects
