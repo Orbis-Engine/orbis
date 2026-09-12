@@ -122,17 +122,34 @@ Proven on the iOS simulator, added since:
   `examples/gallery/lib/main.dart`, which now reads the real environment
   through `dart:ffi` when `Platform.environment` has nothing, changing
   nothing on a platform where it already did.
-- Correct exposure on the simulator, provisionally — every frame captured
-  while chasing the point above was very dark, roughly a few parts in 255
-  where the same content on macOS reads two hundred plus, but multiplying
-  the raw pixels by twenty recovered exactly the right geometry, shading
-  gradient and colour, which ruled out a shading fault. With the example
-  selection fixed, every frame captured since (several examples, both
-  platforms) has read at a normal brightness with no multiplying needed, so
-  this was likely the same root cause rather than a second fault — an
-  unpinned clock occasionally catching mostly a shadowed face or the dark
-  floor. Not chased further than that; a genuine exposure difference would
-  need catching in the wild again now that the clock actually holds still.
+Not correct after all, and the entry that used to sit here said otherwise:
+
+- **A shadow-casting directional light lights nothing on the simulator.** The
+  dark frames recorded here before — "a few parts in 255 where the same
+  content on macOS reads two hundred plus" — were put down to an unpinned
+  clock catching a shadowed face, on the grounds that multiplying the pixels
+  by twenty recovered the right geometry and colour. It recovered the
+  geometry and the colour, but not a shading gradient, and that is the part
+  that mattered: the faces were flat.
+
+  Measured since, with the clock pinned (`ORBIS_SECONDS=1`, frame 30, the
+  gallery's first example, one directional light at 82000 lux): the cube's
+  three visible faces read (6.2, 1.4, 1.4), (6.6, 1.5, 1.5) and (6.3, 1.4,
+  1.4) — the same within noise, which no directional light can produce. The
+  floor reads (1.6, 0.8, 1.4). Turning off that one cube's `castShadows` and
+  changing nothing else gives (198, 78, 48), (149, 43, 24) and (126, 34, 19),
+  with the floor at (58, 39, 38): a properly shaded scene, thirty times
+  brighter. So the light was never missing — the directional shadow lookup
+  returns nought for every receiver, the direct term is multiplied away, and
+  what is left is the ambient.
+
+  Not the slim surface, and not shadows in general: the same scene on the
+  Android emulator at feature level 1, on the same slim surface with the same
+  light still casting, draws correctly with a visible cast shadow, and so
+  does macOS on the standard surface. It is the simulator's own virtual GPU —
+  its depth-comparison sampling — which is why it has only ever been seen
+  here. Unfixed, and untested on a real pre-A13 device, which is the other
+  place the slim surface and Metal meet.
 
 Not proven:
 
